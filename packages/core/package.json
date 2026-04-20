@@ -1,0 +1,33 @@
+{
+  "name": "@huaweicloud/taurusdb-core",
+  "version": "0.1.0",
+  "description": "Shared TaurusDB data-plane core engine.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "mysql2": "^3.22.1",
+    "node-sql-parser": "^5.4.0",
+    "pino": "^9.11.0",
+    "ulid": "^3.0.1",
+    "zod": "^3.24.1"
+  }
+}
