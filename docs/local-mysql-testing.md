@@ -401,6 +401,152 @@ export TAURUSDB_MCP_ENABLE_MUTATIONS=true
 
 推荐仍然优先使用 profile 文件，因为更接近真实交付方式。
 
+### 6.6 在 Claude Code 中配置本地 MCP
+
+如果你已经把本地 MySQL 跑起来，并且想直接在 Claude Code 里调当前仓库的 MCP，建议走 `stdio + local scope`。
+
+这样做有两个好处：
+
+- 不需要先发布 npm 包，直接复用当前仓库构建产物
+- 密码和本地 profile 配置保留在本机，不写进版本库
+
+建议按下面步骤操作。
+
+**步骤 1：先构建 MCP**
+
+```bash
+npm run build
+```
+
+当前 Claude Code 连接的可执行入口是：
+
+- `node /Users/youweichen/projects/taurus-mcp-server/packages/mcp/dist/index.js`
+
+如果你的仓库不在这个路径，替换成你自己的绝对路径。
+
+**步骤 2：准备 profile 文件**
+
+```bash
+cp testdata/mysql/local-mysql-profiles.example.json /tmp/taurusdb-local-profiles.json
+```
+
+如果你的 MySQL Docker 不是 `3306`，记得同步修改 `/tmp/taurusdb-local-profiles.json` 里的 `port`。
+
+**步骤 3：准备密码环境变量**
+
+```bash
+export TAURUSDB_LOCAL_MYSQL_RO_PASSWORD='your_ro_password'
+export TAURUSDB_LOCAL_MYSQL_RW_PASSWORD='your_rw_password'
+```
+
+如果你当前只打算验证只读链路，也可以暂时不设置 `RW` 密码，并且后面的命令里不要开启 `TAURUSDB_MCP_ENABLE_MUTATIONS=true`。
+
+**步骤 4：把本地 MCP 注册到 Claude Code**
+
+建议使用 `local` scope：
+
+- 本地生效
+- 不写入项目共享配置
+- 更适合带密码的本地联调
+
+命令如下：
+
+```bash
+claude mcp add --transport stdio --scope local \
+  --env TAURUSDB_SQL_PROFILES=/tmp/taurusdb-local-profiles.json \
+  --env TAURUSDB_DEFAULT_DATASOURCE=local_mysql \
+  --env TAURUSDB_MCP_LOG_LEVEL=info \
+  --env TAURUSDB_MCP_ENABLE_MUTATIONS=true \
+  --env TAURUSDB_LOCAL_MYSQL_RO_PASSWORD="$TAURUSDB_LOCAL_MYSQL_RO_PASSWORD" \
+  --env TAURUSDB_LOCAL_MYSQL_RW_PASSWORD="$TAURUSDB_LOCAL_MYSQL_RW_PASSWORD" \
+  huaweicloud-taurusdb-local -- \
+  node /Users/youweichen/projects/taurus-mcp-server/packages/mcp/dist/index.js
+```
+
+如果你现在只想测只读能力，把这一行删掉：
+
+```bash
+--env TAURUSDB_MCP_ENABLE_MUTATIONS=true \
+```
+
+**步骤 5：确认 Claude Code 已注册成功**
+
+```bash
+claude mcp list
+claude mcp get huaweicloud-taurusdb-local
+```
+
+进入 Claude Code 后，再执行：
+
+```text
+/mcp
+```
+
+你应该能看到 `huaweicloud-taurusdb-local` 这个 server。
+
+**步骤 6：建议先做最小 smoke**
+
+先从这些请求开始：
+
+```text
+调用 list_data_sources，确认当前 datasource
+```
+
+```text
+列出 taurus_mcp_test 里的所有表
+```
+
+```text
+查询 orders 表最近 5 条数据
+```
+
+如果这些都正常，再继续测：
+
+- `describe_table`
+- `sample_rows`
+- `execute_readonly_sql`
+- `explain_sql`
+- `execute_sql`
+
+**步骤 7：如果要移除这个本地 MCP**
+
+```bash
+claude mcp remove huaweicloud-taurusdb-local
+```
+
+### 6.7 可选：用项目级 `.mcp.json`
+
+如果你希望把非敏感配置共享给团队，也可以在项目根目录放 `.mcp.json`。
+
+但当前本地 MySQL 联调场景里，我仍然建议优先用前面的 `claude mcp add --scope local`，因为：
+
+- 更适合放本地密码
+- 不容易把个人环境差异写进仓库
+
+项目级示例如下：
+
+```json
+{
+  "mcpServers": {
+    "huaweicloud-taurusdb-local": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/Users/youweichen/projects/taurus-mcp-server/packages/mcp/dist/index.js"
+      ],
+      "env": {
+        "TAURUSDB_SQL_PROFILES": "/tmp/taurusdb-local-profiles.json",
+        "TAURUSDB_DEFAULT_DATASOURCE": "local_mysql",
+        "TAURUSDB_MCP_LOG_LEVEL": "info",
+        "TAURUSDB_MCP_ENABLE_MUTATIONS": "true",
+        "TAURUSDB_LOCAL_MYSQL_RO_PASSWORD": "${TAURUSDB_LOCAL_MYSQL_RO_PASSWORD}",
+        "TAURUSDB_LOCAL_MYSQL_RW_PASSWORD": "${TAURUSDB_LOCAL_MYSQL_RW_PASSWORD}"
+      }
+    }
+  }
+}
+```
+
 ---
 
 ## 7. 本地 MySQL 下建议执行的测试清单
@@ -569,4 +715,3 @@ SELECT * FROM orders; DELETE FROM orders WHERE id = 1;
 4. 最后补 TaurusDB 专属差异项
 
 这条路径的目标不是“先随便测一下本地”，而是把**本地 MySQL 作为当前 MCP 的第一阶段验收基线**。
-

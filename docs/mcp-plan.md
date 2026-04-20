@@ -171,9 +171,109 @@ node packages/mcp/dist/index.js --version
 - `args`: `[/绝对路径/packages/mcp/dist/index.js]`
 - `env`: 传入你的 datasource / profile / mutation 开关
 
-下面给三个常见客户端示例。
+下面给四个常见客户端示例。
 
-### 5.1 Claude Desktop
+### 5.1 Claude Code
+
+对于当前仓库，本地开发联调时我更推荐先接 Claude Code。
+
+原因：
+
+- 可以直接用 `claude mcp add --transport stdio` 注册本地 MCP
+- 不需要手工改 GUI 客户端配置文件
+- 更适合本地 profile 和密码环境变量的临时联调
+
+建议按下面步骤操作。
+
+**步骤 1：先构建 MCP**
+
+```bash
+npm run build
+```
+
+当前推荐的可执行入口是：
+
+- `node /Users/youweichen/projects/taurus-mcp-server/packages/mcp/dist/index.js`
+
+如果你的仓库不在这个路径，替换成你自己的绝对路径。
+
+**步骤 2：准备 profile 文件**
+
+```bash
+cp testdata/mysql/local-mysql-profiles.example.json /tmp/taurusdb-local-profiles.json
+```
+
+如果你的 MySQL Docker 不是 `3306`，记得同步修改 `/tmp/taurusdb-local-profiles.json` 里的 `port`。
+
+**步骤 3：准备密码环境变量**
+
+```bash
+export TAURUSDB_LOCAL_MYSQL_RO_PASSWORD='your_ro_password'
+export TAURUSDB_LOCAL_MYSQL_RW_PASSWORD='your_rw_password'
+```
+
+**步骤 4：把本地 MCP 注册到 Claude Code**
+
+建议使用 `local` scope：
+
+- 本地生效
+- 不写入项目共享配置
+- 更适合带密码的本地联调
+
+```bash
+claude mcp add --transport stdio --scope local \
+  --env TAURUSDB_SQL_PROFILES=/tmp/taurusdb-local-profiles.json \
+  --env TAURUSDB_DEFAULT_DATASOURCE=local_mysql \
+  --env TAURUSDB_MCP_LOG_LEVEL=info \
+  --env TAURUSDB_MCP_ENABLE_MUTATIONS=true \
+  --env TAURUSDB_LOCAL_MYSQL_RO_PASSWORD="$TAURUSDB_LOCAL_MYSQL_RO_PASSWORD" \
+  --env TAURUSDB_LOCAL_MYSQL_RW_PASSWORD="$TAURUSDB_LOCAL_MYSQL_RW_PASSWORD" \
+  huaweicloud-taurusdb-local -- \
+  node /Users/youweichen/projects/taurus-mcp-server/packages/mcp/dist/index.js
+```
+
+如果你当前只想测只读能力，删除这行即可：
+
+```bash
+--env TAURUSDB_MCP_ENABLE_MUTATIONS=true \
+```
+
+**步骤 5：检查 Claude Code 配置是否生效**
+
+```bash
+claude mcp list
+claude mcp get huaweicloud-taurusdb-local
+```
+
+进入 Claude Code 后，还可以执行：
+
+```text
+/mcp
+```
+
+**步骤 6：建议先做最小 smoke**
+
+先从这些请求开始：
+
+```text
+调用 list_data_sources，确认当前 datasource
+```
+
+```text
+列出 taurus_mcp_test 里的所有表
+```
+
+```text
+查询 orders 表最近 5 条数据
+```
+
+如果需要移除：
+
+```bash
+claude mcp remove huaweicloud-taurusdb-local
+```
+
+### 5.2 Claude Desktop
 
 配置文件通常是：
 
@@ -206,7 +306,7 @@ node packages/mcp/dist/index.js --version
 
 修改后重启 Claude Desktop。
 
-### 5.2 Cursor
+### 5.3 Cursor
 
 配置文件通常是：
 
@@ -237,7 +337,7 @@ node packages/mcp/dist/index.js --version
 
 修改后重启 Cursor。
 
-### 5.3 VS Code
+### 5.4 VS Code
 
 配置文件通常是：
 
@@ -314,4 +414,3 @@ MCP 当前还剩这些工作：
 - 在你的真实本地 MySQL 上实际跑通 e2e
 - 再把同样的核心场景切到云端 TaurusDB
 - 根据 TaurusDB 的真实行为补差异项
-
