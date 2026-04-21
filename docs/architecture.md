@@ -291,7 +291,9 @@ sequenceDiagram
   CLI->>CORE: engine.validateConfirmation(token, sql, ctx)
   CORE-->>CLI: valid
   CLI->>CORE: engine.executeMutation(sql, ctx, token)
-  CORE->>DB: BEGIN; UPDATE; COMMIT
+  CORE->>DB: BEGIN
+  CORE->>DB: UPDATE orders ...
+  CORE->>DB: COMMIT
   DB-->>CORE: affected_rows
   CORE-->>CLI: MutationResult
   CLI->>U: print success + affected rows
