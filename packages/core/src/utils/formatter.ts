@@ -24,6 +24,7 @@ export const ErrorCode = {
   QUERY_CANCELLED: "QUERY_CANCELLED",
   CONNECTION_FAILED: "CONNECTION_FAILED",
   RESULT_TOO_LARGE: "RESULT_TOO_LARGE",
+  UNSUPPORTED_FEATURE: "UNSUPPORTED_FEATURE",
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];

@@ -1,14 +1,10 @@
 import type { DatabaseEngine } from "../auth/sql-profile-loader.js";
 import type { SessionContext } from "../context/session-context.js";
-import type { SchemaIntrospector, TableSchema } from "../schema/introspector.js";
 import { createSqlParser, type SqlParser } from "./parser/index.js";
-import { classifySql, type SqlClassification } from "./sql-classifier.js";
+import { classifySql } from "./sql-classifier.js";
 import {
-  validateCost,
-  validateSchemaAware,
   validateStaticRules,
   validateToolScope,
-  type ExplainRiskSummary,
   type RiskLevel,
   type ValidationResult,
 } from "./sql-validator.js";
@@ -39,23 +35,12 @@ export interface InspectInput {
   context: SessionContext;
 }
 
-export interface GuardrailExecutor {
-  explainForGuardrail(sql: string, ctx: SessionContext): Promise<ExplainRiskSummary>;
-}
-
 export interface Guardrail {
   inspect(input: InspectInput): Promise<GuardrailDecision>;
 }
 
 export type GuardrailOptions = {
-  schemaIntrospector?: Pick<SchemaIntrospector, "describeTable">;
-  executor?: GuardrailExecutor;
   parserFactory?: (engine: DatabaseEngine) => SqlParser;
-};
-
-type ParsedTableRef = {
-  database?: string;
-  table: string;
 };
 
 function dedupeCaseInsensitive(values: string[]): string[] {
@@ -94,45 +79,6 @@ function pickDominantAction(current: GuardrailDecision["action"], next: Validati
     return "confirm";
   }
   return "allow";
-}
-
-function parseTableRef(tableRef: string, defaultDatabase?: string): ParsedTableRef | undefined {
-  const trimmed = tableRef.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const dotIndex = trimmed.indexOf(".");
-  if (dotIndex <= 0) {
-    return {
-      database: defaultDatabase,
-      table: trimmed,
-    };
-  }
-
-  return {
-    database: trimmed.slice(0, dotIndex),
-    table: trimmed.slice(dotIndex + 1),
-  };
-}
-
-function shouldExplain(cls: SqlClassification, validations: ValidationResult[]): boolean {
-  const hasBlock = validations.some((result) => result.action === "block");
-  if (hasBlock) {
-    return false;
-  }
-
-  if (cls.statementType === "update" || cls.statementType === "delete" || cls.statementType === "alter") {
-    return true;
-  }
-
-  if (cls.statementType === "select") {
-    if (!cls.hasLimit || cls.hasJoin || cls.hasSubquery || cls.hasOrderBy || cls.hasAggregate) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
 function buildBaseDecision(
@@ -199,45 +145,10 @@ function mergeDecision(
   );
 }
 
-async function loadSchemaSnapshot(
-  introspector: Pick<SchemaIntrospector, "describeTable"> | undefined,
-  ctx: SessionContext,
-  tableRefs: string[],
-): Promise<Map<string, TableSchema>> {
-  const snapshot = new Map<string, TableSchema>();
-  if (!introspector || tableRefs.length === 0) {
-    return snapshot;
-  }
-
-  const parsed = dedupeCaseInsensitive(tableRefs)
-    .map((tableRef) => parseTableRef(tableRef, ctx.database))
-    .filter((entry): entry is ParsedTableRef => entry !== undefined && !!entry.table);
-
-  await Promise.all(
-    parsed.map(async (tableRef) => {
-      if (!tableRef.database) {
-        return;
-      }
-      try {
-        const schema = await introspector.describeTable(ctx, tableRef.database, tableRef.table);
-        snapshot.set(`${schema.database}.${schema.table}`.toLowerCase(), schema);
-      } catch {
-        // Ignore per-table load failures; validator will report missing table/column from snapshot.
-      }
-    }),
-  );
-
-  return snapshot;
-}
-
 export class GuardrailImpl implements Guardrail {
-  private readonly schemaIntrospector?: Pick<SchemaIntrospector, "describeTable">;
-  private readonly executor?: GuardrailExecutor;
   private readonly parserFactory: (engine: DatabaseEngine) => SqlParser;
 
   constructor(options: GuardrailOptions = {}) {
-    this.schemaIntrospector = options.schemaIntrospector;
-    this.executor = options.executor;
     this.parserFactory = options.parserFactory ?? ((engine) => createSqlParser(engine));
   }
 
@@ -270,37 +181,7 @@ export class GuardrailImpl implements Guardrail {
       return mergeDecision(input, normalized.normalizedSql, normalized.sqlHash, [d1, d2], false);
     }
 
-    const schemaSnapshot = await loadSchemaSnapshot(
-      this.schemaIntrospector,
-      input.context,
-      cls.referencedTables,
-    );
-    const d3 = validateSchemaAware(cls, schemaSnapshot);
-    if (d3.action === "block") {
-      return mergeDecision(input, normalized.normalizedSql, normalized.sqlHash, [d1, d2, d3], false);
-    }
-
-    const preCostValidations = [d1, d2, d3];
-    const requiresExplain = shouldExplain(cls, preCostValidations);
-
-    let d4: ValidationResult | undefined;
-    if (requiresExplain && this.executor) {
-      const explainSummary = await this.executor.explainForGuardrail(input.sql, input.context);
-      d4 = validateCost(cls, explainSummary);
-    } else if (requiresExplain && !this.executor) {
-      d4 = {
-        action: "confirm",
-        riskLevel: "high",
-        reasonCodes: ["G002"],
-        riskHints: [
-          "Explain summary is required but executor is unavailable.",
-          "Fallback to confirmation before execution.",
-        ],
-      };
-    }
-
-    const validations = d4 ? [...preCostValidations, d4] : preCostValidations;
-    return mergeDecision(input, normalized.normalizedSql, normalized.sqlHash, validations, requiresExplain);
+    return mergeDecision(input, normalized.normalizedSql, normalized.sqlHash, [d1, d2], false);
   }
 }
 

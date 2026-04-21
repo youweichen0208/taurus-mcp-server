@@ -1,6 +1,5 @@
 import type { ConnectionPool, RawResult } from "../../executor/connection-pool.js";
 import type { SessionContext } from "../../context/session-context.js";
-import type { SchemaCache } from "../cache.js";
 import type {
   ColumnInfo,
   DatabaseInfo,
@@ -38,7 +37,6 @@ type Row = Record<string, unknown>;
 
 export type MySqlSchemaAdapterOptions = {
   connectionPool: ConnectionPool;
-  schemaCache?: SchemaCache;
 };
 
 function quoteLiteral(value: string): string {
@@ -203,11 +201,9 @@ function truncateFieldValue(value: unknown, maxChars: number): { value: unknown;
 
 export class MySqlSchemaAdapter implements SchemaAdapter {
   private readonly connectionPool: ConnectionPool;
-  private readonly schemaCache?: SchemaCache;
 
   constructor(options: MySqlSchemaAdapterOptions) {
     this.connectionPool = options.connectionPool;
-    this.schemaCache = options.schemaCache;
   }
 
   async listDatabases(ctx: SessionContext): Promise<DatabaseInfo[]> {
@@ -246,16 +242,6 @@ export class MySqlSchemaAdapter implements SchemaAdapter {
   }
 
   async describeTable(ctx: SessionContext, database: string, table: string): Promise<TableSchema> {
-    const cacheKey = {
-      datasource: ctx.datasource,
-      database,
-      table,
-    };
-    const cached = this.schemaCache?.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-
     const columnsSql = `
       SELECT COLUMN_NAME AS column_name,
              DATA_TYPE AS data_type,
@@ -339,7 +325,6 @@ export class MySqlSchemaAdapter implements SchemaAdapter {
       comment,
       rowCountEstimate,
     };
-    this.schemaCache?.set(cacheKey, schema);
     return schema;
   }
 

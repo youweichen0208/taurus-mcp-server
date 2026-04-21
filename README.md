@@ -2,10 +2,12 @@
 
 华为云 TaurusDB 数据面工具仓库。
 
-目标是交付两种前端形态，共享同一套数据面能力内核：
+当前产品边界已经收敛为“两种前端，共享同一套 `core`”：
 
-- `@huaweicloud/taurusdb-mcp`: 面向 Claude Desktop、Cursor、VS Code 等 AI 客户端的 MCP Server
-- `@huaweicloud/taurusdb-cli`: 面向 DBA、开发者、支持人员的 CLI / REPL / AI Agent
+- `@huaweicloud/taurusdb-mcp`
+  面向 Claude Desktop、Cursor、VS Code 等 AI 客户端的 MCP Server
+- `@huaweicloud/taurusdb-cli`
+  面向 DBA、开发者、支持人员的 CLI。第一阶段只做命令模式，CLI 本体尚未实现完成
 
 核心链路保持一致：
 
@@ -20,21 +22,39 @@
 
 ## Current Status
 
-当前仓库已经完成了第一轮 workspace 拆分，现状是：
+当前仓库状态：
 
 - `packages/core` 已承接共享的数据面能力与 `TaurusDBEngine`
 - `packages/mcp` 已承接 MCP Server 入口、Tool 注册和 `init` 命令
-- `packages/cli` 仍未落地，当前还处于文档设计阶段
+- `packages/cli` 目前还是脚手架入口，尚未进入真实实现阶段
 
-当前对外可运行的是基于 workspace 的 MCP 形态；CLI 仍是下一阶段工作。
+当前真正可用的是 MCP 形态。CLI 仍属于下一阶段。
 
-现阶段的工作重点是：
+当前 MCP 已具备：
 
-1. 继续稳固 `core` 和 `mcp` 的包边界
-2. 把剩余 MCP 特有逻辑继续压薄到协议层
-3. 在 shared `core` 之上新增 `packages/cli`
+- 通用 MySQL 数据面 Tool
+- 最小 Guardrail + token confirmation
+- TaurusDB capability probe
+- 基于 probe 的动态 Tool 注册
+- 4 个 TaurusDB 首阶段 Tool：
+  - `get_kernel_info`
+  - `list_taurus_features`
+  - `explain_sql_enhanced`
+  - `flashback_query`
 
-换句话说，这个仓库当前是“`core + mcp` 已落地，CLI 待接入”的状态。
+当前明确不在首阶段范围内：
+
+- recycle bin Tool
+- SQL history / Binlog / preflight / doctor
+- CLI REPL / ask / agent
+
+下一阶段建议优先新增的是一组场景化诊断 Tool，而不是单纯继续加执行 SQL 的入口：
+
+- `diagnose_slow_query`
+- `diagnose_connection_spike`
+- `diagnose_lock_contention`
+- `diagnose_replication_lag`
+- `diagnose_storage_pressure`
 
 ## Repository Layout
 
@@ -51,11 +71,7 @@
 └── tsconfig.base.json
 ```
 
-目标结构见 [architecture.md](./docs/architecture.md)，下一步会继续补齐：
-
-```text
-packages/cli
-```
+更完整的边界说明见 [docs/architecture.md](./docs/architecture.md)。
 
 ## Quick Start
 
@@ -88,6 +104,13 @@ npm run build
 npm test
 ```
 
+只看 MCP 包的检查 / 测试：
+
+```bash
+npm run check --workspace @huaweicloud/taurusdb-mcp
+npm run test --workspace @huaweicloud/taurusdb-mcp
+```
+
 查看版本：
 
 ```bash
@@ -107,32 +130,36 @@ npx @huaweicloud/taurusdb-mcp init --client vscode
 建议按这个顺序阅读：
 
 1. [docs/requirements.md](./docs/requirements.md)
-   需求背景、产品定位、首版范围和验收边界
+   当前产品范围、首阶段边界、验收标准
 2. [docs/architecture.md](./docs/architecture.md)
-   目标架构、包边界、核心抽象、能力映射
+   架构、包边界、动态 Tool 注册、当前确认模型
 3. [docs/taurusdb-mcp-implementation-plan.md](./docs/taurusdb-mcp-implementation-plan.md)
-   如何从当前单包实现抽出 `core + mcp`
+   MCP 第一阶段实施计划
 4. [docs/taurusdb-cli-implementation.md](./docs/taurusdb-cli-implementation.md)
-   如何在 shared `core` 上新增 CLI 前端
+   CLI 第一阶段实施计划
 5. [docs/local-mysql-testing.md](./docs/local-mysql-testing.md)
-   本地 MySQL 如何验证当前 MCP，以及之后如何切到云端 TaurusDB
+   本地 MySQL 如何验证当前 MCP
 
 ## Design Principles
 
 - 数据面优先，不把首版做成云控制台
-- 默认最小权限，写操作必须显式开启
+- 默认最小权限，写操作必须显式开启并经过确认
 - schema 先于 SQL，先给上下文再执行
-- 审计、脱敏、超时和取消能力属于主链路，不是附属能力
+- Guardrail 保持最小，不做 schema-aware 校验、cost 预检查和复杂缓存
 - `core` 只提供业务能力，不感知 MCP 协议或 CLI 命令格式
+- TaurusDB 差异化能力按内核版本探测并动态暴露
 
 ## Near-Term Roadmap
 
-- 继续清理 `core` 中仍偏向 MCP 的边界设计
-- 增加更多 MCP Tool，逐步从 `ping` 扩展到 schema/query 链路
-- 新建 `packages/cli`，补齐命令模式、REPL、ask、agent
+- 稳定 `core` / `mcp` 的边界
+- 稳定 capability probe 与动态 Tool 注册
+- 在 `core` 上实现 CLI 命令模式
+- 下一阶段引入场景化诊断 Tool
+- 回收站、history/binlog、CLI REPL/AI 属于后续阶段
 
 ## Notes
 
 - 根目录 `package.json` 现在是 workspace 根配置，不再代表单包 MCP 包
-- `packages/core` 与 `packages/mcp` 已拆出，但 CLI 还未实现
-- 文档里仍有部分“从单包迁移”的描述，后续会继续收敛到当前状态
+- `packages/core` 与 `packages/mcp` 已拆出
+- `packages/cli` 目前还是 scaffold
+- 产品和架构文档已经统一按“当前首阶段范围”收口

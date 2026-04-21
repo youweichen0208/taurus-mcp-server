@@ -1,5 +1,6 @@
 export { TaurusDBEngine } from "./engine.js";
 export type {
+  EnhancedExplainResult,
   ConfirmationOutcome,
   DataSourceInfo,
   IssueConfirmationInput,
@@ -34,6 +35,17 @@ export type {
   ReadonlyOptions,
   SqlExecutor,
 } from "./executor/sql-executor.js";
+
+export { createCapabilityProbe } from "./capability/probe.js";
+export type { CapabilityProbe } from "./capability/probe.js";
+export { UnsupportedFeatureError } from "./capability/types.js";
+export type {
+  CapabilitySnapshot,
+  FeatureMatrix,
+  FeatureStatus,
+  KernelInfo,
+  TaurusFeatureName,
+} from "./capability/types.js";
 
 export {
   createConfirmationStore,
@@ -84,3 +96,4 @@ export type {
 export { normalizeSql, sqlHash } from "./utils/hash.js";
 export { generateQueryId, generateTaskId } from "./utils/id.js";
 export { logger, withTaskContext } from "./utils/logger.js";
+export type { FlashbackInput } from "./taurus/flashback.js";

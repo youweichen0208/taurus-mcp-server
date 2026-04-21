@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { MySqlSchemaAdapter } from "../dist/schema/adapters/mysql.js";
-import { InMemorySchemaCache } from "../dist/schema/cache.js";
 
 function makeContext({
   task_id = "task_001",
@@ -341,56 +340,4 @@ test("mysql adapter safely escapes literals in metadata queries", async () => {
   await adapter.listTables(makeContext(), "de'mo");
   const sql = state.executes[0].sql;
   assert.match(sql, /WHERE TABLE_SCHEMA = 'de''mo'/);
-});
-
-test("mysql adapter uses schema cache for describeTable", async () => {
-  const { pool, state } = makeMockConnectionPool((sql) => {
-    if (sql.includes("FROM information_schema.COLUMNS")) {
-      return {
-        rows: [
-          {
-            column_name: "id",
-            data_type: "bigint",
-            is_nullable: "NO",
-            column_default: null,
-            column_key: "PRI",
-            column_comment: "",
-            character_maximum_length: null,
-          },
-        ],
-      };
-    }
-    if (sql.includes("FROM information_schema.STATISTICS")) {
-      return {
-        rows: [
-          {
-            index_name: "PRIMARY",
-            column_name: "id",
-            non_unique: 0,
-            seq_in_index: 1,
-            index_type: "BTREE",
-          },
-        ],
-      };
-    }
-    if (sql.includes("FROM information_schema.TABLES") && sql.includes("LIMIT 1")) {
-      return {
-        rows: [{ table_rows: 1, table_comment: "cached" }],
-      };
-    }
-    return { rows: [] };
-  });
-
-  const cache = new InMemorySchemaCache({ ttlMs: 60_000, maxEntries: 100, now: () => 1000 });
-  const adapter = new MySqlSchemaAdapter({ connectionPool: pool, schemaCache: cache });
-
-  const ctx = makeContext();
-  const first = await adapter.describeTable(ctx, "demo", "orders");
-  const second = await adapter.describeTable(ctx, "demo", "orders");
-
-  assert.equal(first.table, "orders");
-  assert.equal(second.table, "orders");
-
-  const metadataQueryCount = state.executes.filter((q) => q.sql.includes("information_schema")).length;
-  assert.equal(metadataQueryCount, 3);
 });

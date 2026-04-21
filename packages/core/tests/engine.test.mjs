@@ -40,6 +40,42 @@ function makeContext(overrides = {}) {
   };
 }
 
+function makeCapabilityProbe(overrides = {}) {
+  return {
+    async probe() {
+      return {
+        kernelInfo: {
+          isTaurusDB: false,
+          mysqlCompat: "8.0",
+          rawVersion: "8.0.32",
+        },
+        features: {
+          flashback_query: { available: false, enabled: false, reason: "Instance is not TaurusDB." },
+          parallel_query: { available: false, enabled: false, reason: "Instance is not TaurusDB." },
+          ndp_pushdown: { available: false, enabled: false, reason: "Instance is not TaurusDB." },
+          offset_pushdown: { available: false, enabled: false, reason: "Instance is not TaurusDB." },
+          recycle_bin: { available: false, enabled: false, reason: "Instance is not TaurusDB." },
+          statement_outline: { available: false, enabled: false, reason: "Instance is not TaurusDB." },
+          column_compression: { available: false, enabled: false, reason: "Instance is not TaurusDB." },
+          multi_tenant: { available: false, enabled: false, reason: "Instance is not TaurusDB." },
+          partition_mdl: { available: false, enabled: false, reason: "Instance is not TaurusDB." },
+          dynamic_masking: { available: false, enabled: false, reason: "Instance is not TaurusDB." },
+          nonblocking_ddl: { available: false, enabled: false, reason: "Instance is not TaurusDB." },
+          hot_row_update: { available: false, enabled: false, reason: "Instance is not TaurusDB." },
+        },
+        checkedAt: 1,
+      };
+    },
+    async getKernelInfo(ctx) {
+      return (await this.probe(ctx)).kernelInfo;
+    },
+    async listFeatures(ctx) {
+      return (await this.probe(ctx)).features;
+    },
+    ...overrides,
+  };
+}
+
 test("engine lists datasources through profile loader and marks default datasource", async () => {
   const profiles = new Map([
     [
@@ -86,11 +122,11 @@ test("engine lists datasources through profile loader and marks default datasour
     secretResolver: {},
     datasourceResolver: {},
     connectionPool: { async close() {} },
-    schemaCache: {},
     schemaIntrospector: {},
     guardrail: {},
     executor: {},
     confirmationStore: {},
+    capabilityProbe: makeCapabilityProbe(),
   });
 
   const datasources = await engine.listDataSources();
@@ -168,6 +204,51 @@ test("engine delegates context, schema, guardrail, and executor methods", async 
   const expectedMutation = { queryId: "qry_3", affectedRows: 2, durationMs: 8 };
   const expectedStatus = { queryId: "qry_2", status: "completed" };
   const expectedCancel = { queryId: "qry_2", status: "cancelled" };
+  const expectedKernelInfo = {
+    isTaurusDB: true,
+    kernelVersion: "2.0.69.250900",
+    mysqlCompat: "8.0",
+    rawVersion: "8.0.32 TaurusDB 2.0.69.250900",
+  };
+  const expectedFeatures = {
+    flashback_query: { available: true, enabled: true, minVersion: "2.0.69.250900" },
+    parallel_query: { available: true, enabled: false, param: "force_parallel_execute=OFF" },
+    ndp_pushdown: { available: true, enabled: true, mode: "REPLICA_ON" },
+    offset_pushdown: { available: true, enabled: true },
+    recycle_bin: { available: true, enabled: true, minVersion: "2.0.57.240900" },
+    statement_outline: { available: true, enabled: false, minVersion: "2.0.42.230600" },
+    column_compression: { available: true, minVersion: "2.0.54.240600" },
+    multi_tenant: { available: true, enabled: false, active: false, minVersion: "2.0.54.240600" },
+    partition_mdl: { available: true, minVersion: "2.0.57.240900" },
+    dynamic_masking: { available: true, minVersion: "2.0.69.250900" },
+    nonblocking_ddl: { available: true, minVersion: "2.0.54.240600" },
+    hot_row_update: { available: true, minVersion: "2.0.54.240600" },
+  };
+  const expectedCapabilitySnapshot = {
+    kernelInfo: expectedKernelInfo,
+    features: expectedFeatures,
+    checkedAt: 1,
+  };
+  const expectedEnhancedExplain = {
+    standardPlan: expectedExplain,
+    taurusHints: {
+      ndpPushdown: {
+        condition: false,
+        columns: false,
+        aggregate: false,
+        blockedReason: undefined,
+      },
+      parallelQuery: {
+        wouldEnable: false,
+        estimatedDegree: undefined,
+        blockedReason: "parallel_query is available but force_parallel_execute is disabled.",
+      },
+      offsetPushdown: false,
+    },
+    optimizationSuggestions: [
+      "parallel_query is available but disabled. Consider SET GLOBAL force_parallel_execute=ON.",
+    ],
+  };
 
   const calls = [];
   const engine = new TaurusDBEngine({
@@ -181,7 +262,7 @@ test("engine delegates context, schema, guardrail, and executor methods", async 
       },
       async get() {
         return undefined;
-      },
+    },
     },
     secretResolver: {},
     datasourceResolver: {
@@ -191,7 +272,6 @@ test("engine delegates context, schema, guardrail, and executor methods", async 
       },
     },
     connectionPool: { async close() {} },
-    schemaCache: {},
     schemaIntrospector: {
       async listDatabases(arg) {
         calls.push(["listDatabases", arg]);
@@ -239,6 +319,20 @@ test("engine delegates context, schema, guardrail, and executor methods", async 
       },
     },
     confirmationStore: {},
+    capabilityProbe: makeCapabilityProbe({
+      async probe(arg) {
+        calls.push(["probeCapabilities", arg]);
+        return expectedCapabilitySnapshot;
+      },
+      async getKernelInfo(arg) {
+        calls.push(["getKernelInfo", arg]);
+        return expectedKernelInfo;
+      },
+      async listFeatures(arg) {
+        calls.push(["listFeatures", arg]);
+        return expectedFeatures;
+      },
+    }),
   });
 
   assert.equal(await engine.resolveContext({ datasource: "local_mysql" }, "task_001"), ctx);
@@ -255,8 +349,12 @@ test("engine delegates context, schema, guardrail, and executor methods", async 
   assert.equal(await engine.executeMutation("UPDATE users SET x = 1", makeContext({ limits: { ...ctx.limits, readonly: false } }), { timeoutMs: 2000 }), expectedMutation);
   assert.equal(await engine.getQueryStatus("qry_2"), expectedStatus);
   assert.equal(await engine.cancelQuery("qry_2"), expectedCancel);
+  assert.deepEqual(await engine.probeCapabilities(ctx), expectedCapabilitySnapshot);
+  assert.equal(await engine.getKernelInfo(ctx), expectedKernelInfo);
+  assert.equal(await engine.listFeatures(ctx), expectedFeatures);
+  assert.deepEqual(await engine.explainEnhanced("SELECT 1", ctx), expectedEnhancedExplain);
 
-  assert.equal(calls.length, 11);
+  assert.equal(calls.length, 16);
   assert.deepEqual(calls[0], ["resolveContext", { datasource: "local_mysql" }, "task_001"]);
 });
 
@@ -285,11 +383,11 @@ test("engine issues, validates, and handles confirmation tokens", async () => {
     secretResolver: {},
     datasourceResolver: {},
     connectionPool: { async close() {} },
-    schemaCache: {},
     schemaIntrospector: {},
     guardrail: {},
     executor: {},
     confirmationStore: store,
+    capabilityProbe: makeCapabilityProbe(),
   });
 
   const token = await engine.issueConfirmation({
@@ -363,11 +461,11 @@ test("engine close delegates pool shutdown", async () => {
         closed += 1;
       },
     },
-    schemaCache: {},
     schemaIntrospector: {},
     guardrail: {},
     executor: {},
     confirmationStore: new InMemoryConfirmationStore({ cleanupIntervalMs: 0 }),
+    capabilityProbe: makeCapabilityProbe(),
   });
 
   await engine.close();

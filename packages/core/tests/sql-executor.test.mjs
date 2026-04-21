@@ -258,29 +258,6 @@ test("sql executor executeMutation rolls back on error", async () => {
   assert.equal(status.status, "failed");
 });
 
-test("sql executor explainForGuardrail summarizes risk signals", async () => {
-  const { pool } = makeMockConnectionPool(({ sql }) => {
-    assert.equal(sql, "EXPLAIN SELECT * FROM users");
-    return {
-      rows: [
-        { type: "ALL", key: null, rows: 1000, Extra: "Using where; Using temporary" },
-        { type: "ref", key: "idx_users_id", rows: 20, Extra: "Using filesort" },
-      ],
-    };
-  });
-
-  const executor = createSqlExecutor({
-    connectionPool: pool,
-  });
-
-  const summary = await executor.explainForGuardrail("SELECT * FROM users", makeContext());
-  assert.equal(summary.fullTableScanLikely, true);
-  assert.equal(summary.indexHitLikely, false);
-  assert.equal(summary.estimatedRows, 1020);
-  assert.equal(summary.usesTempStructure, true);
-  assert.equal(summary.usesFilesort, true);
-});
-
 test("sql executor explain returns plan, summary and recommendations", async () => {
   const { pool } = makeMockConnectionPool(() => {
     return {

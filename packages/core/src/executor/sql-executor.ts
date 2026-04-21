@@ -88,10 +88,6 @@ export interface CancelResult {
 }
 
 export interface SqlExecutor {
-  explainForGuardrail(
-    sql: string,
-    ctx: SessionContext,
-  ): Promise<ExplainRiskSummary>;
   explain(sql: string, ctx: SessionContext): Promise<ExplainResult>;
   executeReadonly(
     sql: string,
@@ -195,22 +191,6 @@ export class SqlExecutorImpl implements SqlExecutor {
         historyLimit: options.historyLimit,
       });
     this.resultRedactor = options.resultRedactor ?? createResultRedactor();
-  }
-
-  async explainForGuardrail(
-    sql: string,
-    ctx: SessionContext,
-  ): Promise<ExplainRiskSummary> {
-    const session = await this.connectionPool.acquire(ctx.datasource, "ro");
-    try {
-      const result = await session.execute(`EXPLAIN ${sql}`, {
-        timeoutMs: ctx.limits.timeoutMs,
-      });
-      const rows = normalizeExplainRows(result);
-      return summarizeExplainRows(rows);
-    } finally {
-      await this.connectionPool.release(session);
-    }
   }
 
   async explain(sql: string, ctx: SessionContext): Promise<ExplainResult> {

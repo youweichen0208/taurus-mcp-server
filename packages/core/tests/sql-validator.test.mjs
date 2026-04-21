@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  validateCost,
-  validateSchemaAware,
   validateStaticRules,
   validateToolScope,
 } from "../dist/safety/sql-validator.js";
@@ -24,25 +22,6 @@ function baseClassification(overrides = {}) {
     hasOrderBy: false,
     hasAggregate: false,
     ...overrides,
-  };
-}
-
-function makeTableSchema({ database = "demo", table = "users", columns = ["id"], sensitive = [] } = {}) {
-  return {
-    database,
-    table,
-    columns: columns.map((name) => ({
-      name,
-      dataType: "varchar",
-      nullable: true,
-    })),
-    indexes: [],
-    primaryKey: ["id"],
-    engineHints: {
-      likelyTimeColumns: [],
-      likelyFilterColumns: ["id"],
-      sensitiveColumns: sensitive,
-    },
   };
 }
 
@@ -136,79 +115,4 @@ test("validateStaticRules blocks SET GLOBAL", () => {
 
   assert.equal(result.action, "block");
   assert.ok(result.reasonCodes.includes("R004"));
-});
-
-test("validateSchemaAware blocks missing table", () => {
-  const cls = baseClassification({
-    referencedTables: ["orders"],
-    referencedColumns: ["id"],
-  });
-  const snapshot = new Map([["demo.users", makeTableSchema()]]);
-  const result = validateSchemaAware(cls, snapshot);
-
-  assert.equal(result.action, "block");
-  assert.deepEqual(result.reasonCodes, ["R009"]);
-});
-
-test("validateSchemaAware blocks missing column", () => {
-  const cls = baseClassification({
-    referencedTables: ["users"],
-    referencedColumns: ["users.phone_number"],
-  });
-  const snapshot = new Map([["demo.users", makeTableSchema({ columns: ["id", "email"] })]]);
-  const result = validateSchemaAware(cls, snapshot);
-
-  assert.equal(result.action, "block");
-  assert.deepEqual(result.reasonCodes, ["R010"]);
-});
-
-test("validateSchemaAware marks sensitive column access as medium allow", () => {
-  const cls = baseClassification({
-    referencedTables: ["users"],
-    referencedColumns: ["users.phone_number"],
-  });
-  const snapshot = new Map([
-    [
-      "demo.users",
-      makeTableSchema({ columns: ["id", "phone_number"], sensitive: ["phone_number"] }),
-    ],
-  ]);
-  const result = validateSchemaAware(cls, snapshot);
-
-  assert.equal(result.action, "allow");
-  assert.equal(result.riskLevel, "medium");
-  assert.deepEqual(result.reasonCodes, ["R011"]);
-});
-
-test("validateCost returns confirm for likely full scan with high rows", () => {
-  const cls = baseClassification({ statementType: "select" });
-  const result = validateCost(cls, {
-    fullTableScanLikely: true,
-    indexHitLikely: false,
-    estimatedRows: 500_000,
-    usesTempStructure: false,
-    usesFilesort: false,
-    riskHints: [],
-  });
-
-  assert.equal(result.action, "confirm");
-  assert.equal(result.riskLevel, "high");
-  assert.ok(result.reasonCodes.includes("C001"));
-});
-
-test("validateCost returns medium allow for filesort/temp usage", () => {
-  const cls = baseClassification({ statementType: "select" });
-  const result = validateCost(cls, {
-    fullTableScanLikely: false,
-    indexHitLikely: true,
-    estimatedRows: 20_000,
-    usesTempStructure: true,
-    usesFilesort: true,
-    riskHints: ["Using temporary"],
-  });
-
-  assert.equal(result.action, "allow");
-  assert.equal(result.riskLevel, "medium");
-  assert.ok(result.reasonCodes.includes("C003"));
-  assert.ok(result.reasonCodes.includes("C004"));
 });

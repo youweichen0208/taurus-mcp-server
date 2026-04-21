@@ -14,6 +14,12 @@ import {
   listDataSourcesTool,
   sampleRowsTool,
 } from "../dist/tools/discovery.js";
+import {
+  getKernelInfoTool,
+  listTaurusFeaturesTool,
+} from "../dist/tools/taurus/capability.js";
+import { explainSqlEnhancedTool } from "../dist/tools/taurus/explain.js";
+import { flashbackQueryTool } from "../dist/tools/taurus/flashback.js";
 
 function createDeps(engineOverrides = {}) {
   return {
@@ -76,6 +82,56 @@ function createDeps(engineOverrides = {}) {
         riskHints: [],
       }),
       handleConfirmation: async () => ({ status: "confirmed" }),
+      getKernelInfo: async () => ({
+        isTaurusDB: true,
+        kernelVersion: "2.0.69.250900",
+        mysqlCompat: "8.0",
+        instanceSpecHint: "large",
+        rawVersion: "8.0.32 TaurusDB 2.0.69.250900",
+      }),
+      listFeatures: async () => ({
+        flashback_query: { available: true, enabled: true, minVersion: "2.0.69.250900" },
+        parallel_query: { available: true, enabled: false, param: "force_parallel_execute=OFF" },
+        ndp_pushdown: { available: true, enabled: true, mode: "REPLICA_ON" },
+        offset_pushdown: { available: true, enabled: true },
+        recycle_bin: { available: true, enabled: true, minVersion: "2.0.57.240900" },
+        statement_outline: { available: true, enabled: false, minVersion: "2.0.42.230600" },
+        column_compression: { available: true, minVersion: "2.0.54.240600" },
+        multi_tenant: { available: true, enabled: false, active: false, minVersion: "2.0.54.240600" },
+        partition_mdl: { available: true, minVersion: "2.0.57.240900" },
+        dynamic_masking: { available: true, minVersion: "2.0.69.250900" },
+        nonblocking_ddl: { available: true, minVersion: "2.0.54.240600" },
+        hot_row_update: { available: true, minVersion: "2.0.54.240600" },
+      }),
+      explainEnhanced: async () => ({
+        standardPlan: {
+          queryId: "qry_explain_plus_1",
+          plan: [{ table: "orders", Extra: "Using pushed NDP condition" }],
+          riskSummary: {
+            fullTableScanLikely: false,
+            indexHitLikely: true,
+            estimatedRows: 10,
+            usesTempStructure: false,
+            usesFilesort: false,
+            riskHints: [],
+          },
+          recommendations: [],
+          durationMs: 11,
+        },
+        taurusHints: {
+          ndpPushdown: {
+            condition: true,
+            columns: false,
+            aggregate: false,
+          },
+          parallelQuery: {
+            wouldEnable: false,
+            blockedReason: "parallel_query is available but force_parallel_execute is disabled.",
+          },
+          offsetPushdown: true,
+        },
+        optimizationSuggestions: ["parallel_query is available but disabled."],
+      }),
       executeReadonly: async () => ({
         queryId: "qry_ro_1",
         columns: [{ name: "id" }],
@@ -109,6 +165,21 @@ function createDeps(engineOverrides = {}) {
         queryId: "qry_rw_1",
         affectedRows: 3,
         durationMs: 20,
+      }),
+      flashbackQuery: async () => ({
+        queryId: "qry_flashback_1",
+        columns: [{ name: "id" }],
+        rows: [[1]],
+        rowCount: 1,
+        originalRowCount: 1,
+        truncated: false,
+        rowTruncated: false,
+        columnTruncated: false,
+        fieldTruncated: false,
+        redactedColumns: [],
+        droppedColumns: [],
+        truncatedColumns: [],
+        durationMs: 7,
       }),
       getQueryStatus: async (queryId) => ({ queryId, status: "completed", durationMs: 10 }),
       cancelQuery: async (queryId) => ({ queryId, status: "cancelled" }),
@@ -353,6 +424,56 @@ test("explain_sql returns plan plus guardrail summary", async () => {
   assert.equal(result.data.risk_summary.index_hit_likely, true);
 });
 
+test("Taurus capability tools return kernel info and feature matrix", async () => {
+  const deps = createDeps();
+
+  const kernel = await getKernelInfoTool.handler({}, deps, context);
+  assert.equal(kernel.ok, true);
+  assert.equal(kernel.data.kernel.is_taurusdb, true);
+  assert.equal(kernel.data.kernel.kernel_version, "2.0.69.250900");
+
+  const features = await listTaurusFeaturesTool.handler({}, deps, context);
+  assert.equal(features.ok, true);
+  assert.equal(features.data.features.flashback_query.available, true);
+  assert.equal(features.data.features.parallel_query.param, "force_parallel_execute=OFF");
+});
+
+test("explain_sql_enhanced returns TaurusDB hints", async () => {
+  const deps = createDeps();
+
+  const result = await explainSqlEnhancedTool.handler(
+    { sql: "SELECT * FROM orders ORDER BY created_at DESC LIMIT 10 OFFSET 20" },
+    deps,
+    context,
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data.standard_plan.guardrail.action, "allow");
+  assert.equal(result.data.taurus_hints.ndp_pushdown.condition, true);
+  assert.equal(result.data.taurus_hints.offset_pushdown, true);
+});
+
+test("flashback_query returns structured readonly result", async () => {
+  const deps = createDeps();
+
+  const result = await flashbackQueryTool.handler(
+    {
+      database: "app",
+      table: "orders",
+      as_of: { relative: "5m" },
+      where: "status = 'paid'",
+      limit: 5,
+    },
+    deps,
+    context,
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data.database, "app");
+  assert.equal(result.data.table, "orders");
+  assert.equal(result.data.row_count, 1);
+});
+
 test("get_query_status and cancel_query adapt query lifecycle responses", async () => {
   const deps = createDeps({
     getQueryStatus: async (queryId) => ({
@@ -424,4 +545,3 @@ test("execute_sql returns confirmation_invalid when token validation fails", asy
   assert.equal(result.error.code, ErrorCode.CONFIRMATION_INVALID);
   assert.match(result.error.message, /token expired/);
 });
-

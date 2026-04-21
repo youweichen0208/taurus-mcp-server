@@ -2,6 +2,7 @@ import {
   ConnectionPoolError,
   DatasourceResolutionError,
   SchemaIntrospectionError,
+  UnsupportedFeatureError,
 } from "@huaweicloud/taurusdb-core";
 import {
   ErrorCode,
@@ -84,6 +85,20 @@ export function formatToolError(error: unknown, context: ToolErrorContext): Tool
       message: error.message,
       summary: `${context.action} failed due to database connection issue.`,
       metadata: context.metadata,
+    });
+  }
+
+  if (error instanceof UnsupportedFeatureError) {
+    return formatError({
+      code: ErrorCode.UNSUPPORTED_FEATURE,
+      message: error.message,
+      summary: "The requested TaurusDB feature is not available on this instance.",
+      metadata: context.metadata,
+      details: {
+        feature: error.feature,
+        required_version: error.requiredVersion,
+        current_version: error.currentVersion,
+      },
     });
   }
 

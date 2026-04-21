@@ -4,6 +4,7 @@ import {
   getConfig,
   redactConfigForLog,
   TaurusDBEngine,
+  type CapabilitySnapshot,
   type Config,
 } from "@huaweicloud/taurusdb-core";
 import { registerTools } from "./tools/registry.js";
@@ -14,16 +15,41 @@ export interface ServerDeps {
   config: Config;
   engine: TaurusDBEngine;
   pingResponse: string;
+  startupProbe?: CapabilitySnapshot;
 }
 
 export async function bootstrapDependencies(): Promise<ServerDeps> {
   const config = getConfig();
   const engine = await TaurusDBEngine.create({ config });
+  const defaultDatasource = await engine.getDefaultDataSource();
+  let startupProbe: CapabilitySnapshot | undefined;
+
+  if (defaultDatasource) {
+    try {
+      const bootstrapContext = await engine.resolveContext(
+        {
+          datasource: defaultDatasource,
+          readonly: true,
+        },
+        "task_bootstrap_probe",
+      );
+      startupProbe = await engine.probeCapabilities(bootstrapContext);
+    } catch (error) {
+      logger.warn(
+        {
+          err: error,
+          defaultDatasource,
+        },
+        "Capability probe failed during bootstrap; TaurusDB-specific tools will stay disabled",
+      );
+    }
+  }
 
   return {
     config,
     engine,
     pingResponse: "pong",
+    startupProbe,
   };
 }
 
@@ -33,7 +59,7 @@ export function createServer(deps: ServerDeps): McpServer {
     version: VERSION,
   });
 
-  registerTools(server, deps, deps.config);
+  registerTools(server, deps, deps.config, deps.startupProbe);
   return server;
 }
 
@@ -53,6 +79,7 @@ export async function startMcpServer(): Promise<void> {
     {
       profileCount: datasources.length,
       defaultDatasource: defaultDatasource ?? null,
+      taurusdbProbe: deps.startupProbe?.kernelInfo?.isTaurusDB ?? null,
     },
     "SQL profiles resolved"
   );

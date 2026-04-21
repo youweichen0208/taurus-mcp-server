@@ -29,12 +29,17 @@
 - `get_query_status`
 - `cancel_query`
 - `execute_sql`
+- `get_kernel_info`
+- `list_taurus_features`
+- `explain_sql_enhanced`
+- `flashback_query`
 - `init`
 
 其中：
 
 - `execute_sql` 默认不暴露
-- 只有 `TAURUSDB_MCP_ENABLE_MUTATIONS=true` 时才会暴露
+- 启用写操作后仍需要 confirmation token
+- TaurusDB 专属 Tool 会按启动时 capability probe 动态注册，非 TaurusDB 实例不会暴露它们
 
 ---
 

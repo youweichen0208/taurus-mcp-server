@@ -1,7 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
+  type FeatureMatrix,
   generateTaskId,
+  type KernelInfo,
   logger,
   withTaskContext,
   type Config,
@@ -22,6 +24,9 @@ import {
   sampleRowsTool,
 } from "./discovery.js";
 import { pingTool } from "./ping.js";
+import { getKernelInfoTool, listTaurusFeaturesTool } from "./taurus/capability.js";
+import { explainSqlEnhancedTool } from "./taurus/explain.js";
+import { flashbackQueryTool } from "./taurus/flashback.js";
 import {
   ErrorCode,
   formatError,
@@ -30,6 +35,11 @@ import {
 } from "../utils/formatter.js";
 
 export type ToolDeps = ServerDeps;
+
+export interface ToolRegistrationProbe {
+  kernelInfo?: KernelInfo;
+  features?: FeatureMatrix;
+}
 
 export type ToolInvokeContext = {
   taskId: string;
@@ -122,7 +132,7 @@ function registerOneTool(
   throw new Error("Unsupported MCP SDK version: expected `tool` or `registerTool` on McpServer.");
 }
 
-export const defaultToolDefinitions: ToolDefinition[] = [
+export const commonToolDefinitions: ToolDefinition[] = [
   pingTool,
   listDataSourcesTool,
   listDatabasesTool,
@@ -136,12 +146,43 @@ export const defaultToolDefinitions: ToolDefinition[] = [
   executeSqlTool,
 ];
 
+export const capabilityToolDefinitions: ToolDefinition[] = [
+  getKernelInfoTool,
+  listTaurusFeaturesTool,
+];
+
+function buildDefaultToolDefinitions(probe?: ToolRegistrationProbe): ToolDefinition[] {
+  const tools: ToolDefinition[] = [
+    ...commonToolDefinitions,
+    ...capabilityToolDefinitions,
+  ];
+
+  if (probe?.features) {
+    if (probe.features.ndp_pushdown.available || probe.features.parallel_query.available) {
+      tools.push(explainSqlEnhancedTool);
+    }
+    if (probe.features.flashback_query.available) {
+      tools.push(flashbackQueryTool);
+    }
+  }
+
+  return tools;
+}
+
+function isToolDefinitionArray(value: ToolRegistrationProbe | ToolDefinition[] | undefined): value is ToolDefinition[] {
+  return Array.isArray(value);
+}
+
 export function registerTools(
   server: McpServer,
   deps: ToolDeps,
   config: Config,
-  tools: ToolDefinition[] = defaultToolDefinitions,
+  probeOrTools?: ToolRegistrationProbe | ToolDefinition[],
+  maybeTools?: ToolDefinition[],
 ): void {
+  const probe = isToolDefinitionArray(probeOrTools) ? undefined : probeOrTools;
+  const tools = maybeTools ?? (isToolDefinitionArray(probeOrTools) ? probeOrTools : buildDefaultToolDefinitions(probe));
+
   for (const tool of tools) {
     if (tool.exposeWhen && !tool.exposeWhen(config)) {
       continue;

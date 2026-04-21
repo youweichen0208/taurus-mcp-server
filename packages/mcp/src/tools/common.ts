@@ -2,8 +2,11 @@ import type {
   CancelResult,
   DataSourceInfo,
   DatabaseInfo,
+  EnhancedExplainResult,
   ExplainResult,
+  FeatureMatrix,
   GuardrailDecision,
+  KernelInfo,
   MutationResult,
   QueryResult,
   QueryStatus,
@@ -335,5 +338,57 @@ export function toPublicExplainResult(result: ExplainResult, decision: Guardrail
     },
     recommendations: result.recommendations,
     guardrail: toPublicGuardrailDecision(decision),
+  };
+}
+
+export function toPublicKernelInfo(info: KernelInfo) {
+  return {
+    is_taurusdb: info.isTaurusDB,
+    kernel_version: info.kernelVersion,
+    mysql_compat: info.mysqlCompat,
+    instance_spec_hint: info.instanceSpecHint,
+    raw_version: info.rawVersion,
+  };
+}
+
+function toPublicFeatureStatus(status: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(status).map(([key, value]) => {
+      if (key === "minVersion") {
+        return ["min_version", value];
+      }
+      return [key, value];
+    }),
+  );
+}
+
+export function toPublicFeatureMatrix(features: FeatureMatrix) {
+  return Object.fromEntries(
+    Object.entries(features).map(([name, status]) => [name, toPublicFeatureStatus(status)]),
+  );
+}
+
+export function toPublicEnhancedExplainResult(
+  result: EnhancedExplainResult,
+  decision: GuardrailDecision,
+) {
+  return {
+    standard_plan: toPublicExplainResult(result.standardPlan, decision),
+    tree_plan: result.treePlan,
+    taurus_hints: {
+      ndp_pushdown: {
+        condition: result.taurusHints.ndpPushdown.condition,
+        columns: result.taurusHints.ndpPushdown.columns,
+        aggregate: result.taurusHints.ndpPushdown.aggregate,
+        blocked_reason: result.taurusHints.ndpPushdown.blockedReason,
+      },
+      parallel_query: {
+        would_enable: result.taurusHints.parallelQuery.wouldEnable,
+        estimated_degree: result.taurusHints.parallelQuery.estimatedDegree,
+        blocked_reason: result.taurusHints.parallelQuery.blockedReason,
+      },
+      offset_pushdown: result.taurusHints.offsetPushdown,
+    },
+    optimization_suggestions: result.optimizationSuggestions,
   };
 }

@@ -9,7 +9,7 @@
 这套工具以两种形态交付：
 
 - **MCP Server 形态**：供 Claude Desktop、Cursor、VS Code 等 AI 客户端通过 MCP 协议接入
-- **CLI 形态**：作为独立的命令行工具，面向 DBA、开发者、支持人员，既支持传统命令，也支持 AI 辅助和交互式 REPL
+- **CLI 形态**：作为独立的命令行工具，面向 DBA、开发者、支持人员，第一阶段先支持传统命令模式
 
 两种形态共享同一个核心引擎（core），核心链路是：
 
@@ -21,6 +21,8 @@
 → 数据面执行
 → 结构化结果
 ```
+
+除了通用的 MySQL 数据面能力以外，首版还会专门暴露一组 **TaurusDB 专属 Tool**，用来让 AI 和用户感知到 TaurusDB 相对社区 MySQL 的差异化内核能力（闪回查询、NDP/PQ 执行计划增强、能力发现）。下一阶段则会增加一条 **诊断线**，把管控面指标、TaurusDB 内核状态和 SQL 现场联合起来做故障分析。详见 [4.1.2 TaurusDB 专属 Tool](#412--taurusdb-专属-tool当前首阶段) 与 [7.4 下一阶段的增量方向](#74-下一阶段的增量方向)。
 
 ### 1.1.1 当前仓库状态与目标形态
 
@@ -34,7 +36,7 @@
 
 - `packages/core`：沉淀数据面能力、类型、策略与执行引擎
 - `packages/mcp`：MCP 协议适配、Tool 注册、客户端 `init`
-- `packages/cli`：命令行、REPL、AI Agent、终端输出
+- `packages/cli`：命令行前端（第一阶段以命令模式为主）
 
 实施时应优先保证两点：
 
@@ -65,9 +67,10 @@
 | MCP 传输     | `stdio`，本地 JSON-RPC over stdin/stdout                              |
 | CLI 传输     | 本地进程，直接读写终端                                                |
 | 首要认证     | 数据库连接凭证或数据源 profile                                        |
-| 可选认证     | AK/SK 仅用于辅助发现实例、地址等管控面上下文；LLM API Key（CLI 专用） |
+| 可选认证     | AK/SK 仅用于辅助发现实例、地址等管控面上下文                          |
 | 执行路径     | 直接建立数据库会话，由 TaurusDB 数据面执行 SQL                        |
 | 安全边界     | SQL AST 分类、结果限制、超时限制、确认流、审计日志                    |
+| 差异化层     | 基于内核版本的能力发现 + TaurusDB 专属 Tool 动态注册                  |
 | 推荐部署位点 | 与 TaurusDB 同 VPC、同可达网络的跳板机 / Sidecar / 本地安全环境       |
 
 ### 1.3 管控面与数据面的边界
@@ -80,7 +83,7 @@
 | 风险类型     | 资源变更风险             | 数据误改、慢查询、敏感数据暴露 |
 | 本项目优先级 | P2                       | P0                             |
 
-结论是：本套工具首先是一个 **SQL 执行与治理层**，不是一个数据库运维控制台。
+结论是：本套工具首先是一个 **SQL 执行与治理层**，不是一个数据库运维控制台；但下一阶段会围绕高频故障场景补一层 **管控面 + 内核 + SQL 现场** 的联合诊断能力。
 
 ### 1.4 MCP 形态与 CLI 形态的定位
 
@@ -88,13 +91,33 @@
 | ---------- | --------------------------------- | ----------------------------------- |
 | 谁是主动方 | LLM 通过 AI 客户端调用            | 人直接操作终端                      |
 | 典型用户   | 使用 Claude / Cursor 的开发者、PM | DBA、运维、堡垒机用户、脚本自动化   |
-| LLM 谁提供 | 由 AI 客户端提供（Claude / 其他） | CLI 自己配置（华为盘古 / 自建 LLM） |
-| 交互模式   | 单轮 Tool 调用                    | 命令 / REPL / 多轮 Agent 对话       |
+| LLM 谁提供 | 由 AI 客户端提供（Claude / 其他） | 第一阶段不内建                      |
+| 交互模式   | 单轮 Tool 调用                    | 第一阶段以命令模式为主              |
 | 输出格式   | JSON-RPC（给模型消费）            | 人类可读表格 + 可选 JSON（给管道）  |
-| 确认方式   | 返回 `confirmation_token`         | 终端直接 `[y/N]` 交互               |
-| 会话状态   | 无                                | 有（历史、补全、上下文）            |
+| 确认方式   | 返回 `confirmation_token`         | 计划复用 token 流并包装终端交互     |
+| 会话状态   | 无                                | 第一阶段无长会话状态                |
 
 两种形态**共享 core 包中所有业务能力**，只在人机交互和 LLM 集成层面不同。
+
+### 1.5 TaurusDB 差异化叙事
+
+本项目不是"能连 TaurusDB 的 MySQL MCP"，而是**优先暴露 TaurusDB 内核差异化能力的数据面 Tool**。
+
+当前收敛后的首期只围绕三个叙事展开：
+
+| 叙事                    | 对应 Tool 组                                      | 故事场景                                |
+| ----------------------- | ------------------------------------------------- | --------------------------------------- |
+| TaurusDB 能感知能力边界 | 能力发现（`get_kernel_info`、`list_taurus_features`） | "这个实例支持哪些 TaurusDB 特性？"      |
+| TaurusDB 比 MySQL 更快  | NDP/PQ 执行计划增强                               | "这条 SQL 慢，TaurusDB 层面怎么优化？"  |
+| TaurusDB 能做历史只读   | 闪回查询                                          | "帮我查 10 分钟前订单表里的状态"        |
+
+像 CTS / 全量 SQL / SQL 审计 / Binlog 驱动的**历史追溯与事后恢复闭环**，仍然是后续值得做的方向，但**不再作为当前 core/mcp/cli 第一阶段的必做范围**。当前阶段先把主执行链路、最小 Guardrail、能力发现和 TaurusDB 差异化 Tool 做稳。
+
+再下一阶段，会补一条新的叙事：
+
+| 叙事 | 对应 Tool 组 | 故事场景 |
+| --- | --- | --- |
+| TaurusDB 能帮你定位故障 | 场景化诊断 Tool | “CPU 打满了怎么查？”“为什么主从延迟？”“为什么连接突然暴涨？” |
 
 ---
 
@@ -116,22 +139,28 @@ flowchart TB
 
   subgraph Frontends["Frontend packages"]
     MCP["@huaweicloud/taurusdb-mcp<br/>MCP Server (stdio)"]:::frontend
-    CLI["@huaweicloud/taurusdb-cli<br/>CLI + REPL + AI Agent"]:::frontend
+    CLI["@huaweicloud/taurusdb-cli<br/>CLI (command mode first)"]:::frontend
   end
 
   subgraph Core["@huaweicloud/taurusdb-core"]
     direction TB
     AUTH["Auth & Profile<br/>Credential resolution"]:::core
     CTX["Context Resolver<br/>SessionContext"]:::core
-    SCH["Schema Introspector<br/>+ Cache"]:::core
-    SAFE["SQL Guardrail<br/>+ Confirmation Gate"]:::core
+    SCH["Schema Introspector"]:::core
+    CAP["Capability Probe<br/>Kernel version + Feature matrix"]:::core
+    SAFE["Minimal SQL Guardrail<br/>+ Confirmation Gate"]:::core
     EXEC["SQL Executor<br/>+ Session Manager"]:::core
-    AUD["Audit Logger"]:::core
+    TAURUS["TaurusDB Extensions<br/>Flashback / Recycle Bin / EXPLAIN+"]:::core
+    DIAG["Diagnosis Layer (next phase)<br/>Scenario-based diagnostics"]:::core
   end
 
   subgraph DataPlane["TaurusDB data plane"]
     DB["DB endpoint / session"]:::data
     KERNEL["Kernel node executes SQL"]:::data
+  end
+
+  subgraph ControlPlane["Control plane / metrics (next phase)"]
+    METRICS["CES / metrics / instance metadata"]:::data
   end
 
   C1 -->|"stdio JSON-RPC"| MCP
@@ -140,18 +169,26 @@ flowchart TB
   MCP --> AUTH
   MCP --> CTX
   MCP --> SCH
+  MCP --> CAP
   MCP --> SAFE
   MCP --> EXEC
-  MCP --> AUD
+  MCP --> TAURUS
+  MCP --> DIAG
 
   CLI --> AUTH
   CLI --> CTX
   CLI --> SCH
+  CLI --> CAP
   CLI --> SAFE
   CLI --> EXEC
-  CLI --> AUD
+  CLI --> TAURUS
+  CLI --> DIAG
 
   EXEC -->|"driver / pool"| DB --> KERNEL
+  TAURUS -->|"uses"| EXEC
+  DIAG -->|"collects kernel evidence"| DB
+  DIAG -->|"collects control-plane evidence"| METRICS
+  CAP -->|"information_schema + SHOW VARIABLES"| DB
   SCH -->|"information_schema"| DB
 ```
 
@@ -169,7 +206,7 @@ taurusdb-mcp    taurusdb-cli   ← 两个前端互不依赖
 
 - `core` 包**完全不感知** MCP 协议和 CLI 命令格式，它只暴露 TypeScript SDK
 - `mcp` 包只把 core 的方法包装成 MCP Tool
-- `cli` 包只把 core 的方法包装成命令、REPL 和 AI Agent
+- `cli` 包只把 core 的方法包装成命令，REPL 和 AI 交互属于后续阶段
 - `mcp` 和 `cli` **互不依赖**，可独立发布、独立升级（尽管我们选择同步发版）
 
 ### 2.3 主数据流（MCP 形态）
@@ -180,27 +217,25 @@ taurusdb-mcp    taurusdb-cli   ← 两个前端互不依赖
 → AI 组织 SQL
 → MCP Client 发起 tools/call
 → MCP Server 解析数据源、数据库、schema 上下文
-→ core.Guardrail 解析 SQL,判定语句类型、风险和限制
-→ core.SchemaIntrospector 提供字段信息辅助校验
+→ core.Guardrail 做最小阻断和确认判断
 → core.SqlExecutor 在数据面建立会话执行
 → 返回 rows / columns / truncated / duration_ms / query_id
 → AI 组织最终自然语言回答
 ```
 
-### 2.4 主数据流（CLI Agent 形态）
+### 2.4 主数据流（CLI 命令形态）
 
 ```text
-用户在终端输入自然语言
-→ CLI AI Agent 本地调用 LLM(盘古 / OpenAI / 自建)
-→ LLM 通过 core SDK 调用 schema 工具
-→ LLM 生成 SQL
+用户在终端输入命令或 SQL
+→ CLI 解析 datasource / database / flags
 → core.Guardrail 校验
-→ CLI 在终端向用户展示 SQL 和风险,请求确认 [y/N]
-→ 用户确认后 core.SqlExecutor 执行
+→ 若需要确认,CLI 展示 confirmation token 并要求用户重试
+→ 用户携带 token 重新执行
+→ core.SqlExecutor 执行
 → CLI 格式化为终端表格输出
 ```
 
-**关键差异**：CLI 的确认是 **交互式终端提示**，MCP 的确认是 **token 回合机制**。两种确认都由 core 层的 `ConfirmationStrategy` 抽象统一。
+**关键差异**：MCP 当前直接使用 token 二阶段确认；CLI 后续如果需要交互确认，应由 CLI 前端包裹同一套 token 流程，而不是把终端交互抽象灌回 core。
 
 ### 2.5 关键交互示例
 
@@ -238,37 +273,49 @@ sequenceDiagram
   AI-->>U: 自然语言结论 + 关键数据
 ```
 
-#### 2.5.2 CLI 形态：受控写 SQL
+#### 2.5.2 CLI 形态：命令模式下的受控写 SQL
 
 ```mermaid
 sequenceDiagram
   autonumber
   participant U as User (terminal)
   participant CLI as taurusdb-cli
-  participant AGENT as CLI AI Agent
-  participant LLM as LLM Provider
   participant CORE as core Engine
   participant DB as TaurusDB
 
-  U->>CLI: taurusdb ask "把超时未支付订单改成 cancelled"
-  CLI->>AGENT: start agent loop
-  AGENT->>LLM: chat with SDK tools
-  LLM-->>AGENT: call describe_table
-  AGENT->>CORE: engine.describeTable
-  CORE-->>AGENT: TableSchema
-  AGENT->>LLM: schema result
-  LLM-->>AGENT: proposed UPDATE SQL
-  AGENT->>CORE: engine.inspectSql
-  CORE-->>AGENT: decision=confirm, risk_summary
-  AGENT->>U: print SQL + risk, prompt [y/N]
-  U->>AGENT: y
-  AGENT->>CORE: engine.issueConfirmation
-  CORE-->>AGENT: token
-  AGENT->>CORE: engine.executeMutation(sql, ctx, token)
+  U->>CLI: taurusdb exec "UPDATE orders ..."
+  CLI->>CORE: engine.inspectSql(sql, ctx)
+  CORE-->>CLI: decision=confirm, risk_summary
+  CLI->>U: print SQL + risk + confirmation_token
+  U->>CLI: re-run with --confirmation-token
+  CLI->>CORE: engine.validateConfirmation(token, sql, ctx)
+  CORE-->>CLI: valid
+  CLI->>CORE: engine.executeMutation(sql, ctx, token)
   CORE->>DB: BEGIN; UPDATE; COMMIT
   DB-->>CORE: affected_rows
-  CORE-->>AGENT: MutationResult
-  AGENT->>U: print success + affected rows
+  CORE-->>CLI: MutationResult
+  CLI->>U: print success + affected rows
+```
+
+#### 2.5.3 TaurusDB 专属：闪回查询链路
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant U as User
+  participant AI as AI Model
+  participant MS as MCP Server
+  participant CORE as core Engine
+  participant DB as TaurusDB
+
+  U->>AI: 帮我看 10 分钟前 orders 的状态
+  AI->>MS: tools/call flashback_query
+  MS->>CORE: engine.flashbackQuery(input, ctx)
+  CORE->>DB: SELECT ... AS OF TIMESTAMP ...
+  DB-->>CORE: historical rows
+  CORE-->>MS: QueryResult
+  MS-->>AI: historical rows envelope
+  AI-->>U: 返回指定时间点的数据快照
 ```
 
 ### 2.6 为什么强调"内核节点执行"
@@ -307,29 +354,32 @@ huaweicloud-taurusdb/                        ← 仓库根
 │   │   │   │   └── session-context.ts
 │   │   │   ├── schema/
 │   │   │   │   ├── introspector.ts
-│   │   │   │   ├── cache.ts
 │   │   │   │   └── adapters/
 │   │   │   │       ├── mysql.ts
 │   │   │   │       └── postgres.ts
+│   │   │   ├── capability/                  # 🆕 TaurusDB 能力发现
+│   │   │   │   ├── probe.ts                 # 内核版本探测
+│   │   │   │   ├── feature-matrix.ts        # 特性门控矩阵(版本→可用特性)
+│   │   │   │   ├── version.ts               # 版本比较
+│   │   │   │   └── types.ts                 # KernelInfo / FeatureMatrix
 │   │   │   ├── executor/
 │   │   │   │   ├── sql-executor.ts
 │   │   │   │   ├── connection-pool.ts
 │   │   │   │   ├── query-tracker.ts
 │   │   │   │   └── adapters/
+│   │   │   ├── taurus/                      # 🆕 TaurusDB 专属能力封装
+│   │   │   │   └── flashback.ts             # 闪回查询 SQL 构造
 │   │   │   ├── safety/
 │   │   │   │   ├── parser/
 │   │   │   │   ├── sql-classifier.ts
 │   │   │   │   ├── sql-validator.ts
 │   │   │   │   ├── guardrail.ts
-│   │   │   │   ├── confirmation/
-│   │   │   │   │   ├── confirmation-store.ts
-│   │   │   │   │   └── strategy.ts          # ConfirmationStrategy 抽象
+│   │   │   │   ├── confirmation-store.ts
 │   │   │   │   └── redaction.ts
-│   │   │   ├── audit/
-│   │   │   │   └── audit-logger.ts
 │   │   │   └── utils/
 │   │   │       ├── formatter.ts
 │   │   │       ├── hash.ts
+│   │   │       ├── id.ts
 │   │   │       └── logger.ts
 │   │   ├── tests/
 │   │   └── package.json
@@ -338,55 +388,28 @@ huaweicloud-taurusdb/                        ← 仓库根
 │   │   ├── src/
 │   │   │   ├── index.ts                     # CLI 入口(init 子命令 + MCP 启动)
 │   │   │   ├── server.ts                    # MCP Server 初始化
-│   │   │   ├── bootstrap.ts                 # 从 env / profile 构建 core Engine
 │   │   │   ├── tools/
-│   │   │   │   ├── registry.ts              # Tool 注册逻辑
+│   │   │   │   ├── registry.ts              # Tool 注册逻辑(支持按 feature 动态注册)
+│   │   │   │   ├── common.ts
 │   │   │   │   ├── discovery.ts
-│   │   │   │   ├── schema.ts
 │   │   │   │   ├── query.ts
-│   │   │   │   ├── mutations.ts
-│   │   │   │   └── operations.ts
+│   │   │   │   ├── ping.ts
+│   │   │   │   ├── error-handling.ts
+│   │   │   │   └── taurus/                  # 🆕 TaurusDB 专属 Tool
+│   │   │   │       ├── capability.ts        # get_kernel_info / list_taurus_features
+│   │   │   │       ├── flashback.ts         # flashback_query
+│   │   │   │       └── explain.ts           # explain_sql_enhanced
 │   │   │   ├── commands/
 │   │   │   │   └── init.ts                  # init 写入客户端配置
 │   │   │   └── utils/
-│   │   │       └── envelope.ts              # 统一响应 envelope
+│   │   │       ├── formatter.ts             # 统一响应格式
+│   │   │       └── version.ts
 │   │   ├── tests/
 │   │   └── package.json
 │   │
 │   └── cli/                                 ← @huaweicloud/taurusdb-cli
 │       ├── src/
-│       │   ├── index.ts                     # CLI 入口(commander)
-│       │   ├── bootstrap.ts                 # 构建 core Engine
-│       │   ├── commands/
-│       │   │   ├── query.ts                 # taurusdb query "..."
-│       │   │   ├── tables.ts                # taurusdb tables
-│       │   │   ├── describe.ts              # taurusdb describe <table>
-│       │   │   ├── explain.ts               # taurusdb explain "..."
-│       │   │   ├── ask.ts                   # taurusdb ask "..."  (单次 AI)
-│       │   │   ├── agent.ts                 # taurusdb agent      (多轮 AI)
-│       │   │   ├── repl.ts                  # taurusdb repl       (交互式)
-│       │   │   └── doctor.ts                # taurusdb doctor
-│       │   ├── agent/
-│       │   │   ├── llm-client.ts            # LLM 抽象
-│       │   │   ├── providers/
-│       │   │   │   ├── anthropic.ts
-│       │   │   │   ├── pangu.ts             # 华为盘古
-│       │   │   │   ├── openai.ts
-│       │   │   │   └── ollama.ts
-│       │   │   ├── agent-loop.ts            # 多轮工具调用循环
-│       │   │   └── tool-schema.ts           # 暴露给 LLM 的工具定义
-│       │   ├── repl/
-│       │   │   ├── session.ts               # REPL 会话
-│       │   │   ├── completer.ts             # Tab 补全
-│       │   │   └── history.ts               # 命令历史
-│       │   ├── ui/
-│       │   │   ├── table.ts                 # 表格渲染
-│       │   │   ├── spinner.ts
-│       │   │   ├── prompt.ts                # 交互提示
-│       │   │   └── highlight.ts             # SQL 语法高亮
-│       │   └── formatter/
-│       │       ├── human.ts                 # 人类可读
-│       │       └── json.ts                  # JSON 输出(给管道)
+│       │   └── index.ts                     # 当前仅有脚手架入口
 │       ├── tests/
 │       └── package.json
 │
@@ -397,8 +420,8 @@ huaweicloud-taurusdb/                        ← 仓库根
 │
 ├── docs/
 │   ├── architecture.md                      (本文档)
-│   ├── guardrail-deep-dive.md
-│   └── error-handbook.md
+│   ├── taurusdb-mcp-implementation-plan.md
+│   └── taurusdb-cli-implementation.md
 │
 ├── .github/workflows/ci.yml
 ├── pnpm-workspace.yaml
@@ -420,7 +443,8 @@ export class TaurusDBEngine {
 
   // Profile / Context
   listDataSources(): Promise<DataSourceInfo[]>;
-  getDefaultDataSource(): string | undefined;
+  getDefaultDataSource(): Promise<string | undefined>;
+  resolveContext(input: ResolveInput, taskId: string): Promise<SessionContext>;
 
   // Schema
   listDatabases(ctx: SessionContext): Promise<DatabaseInfo[]>;
@@ -440,8 +464,17 @@ export class TaurusDBEngine {
   // Guardrail
   inspectSql(input: InspectInput): Promise<GuardrailDecision>;
 
+  // Capability
+  probeCapabilities(ctx: SessionContext): Promise<CapabilitySnapshot>;
+  getKernelInfo(ctx: SessionContext): Promise<KernelInfo>;
+  listFeatures(ctx: SessionContext): Promise<FeatureMatrix>;
+
   // Execution
   explain(sql: string, ctx: SessionContext): Promise<ExplainResult>;
+  explainEnhanced(
+    sql: string,
+    ctx: SessionContext,
+  ): Promise<EnhancedExplainResult>;
   executeReadonly(
     sql: string,
     ctx: SessionContext,
@@ -464,9 +497,17 @@ export class TaurusDBEngine {
     sql: string,
     ctx: SessionContext,
   ): Promise<ValidationResult>;
+  handleConfirmation(
+    decision: GuardrailDecision,
+    ctx: SessionContext,
+  ): Promise<ConfirmationOutcome>;
 
-  // Context resolution helper (前端调用前使用)
-  resolveContext(input: ResolveInput): Promise<SessionContext>;
+  // 闪回查询
+  flashbackQuery(
+    input: FlashbackInput,
+    ctx: SessionContext,
+    opts?: ReadonlyOptions,
+  ): Promise<QueryResult>;
 
   // 生命周期
   close(): Promise<void>;
@@ -478,8 +519,69 @@ export interface EngineConfig {
   defaultDatasource?: string;
   enableMutations: boolean; // 全局开关
   limits: RuntimeLimits;
-  audit: AuditConfig;
-  confirmationStrategy?: ConfirmationStrategy; // 默认内存 token store
+}
+
+// ---- 🆕 TaurusDB 专属类型 ----
+
+export interface KernelInfo {
+  isTaurusDB: boolean; // 如果为 false,专属 Tool 不应注册
+  kernelVersion?: string; // 形如 "2.0.69.250900"
+  mysqlCompat: "5.7" | "8.0" | "unknown";
+  instanceSpecHint?: "small" | "medium" | "large"; // 影响 PQ/NDP 是否默认生效
+  rawVersion: string; // SELECT VERSION() 原始返回
+}
+
+export interface FeatureMatrix {
+  flashback_query: FeatureStatus;
+  parallel_query: FeatureStatus & { param?: string };
+  ndp_pushdown: FeatureStatus & { mode?: "OFF" | "ON" | "REPLICA_ON" };
+  offset_pushdown: FeatureStatus;
+  recycle_bin: FeatureStatus;
+  statement_outline: FeatureStatus;
+  column_compression: FeatureStatus;
+  multi_tenant: FeatureStatus & { active?: boolean };
+  partition_mdl: FeatureStatus;
+  dynamic_masking: FeatureStatus;
+  nonblocking_ddl: FeatureStatus;
+  hot_row_update: FeatureStatus;
+}
+
+export type FeatureStatus = {
+  available: boolean; // 当前内核版本是否支持
+  enabled?: boolean; // 是否已开启(有开关的特性才有这个字段)
+  minVersion?: string; // 启用该特性要求的最低内核版本
+  reason?: string; // 不可用时的原因
+};
+
+export interface EnhancedExplainResult {
+  standardPlan: ExplainResult; // 原始 EXPLAIN 输出
+  treePlan?: string; // EXPLAIN FORMAT=TREE
+  taurusHints: {
+    ndpPushdown: {
+      condition: boolean; // Using pushed NDP condition
+      columns: boolean; // Using pushed NDP columns
+      aggregate: boolean; // Using pushed NDP aggregate
+      blockedReason?: string; // 没下推的原因(HASH 索引/非 InnoDB/加锁等)
+    };
+    parallelQuery: {
+      wouldEnable: boolean; // 当前 SQL 是否满足 PQ 触发条件
+      estimatedDegree?: number; // 预估并行度
+      blockedReason?: string;
+    };
+    offsetPushdown: boolean;
+  };
+  optimizationSuggestions: string[]; // 给 AI 消费的建议文本
+}
+
+export interface FlashbackInput {
+  database?: string;
+  table: string;
+  asOf:
+    | { timestamp: string } // ISO 时间或 'YYYY-MM-DD HH:MM:SS'
+    | { relative: string }; // 形如 "5m"、"10min"、"1h"
+  where?: string; // 可选过滤条件
+  columns?: string[]; // 可选列裁剪
+  limit?: number;
 }
 ```
 
@@ -488,22 +590,27 @@ export interface EngineConfig {
 - 所有方法接受 `SessionContext`，不接受 raw 参数。前端负责构造 context
 - 所有方法返回结构化的 TypeScript 对象，**不返回 MCP envelope 或 CLI 格式**
 - 错误通过 typed error class 抛出，前端决定如何展示
+- **TaurusDB 专属方法在内核不支持时抛 `UnsupportedFeatureError`**,前端据此决定是否注册 Tool 或提示降级
 
 #### 3.2.2 `@huaweicloud/taurusdb-mcp`
 
 ```typescript
-// packages/mcp/src/bootstrap.ts
-export async function bootstrap(): Promise<{
-  engine: TaurusDBEngine;
-  server: McpServer;
-}> {
+// packages/mcp/src/server.ts
+export async function bootstrapDependencies(): Promise<ServerDeps> {
   const config = loadConfigFromEnv();
-  const engine = await TaurusDBEngine.create({
-    ...config,
-    confirmationStrategy: new TokenConfirmationStrategy(), // MCP 用 token
-  });
-  const server = createMcpServer(engine);
-  return { engine, server };
+  const engine = await TaurusDBEngine.create({ config });
+  const defaultDatasource = await engine.getDefaultDataSource();
+  let startupProbe: CapabilitySnapshot | undefined;
+
+  if (defaultDatasource) {
+    const bootstrapContext = await engine.resolveContext(
+      { datasource: defaultDatasource, readonly: true },
+      "task_bootstrap_probe",
+    );
+    startupProbe = await engine.probeCapabilities(bootstrapContext);
+  }
+
+  return { config, engine, startupProbe };
 }
 ```
 
@@ -512,80 +619,35 @@ export async function bootstrap(): Promise<{
 - 把每个 core 方法包装成一个 MCP Tool
 - 构造统一响应 envelope
 - 处理 MCP 协议特有的错误和重试语义
+- **基于启动时 capability probe 动态注册 TaurusDB 专属 Tool**(非 TaurusDB 实例自动降级为纯 MySQL 模式)
 - `init` 子命令写入 Claude/Cursor 等客户端配置
 
 #### 3.2.3 `@huaweicloud/taurusdb-cli`
 
 ```typescript
-// packages/cli/src/bootstrap.ts
-export async function bootstrap(): Promise<{
-  engine: TaurusDBEngine;
-  llm?: LlmClient;
-}> {
-  const config = loadConfigFromEnv();
-  const engine = await TaurusDBEngine.create({
-    ...config,
-    confirmationStrategy: new InteractiveConfirmationStrategy(), // CLI 用交互
-  });
-  const llm = config.llm ? await createLlmClient(config.llm) : undefined;
-  return { engine, llm };
-}
+// packages/cli/src/index.ts
+#!/usr/bin/env node
+process.stderr.write(
+  "@huaweicloud/taurusdb-cli is scaffolded but not implemented yet.\\n"
+);
+process.exit(1);
 ```
 
 **职责**：
 
-- 命令模式（`query`、`tables`、`describe` 等）
-- REPL 模式（交互式 SQL 终端）
-- AI 模式（`ask` 单次、`agent` 多轮）
-- 终端 UI（表格、颜色、spinner、补全）
-- LLM 客户端抽象（支持多 provider）
+- 命令模式（`query`、`tables`、`describe`、`exec`、`status`、`cancel`）
+- TaurusDB 专属命令（`features`、`explain+`、`flashback`）
+- REPL / AI / doctor 属于后续阶段，不计入第一阶段交付范围
 
-### 3.3 Confirmation Strategy：跨形态的确认抽象
+### 3.3 当前确认模型
 
-这是 core 层必须设计好的一个关键抽象。
+当前实现不再引入 `ConfirmationStrategy` 抽象。`core` 只保留一套 token-based confirmation 原语：
 
-```typescript
-// packages/core/src/safety/confirmation/strategy.ts
-export interface ConfirmationStrategy {
-  /**
-   * Handle a guardrail decision that requires confirmation.
-   * Different strategies implement this differently:
-   *   - TokenStrategy: issue a token, return it so caller can re-invoke with token
-   *   - InteractiveStrategy: prompt user directly on terminal, block until answered
-   */
-  handle(decision: GuardrailDecision, ctx: SessionContext): Promise<ConfirmationOutcome>;
-}
+- `issueConfirmation`
+- `validateConfirmation`
+- `handleConfirmation`
 
-export type ConfirmationOutcome =
-  | { status: "token_issued"; token: string; expiresAt: number }   // MCP
-  | { status: "confirmed"; autoToken?: string }                    // CLI (already confirmed)
-  | { status: "rejected"; reason: string };
-
-// packages/mcp 提供
-export class TokenConfirmationStrategy implements ConfirmationStrategy {
-  async handle(decision, ctx) {
-    const token = await this.store.issue({...});
-    return { status: "token_issued", token, expiresAt: ... };
-  }
-}
-
-// packages/cli 提供
-export class InteractiveConfirmationStrategy implements ConfirmationStrategy {
-  async handle(decision, ctx) {
-    console.log("⚠  This SQL will modify data:");
-    console.log(this.highlight(decision.normalizedSql));
-    console.log(`Risk level: ${decision.riskLevel}`);
-    const answer = await prompt("Confirm execute? [y/N]");
-    if (answer === "y") {
-      const token = await this.store.issue({...});  // 内部仍走 token,保证审计
-      return { status: "confirmed", autoToken: token };
-    }
-    return { status: "rejected", reason: "user declined" };
-  }
-}
-```
-
-**这个抽象让 core 永远不关心前端如何确认**，两种形态都能工作。
+MCP 直接把 token 返回给客户端，要求用户携带 `confirmation_token` 重试。CLI 后续如果实现交互式确认，也应当在前端包装这套 token 流，而不是把终端交互重新注入 `core`。
 
 ### 3.4 各模块职责（与原架构一致，仅强调归属）
 
@@ -623,7 +685,7 @@ Schema 层负责：
 
 1. 从系统表中抽取数据库、表、字段、索引、主键、注释
 2. 输出模型友好和终端友好的结构化 schema
-3. 对高频元数据做短 TTL 缓存，减少重复查 catalog
+3. 为上层的 `describe_table` / `sample_rows` / SQL 生成提供稳定字段语义
 
 推荐返回字段至少包括：
 
@@ -638,7 +700,36 @@ Schema 层负责：
 - 时间字段识别
 - 敏感字段识别
 
-#### 3.4.3 SQL 执行层 (`executor/`)
+#### 3.4.3 能力发现层 (`capability/`) 🆕
+
+这一层是 TaurusDB 差异化能力的前置基础设施。当前所有专属能力都先经过它,再决定：
+
+- 当前连接是不是 TaurusDB
+- 当前内核版本支持哪些特性
+- 某个 Tool 是否该注册
+- 某个调用是否应抛 `UnsupportedFeatureError`
+
+当前实现刻意保持简单：
+
+- `probe()` 每次直接探测,**不在 core 内做 capability cache**
+- MCP 启动时只对默认数据源做一次 probe,把结果用于动态注册 Tool
+- 后续单次调用仍可按需再次探测,保证行为和当前连接状态一致
+
+当前首阶段真正依赖的能力门控只有三类：
+
+| 能力 | 用途 |
+| --- | --- |
+| `flashback_query` | 决定是否注册 `flashback_query` Tool / 命令 |
+| `parallel_query` + `ndp_pushdown` | 决定是否注册 `explain_sql_enhanced` |
+| 其余 feature | 暂时只在 `list_taurus_features` 中展示，不驱动额外执行路径 |
+
+降级策略：
+
+- 非 TaurusDB: `isTaurusDB=false`，只保留通用 MySQL Tool
+- 低版本 TaurusDB:专属 Tool 按 feature 门控部分暴露
+- 探测失败:启动日志记录 warning，MCP 退回通用 Tool 集合
+
+#### 3.4.4 SQL 执行层 (`executor/`)
 
 ```typescript
 class SqlExecutor {
@@ -659,6 +750,21 @@ class SqlExecutor {
 - 长查询可查询状态、可取消
 - 写 SQL 由服务端包裹为单次事务边界
 
+##### 🆕 增强 EXPLAIN 的实现要点
+
+`explainEnhanced` 当前放在 `TaurusDBEngine` 层实现，底层仍复用标准 `explain()` 与 capability probe：
+
+```text
+1. 跑标准 EXPLAIN <sql>
+2. 根据执行计划中的 Extra / extra 字段解析 TaurusDB 标记:
+   - "Using pushed NDP condition"  → ndpPushdown.condition = true
+   - "Using pushed NDP columns"    → ndpPushdown.columns = true
+   - "Using pushed NDP aggregate"  → ndpPushdown.aggregate = true
+   - "Using offset pushdown"       → offsetPushdown = true
+3. 结合 `listFeatures()` 的结果给出 PQ/NDP/OFFSET 的可用性与阻断原因
+4. 合成 `optimizationSuggestions`
+```
+
 ##### Executor 执行流程图
 
 ```mermaid
@@ -666,10 +772,8 @@ flowchart TB
   A[上层调用 execute] --> B[读取 GuardrailDecision]
   B --> C{action}
   C -->|block| D[直接抛 BlockedError]
-  C -->|confirm 且无 token| E[通过 ConfirmationStrategy 处理]
-  E --> F{strategy 返回}
-  F -->|rejected| D
-  F -->|confirmed or token_issued| G[构造执行参数]
+  C -->|confirm 且无 token| E[返回 CONFIRMATION_REQUIRED]
+  E --> G[前端重新发起并携带 confirmation_token]
   C -->|allow| G
   G --> H[从连接池获取会话]
   H --> I[注入运行时限制]
@@ -687,42 +791,98 @@ flowchart TB
   R --> T[return structured result]
 ```
 
-#### 3.4.4 安全层 (`safety/`)
+#### 3.4.5 TaurusDB 专属能力层 (`taurus/`) 🆕
+
+这一层是对 executor 的薄封装，不引入新的连接或事务模型。当前首阶段只落地了 `flashback.ts`，回收站相关能力保留到下一阶段。
+
+##### 闪回查询 (`taurus/flashback.ts`)
+
+```typescript
+export class FlashbackOps {
+  async query(
+    input: FlashbackInput,
+    ctx: SessionContext,
+    opts?: ReadonlyOptions,
+  ): Promise<QueryResult> {
+    // 前置检查:
+    //  1. 内核版本 ≥2.0.69.250900
+    //  2. innodb_rds_backquery_enable = ON
+    // 构造 SQL: SELECT ... FROM t AS OF TIMESTAMP '...' WHERE ... LIMIT ...
+    // 这是只读操作,走 executor.executeReadonly 链路
+    // 相对时间("5m")在 core 层转成绝对时间戳,不要把"5m"直接塞进 SQL
+  }
+
+  private resolveTimestamp(asOf: FlashbackInput["asOf"]): string {
+    // 将 { relative: "5m" } 转成 ISO 时间戳
+    // 将 { timestamp: "..." } 规范化
+  }
+}
+```
+
+##### 设计原则
+
+- 这一层**不自己建连接、不自己管事务**,一切都走 executor
+- SQL 模板的构造应该集中在这里,方便未来内核语法调整时一处修改
+- 每个操作都应该先调 `capability.probe` 确认能力可用,不可用时抛 `UnsupportedFeatureError`
+- 回收站恢复、历史回溯编排等写路径暂不纳入第一阶段实现
+
+#### 3.4.6 安全层 (`safety/`)
 
 安全层是本项目"可控 AI SQL"与"直接给模型一个数据库账号"之间的根本区别。
 
-核心步骤：
+##### Guardrail 的职责边界(重要)
 
-1. **归一化**：保留原始 SQL，生成 `normalized_sql`、`sql_hash`
-2. **解析**：按引擎选择 parser，生成统一 IR（SqlAst）
-3. **分类**：提取 `statement_type`、引用表、引用列、是否多语句、WHERE/LIMIT/JOIN 等
-4. **静态规则校验**：多语句、DCL、危险 DDL、无 WHERE 的 UPDATE/DELETE
-5. **Schema 感知校验**：结合 schema 检查字段是否存在、是否敏感
-6. **Explain / 成本校验**：对复杂只读和写 SQL 评估代价
-7. **确认策略**：命中风险时通过 `ConfirmationStrategy` 处理
-8. **脱敏与裁剪**：结果输出前统一裁剪和脱敏
+当前 Guardrail 已明确收敛为**最小阻断 + token 确认 + 运行时限制**，而不是“全能 SQL 审核代理”。
 
-风险分层：
+当前职责边界：
 
-| 风险等级  | 典型 SQL                                               | 默认策略                         |
-| --------- | ------------------------------------------------------ | -------------------------------- |
-| `low`     | `SHOW TABLES`、有明确 `LIMIT` 的简单查询               | 直接执行                         |
-| `medium`  | 联表聚合、大范围扫描风险、带 `WHERE` 的 `UPDATE`       | 先解释，必要时要求确认           |
-| `high`    | 大范围 `UPDATE/DELETE`、`ALTER TABLE`                  | 默认阻断或仅在显式开关下允许确认 |
-| `blocked` | `DROP DATABASE`、`TRUNCATE`、`GRANT`、`REVOKE`、多语句 | 直接拒绝                         |
+| 类型 | 归属 |
+| --- | --- |
+| 多语句、DCL、`TRUNCATE`、`DROP DATABASE`、`SET GLOBAL` 阻断 | Guardrail |
+| `UPDATE/DELETE` 的 `WHERE` 检查与确认要求 | Guardrail |
+| `SELECT *`、无 `LIMIT` 明细查询的中风险提示 | Guardrail |
+| `sql_hash`、`normalized_sql`、runtime limits | Guardrail |
+| 列存在、类型匹配、语法细节 | 数据库内核报错 |
+| EXPLAIN/cost 预检查 | 不做 |
+| SQL 历史、Binlog、CTS | 后续阶段，不在当前 guardrail 内承担 |
+
+##### 核心步骤(精简后为 4 层)
+
+1. **归一化**:保留原始 SQL,生成 `normalized_sql`、`sql_hash`
+2. **分类**:基于 AST 提取 `statement_type`、是否多语句、是否有 `WHERE`、是否 `SELECT *`
+3. **静态规则校验**:执行 tool scope 校验和最小安全规则
+4. **运行时限制**:把决策落成 executor 参数(readonly / timeout / max_rows / redaction)
+
+##### 风险分层
+
+| 风险等级 | 典型 SQL | 默认策略 |
+| --- | --- | --- |
+| `low` | `SHOW TABLES`、有限制的简单查询、只读元数据查询 | 直接执行 |
+| `medium` | `SELECT *`、无 `LIMIT` 的明细查询 | 允许执行，但附带风险提示与结果截断 |
+| `high` | 带 `WHERE` 的 `UPDATE/DELETE` | 要求确认 |
+| `blocked` | 多语句、DCL、`TRUNCATE`、`DROP DATABASE`、无 `WHERE` 的 `UPDATE/DELETE` | 直接拒绝 |
 
 阻断规则至少包括：
 
 - 多语句
 - DCL 语句
-- `DROP DATABASE`
+- `DROP DATABASE`(默认)
 - `TRUNCATE`
-- 文件系统相关 SQL
+- 无 `WHERE` 的 `UPDATE/DELETE`
 - 修改全局参数的 SQL
+
+##### 关于 TaurusDB 专属操作的风险分级
+
+| 操作 | 风险等级 | 说明 |
+| --- | --- | --- |
+| `get_kernel_info` | `low` | 只读能力探测 |
+| `list_taurus_features` | `low` | 只读特性枚举 |
+| `explain_sql_enhanced` | `low` | 只读执行计划增强 |
+| `flashback_query` | `low` | 本质是只读历史查询 |
 
 ##### AST 校验原理
 
-AST = Abstract Syntax Tree，抽象语法树。把 SQL 解析成 AST，本质上是把一段字符串变成"结构化语义对象"。
+AST = Abstract Syntax Tree,抽象语法树。把 SQL 解析成 AST,本质上是把一段字符串变成"结构化语义对象"。
 
 例如：
 
@@ -730,7 +890,7 @@ AST = Abstract Syntax Tree，抽象语法树。把 SQL 解析成 AST，本质上
 UPDATE orders SET status = 'cancelled' WHERE id = 1001;
 ```
 
-在 Guardrail 看来不应该只是一段文本，而应该被解析成：
+在 Guardrail 看来不应该只是一段文本,而应该被解析成：
 
 ```typescript
 {
@@ -747,68 +907,32 @@ UPDATE orders SET status = 'cancelled' WHERE id = 1001;
 
 这样做的价值：
 
-- 可靠识别语句类型，而不是靠正则猜
-- 判断是不是多语句，而不是分号硬拆
+- 可靠识别语句类型,而不是靠正则猜
+- 判断是不是多语句,而不是分号硬拆
 - 知道 WHERE 是否存在、作用在哪些列上
 - 抽取引用的表、字段、函数、排序、分页和 join 结构
-- 对不同引擎做 adapter，而不是方言硬编码
+- 对不同引擎做 adapter,而不是方言硬编码
 
-**AST 校验不是"检查 SQL 长得像不像对"，而是"检查 SQL 的语义结构是否符合安全规则"**。
+**AST 校验不是"检查 SQL 长得像不像对",而是"检查 SQL 的语义结构是否符合安全规则"**。
 
-##### Guardrail 分层执行
-
-建议把 Guardrail 设计成 6 层：
-
-1. **归一化层** — 保留原始 SQL，生成 `normalized_sql`、`sql_hash`
-2. **解析层** — 按引擎调用 parser adapter，解析失败直接返回语法错误
-3. **分类层** — 从 AST 提取事实（statement_type、表、列、是否多语句等）
-4. **静态规则层** — 不连数据库可判断（多语句、DCL、危险 DDL、无 WHERE）
-5. **Schema / Explain 层** — 结合 schema 判断列是否存在、索引是否命中
-6. **运行时约束层** — 最终决策转成 executor 参数（readonly、timeout、max_rows）
-
-调用顺序：
-
-```text
-SQL 文本
-→ normalize
-→ parse to AST
-→ classify
-→ static validate
-→ schema-aware validate
-→ explain / cost validate
-→ decision: allow / confirm / block
-→ executor.run with runtime limits
-```
-
-Guardrail 决策流程图：
+##### 精简后的 Guardrail 流程
 
 ```mermaid
 flowchart TB
-  A[toolName sql context] --> B[normalize]
-  B --> C[parse AST and classify]
-  C --> D[Tool Scope Validate]
-  D --> E{通过?}
-  E -->|否| Z1[block]
-  E -->|是| F[Static Rules Validate]
-  F --> G{命中阻断?}
-  G -->|是| Z1
-  G -->|否| H[Load Schema Snapshot]
-  H --> I[Schema-aware Validate]
-  I --> J{通过?}
-  J -->|否| Z1
-  J -->|是| K{需要 Explain?}
-  K -->|否| L[Merge Decision]
-  K -->|是| M[Run Explain]
-  M --> N[Cost Validate]
-  N --> L
-  L --> O{risk level}
-  O -->|low| Z2[allow]
-  O -->|medium| Z3[allow or confirm]
-  O -->|high| Z4[confirm]
-  O -->|blocked| Z1
+  A[Tool 接收 sql + context] --> B[normalize + sql_hash]
+  B --> C[parse AST + classify]
+  C --> D{tool scope / static rules}
+  D -->|是| Z1[block]
+  D -->|否| J{risk level}
+  J -->|low| Z2[allow]
+  J -->|medium| Z3[confirm]
+  J -->|high| Z3
+  J -->|blocked| Z1
+  Z2 --> K[注入运行时限制<br/>readonly/timeout/maxRows/redaction]
+  Z3 --> K
 ```
 
-##### 分类层输出
+##### 分类层输出(精简)
 
 ```typescript
 type SqlClassification = {
@@ -824,24 +948,21 @@ type SqlClassification = {
     | "alter"
     | "drop"
     | "create"
+    | "truncate"
     | "grant"
     | "revoke"
     | "unknown";
   normalizedSql: string;
   sqlHash: string;
   isMultiStatement: boolean;
-  referencedTables: string[];
-  referencedColumns: string[];
-  hasWhere: boolean;
-  hasLimit: boolean;
-  hasJoin: boolean;
-  hasSubquery: boolean;
-  hasOrderBy: boolean;
-  hasAggregate: boolean;
+  referencedTables: string[]; // 只保留表,不再深度提取列
+  hasWhere: boolean; // 判断 UPDATE/DELETE 是否有 WHERE
 };
 ```
 
-分类器**只回答事实，不做决策**。
+**移除字段**:`referencedColumns`、`hasJoin`、`hasSubquery`、`hasOrderBy`、`hasAggregate`、`hasLimit`。它们对决策无用,移除让代码更薄。
+
+分类器**只回答事实,不做决策**。
 
 ##### 最终决策模型
 
@@ -850,6 +971,7 @@ type GuardrailDecision = {
   action: "allow" | "confirm" | "block";
   riskLevel: "low" | "medium" | "high" | "blocked";
   reasonCodes: string[];
+  riskHints: string[];
   normalizedSql: string;
   sqlHash: string;
   requiresExplain: boolean;
@@ -858,16 +980,17 @@ type GuardrailDecision = {
     readonly: boolean;
     timeoutMs: number;
     maxRows: number;
+    maxColumns: number;
   };
 };
 ```
 
 决策逻辑：
 
-- `blocked`：直接拒绝
-- `high`：默认拒绝，或在开启 mutations 时进入确认流
-- `medium`：返回风险说明，部分场景允许直接执行
-- `low`：直接执行
+- `blocked`:直接拒绝
+- `high`:默认拒绝,或在开启 mutations 时进入确认流
+- `medium`:返回风险说明 + 确认提示
+- `low`:直接执行
 
 ##### 运行时限制
 
@@ -879,54 +1002,72 @@ Guardrail 要把决策落成执行参数：
 - `max_columns` — 防止宽表暴露
 - `redaction_policy` — 敏感列脱敏
 
-**不要静默改写用户 SQL 语义**。对没有 `LIMIT` 的查询，更稳的做法是返回风险提示或在返回层截断，而不是偷偷改 SQL。
+**不要静默改写用户 SQL 语义**。对没有 `LIMIT` 的查询,更稳的做法是返回风险提示或在返回层截断,而不是偷偷改 SQL。
 
 ##### 典型 SQL 判定
 
-| SQL                                                  | 结果                 |
-| ---------------------------------------------------- | -------------------- |
-| `SHOW TABLES`                                        | `allow`              |
-| `SELECT * FROM orders LIMIT 100`                     | `allow` 或 `medium`  |
-| `SELECT * FROM orders`                               | `confirm` 或 `block` |
-| `SELECT dt, count(*) FROM orders GROUP BY dt`        | 进入 Explain 再判断  |
-| `UPDATE orders SET status='x' WHERE id=1`            | `confirm`            |
-| `UPDATE orders SET status='x'`                       | `block`              |
-| `DELETE FROM orders WHERE created_at < '2024-01-01'` | Explain 后 `confirm` |
-| `TRUNCATE orders`                                    | `block`              |
+| SQL                                                  | 结果                                           |
+| ---------------------------------------------------- | ---------------------------------------------- |
+| `SHOW TABLES`                                        | `allow`                                        |
+| `SELECT * FROM orders LIMIT 100`                     | `allow`                                        |
+| `SELECT * FROM orders`                               | `medium`(返回层截断 + 提示)                    |
+| `UPDATE orders SET status='x' WHERE id=1`            | `confirm`                                      |
+| `UPDATE orders SET status='x'`                       | `block`(无 WHERE)                              |
+| `DELETE FROM orders WHERE created_at < '2024-01-01'` | `confirm`                                      |
+| `TRUNCATE orders`                                    | `block`                                        |
+| `DROP DATABASE foo`                                  | `block`                                        |
+| `SELECT * FROM users; DROP TABLE orders`             | `block`(多语句)                                |
+
+注意表中不再出现"Explain 后 confirm"——因为当前 guardrail 不做 EXPLAIN/cost 预检查,决策路径更直接。
 
 ##### 为什么不能只靠正则
 
-- SQL 方言繁多，大小写、引号、函数、注释写法都不同
+- SQL 方言繁多,大小写、引号、函数、注释写法都不同
 - 子查询、CTE、嵌套表达式让正则几乎不可维护
-- 很多风险不是看关键词，而是看结构关系
-- `UPDATE ... WHERE ...` 和 `UPDATE ...` 的风险差异，本质是 AST 结构差异
+- 很多风险不是看关键词,而是看结构关系
+- `UPDATE ... WHERE ...` 和 `UPDATE ...` 的风险差异,本质是 AST 结构差异
 
 所以实现上：
 
 - 正则只做非常轻量的预清洗
-- 真正的分类和校验必须基于 AST
-- 成本和影响面判断再叠加 Explain 与 schema 信息
+- 真正的分类和决策基于 AST
+- 更复杂的历史追溯与恢复编排留到后续阶段
 
-#### 3.4.5 审计层 (`audit/`)
+#### 3.4.7 审计层 (`audit/`)
 
-数据面场景下，光有数据库自身日志不够，还需要记录 core 引擎的决策过程。每次调用记录：
+##### 审计层的职责边界
+
+`audit/` **只记录 MCP 引擎自己的决策过程**,不重复 TaurusDB 内核已有的审计能力。核心区分:
+
+| 要回答的问题                 | 归属                             |
+| ---------------------------- | -------------------------------- |
+| MCP 对这条 SQL 的决策是什么? | **core 本地 audit logger**(本层) |
+| 数据库到底执行了什么 SQL?    | TaurusDB **全量 SQL / SQL 审计** |
+| 行级数据是怎么变的?          | TaurusDB **Binlog**              |
+| 实例级管理事件?              | **CTS**(华为云审计服务)          |
+
+**结论**:审计层从原本可能的"全量记录"瘦身为"最小决策记录"——因为内核已经提供了比 MCP 更权威、更全面的审计能力,MCP 再记一份只会冗余。
+
+##### 精简后的记录字段
+
+每次调用记录:
 
 - `task_id`、`query_id`
 - `datasource`、`database`
-- `statement_type`、`risk_level`
-- `sql_hash`、`decision`
-- `duration_ms`、`row_count` 或 `affected_rows`
-- `frontend`：标识是 `mcp` 还是 `cli`（方便区分调用来源）
+- `statement_type`、`risk_level`、`decision`
+- `sql_hash`(**不记 SQL 原文**,原文追溯走全量 SQL)
+- `duration_ms`、`rows_affected` 或 `row_count`
+- `frontend`:标识是 `mcp` 还是 `cli`
+- `tool_category`:标识是通用 Tool / TaurusDB 专属 Tool / 数据安全 Tool
 
-默认策略：
+##### 默认策略
 
 - 本地只落结构化 JSONL
-- 不默认保存完整结果集
-- 原始 SQL 文本可选保存，默认只保存 hash 和归一化摘要
+- **默认不保存 SQL 原文**,只保存 `sql_hash`(作为关联其他审计源的纽带)
+- **默认不保存结果集**,只保存 `row_count`
+- 单条记录字段数控制在 20 个以内,避免日志膨胀
 
-##### 分层审计
-
-建议拆成 3 层：
+##### 三层审计分工
 
 **第一层：core 本地结构化审计**
 
@@ -944,6 +1085,7 @@ Guardrail 要把决策落成执行参数：
 - 数据源 profile 被新增、修改、删除
 - 高风险写 SQL 已确认并执行
 - 高风险 SQL 被 Guardrail 阻断
+- **回收站恢复操作被执行**
 - 审计策略、脱敏策略、权限策略被修改
 
 **CTS 里放"关键治理事件"，不要放"每条 SQL 明细"**。
@@ -953,6 +1095,8 @@ Guardrail 要把决策落成执行参数：
 ## 4. Tool 与命令设计
 
 ### 4.1 MCP Tool 集合（由 `@huaweicloud/taurusdb-mcp` 实现）
+
+#### 4.1.1 通用 MySQL Tool
 
 | Tool                   | 默认暴露 | 角色定位                      |
 | ---------------------- | -------- | ----------------------------- |
@@ -967,6 +1111,67 @@ Guardrail 要把决策落成执行参数：
 | `cancel_query`         | 是       | 取消仍在运行的查询            |
 | `execute_sql`          | 否       | 变更 SQL 执行入口，需显式开启 |
 
+#### 4.1.2 🆕 TaurusDB 专属 Tool（当前首阶段）
+
+> 以下 Tool 仅在连接到 TaurusDB 实例时暴露，依赖启动时能力探测的结果动态注册。
+> 连接到自建 MySQL / RDS for MySQL 时，这些 Tool 自动不注册，MCP 优雅降级为纯 MySQL 模式。
+
+当前首阶段围绕三条主线，只保留 4 个专属 Tool：
+
+| Tool | 能力组 | 默认暴露 | 风险等级 | 前置依赖 |
+| --- | --- | --- | --- | --- |
+| `get_kernel_info` | 能力发现 | 是 | `low` | 无 |
+| `list_taurus_features` | 能力发现 | 是 | `low` | 无 |
+| `explain_sql_enhanced` | 性能洞察 | 是 | `low` | `parallel_query` 或 `ndp_pushdown` 可用时注册 |
+| `flashback_query` | 闪回 | 是 | `low` | 内核 ≥ `2.0.69.250900` 且 `innodb_rds_backquery_enable=ON` |
+
+当前不纳入首阶段实现：
+
+- `list_recycle_bin`
+- `restore_from_recycle_bin`
+- 任何 CTS / 全量 SQL / Binlog 驱动的历史回溯 Tool
+
+这些能力仍然在架构上保留演进空间，但文档不再把它们写成已交付能力。
+
+##### 当前首阶段的三个叙事
+
+1. “这个实例到底是不是 TaurusDB，支持哪些内核特性？”
+   对应 `get_kernel_info` + `list_taurus_features`
+
+2. “这条 SQL 在 TaurusDB 上能不能吃到 NDP / PQ / OFFSET pushdown 红利？”
+   对应 `explain_sql_enhanced`
+
+3. “我想看某张表在某个时间点之前的数据快照。”
+   对应 `flashback_query`
+
+##### 字段设计概要
+
+**`get_kernel_info`**
+
+- 输入：`{ datasource?: string }`
+- 输出：`KernelInfo`
+- 非 TaurusDB 实例返回 `isTaurusDB: false`，不抛错
+
+**`list_taurus_features`**
+
+- 输入：`{ datasource?: string }`
+- 输出：`FeatureMatrix`
+- 返回每个 feature 的 `available` / `enabled` / `minVersion` / `reason`
+
+**`explain_sql_enhanced`**
+
+- 输入：`{ sql: string, datasource?: string, database?: string }`
+- 输出：`EnhancedExplainResult`
+- 只接受只读 SQL
+
+**`flashback_query`**
+
+- 输入：`{ table: string, as_of: { timestamp?: string, relative?: string }, where?: string, columns?: string[], limit?: number, database?: string }`
+- 输出：与 `execute_readonly_sql` 相同的 `QueryResult`
+- `relative` 支持 `5m` / `10min` / `1h` / `2h30m`
+
+#### 4.1.3 通用 Tool 的上下文字段
+
 所有核心 Tool 都支持上下文字段：
 
 ```typescript
@@ -978,25 +1183,75 @@ Guardrail 要把决策落成执行参数：
 }
 ```
 
+#### 4.1.4 诊断 Tool（下一阶段）
+
+> 这一组不是当前首阶段能力，但建议作为下一阶段的正式产品线推进。
+> 它们的共同特点是：**默认只读**、**场景化输出**、**联合使用管控面指标 + TaurusDB 内核状态 + SQL 现场**。
+
+| Tool | 场景 | 主要证据源 | 验证级别 |
+| --- | --- | --- | --- |
+| `diagnose_slow_query` | “这条 SQL 为什么慢” | `explain_sql_enhanced`、慢 SQL / Top SQL、表规模、索引、NDP/PQ 机会 | `local-verifiable` |
+| `diagnose_connection_spike` | “为什么连接数突然暴涨” | CES 连接指标、`processlist`、用户/IP 分布、连接参数 | `local-partial` |
+| `diagnose_lock_contention` | “为什么锁住了 / DDL 卡住了” | 锁等待视图、死锁信息、长事务、MDL、阻塞链 | `local-verifiable` |
+| `diagnose_replication_lag` | “为什么主从延迟 / 只读节点落后” | CES 延迟指标、复制状态、长事务、大事务、回放压力 | `cloud-required` |
+| `diagnose_storage_pressure` | “为什么磁盘 / IOPS / 吞吐有压力” | CES 存储指标、临时表、排序落盘、扫描/排序 SQL | `local-partial` |
+
+验证级别定义：
+
+- `local-verifiable`: 本地单机 MySQL 就能验证主要诊断逻辑
+- `local-partial`: 本地只能验证内核/SQL 证据链，控制面指标与 TaurusDB 特性需上云补齐
+- `cloud-required`: 需要云实例、托管拓扑或控制面指标才能做有意义的完整验证
+
+这组 Tool 不应该只是“查一个指标”，而是返回：
+
+- 根因候选
+- 证据摘要
+- 可疑 SQL / 会话 / 表
+- 下一步建议动作
+
 ### 4.2 CLI 命令集合（由 `@huaweicloud/taurusdb-cli` 实现）
 
-| 命令                                     | 角色定位                      |
-| ---------------------------------------- | ----------------------------- |
-| `taurusdb sources`                       | 列出所有数据源                |
-| `taurusdb databases [--datasource NAME]` | 列出数据库                    |
-| `taurusdb tables [--database NAME]`      | 列出表                        |
-| `taurusdb describe <table>`              | 查看表结构                    |
-| `taurusdb sample <table>`                | 查看样本行                    |
-| `taurusdb query "<SQL>"`                 | 执行只读 SQL                  |
-| `taurusdb exec "<SQL>"`                  | 执行写 SQL（需 mutations）    |
-| `taurusdb explain "<SQL>"`               | SQL 计划分析                  |
-| `taurusdb ask "<question>"`              | 单次 AI 辅助                  |
-| `taurusdb agent`                         | 进入多轮 AI 对话              |
-| `taurusdb repl`                          | 进入交互式 REPL               |
-| `taurusdb doctor`                        | 健康检查与配置诊断            |
-| `taurusdb init`                          | 初始化配置（包括 MCP 客户端） |
+#### 4.2.1 通用命令
 
-**共同 flags**：
+| 命令 | 角色定位 |
+| --- | --- |
+| `taurusdb sources` | 列出所有数据源 |
+| `taurusdb databases [--datasource NAME]` | 列出数据库 |
+| `taurusdb tables [--database NAME]` | 列出表 |
+| `taurusdb describe <table>` | 查看表结构 |
+| `taurusdb sample <table>` | 查看样本行 |
+| `taurusdb query "<SQL>"` | 执行只读 SQL |
+| `taurusdb exec "<SQL>"` | 执行写 SQL（需 mutations） |
+| `taurusdb explain "<SQL>"` | SQL 计划分析 |
+| `taurusdb status <query_id>` | 查询状态 |
+| `taurusdb cancel <query_id>` | 取消运行中查询 |
+| `taurusdb init` | 初始化本地配置 |
+
+#### 4.2.2 🆕 TaurusDB 专属命令
+
+| 命令 | 角色定位 |
+| --- | --- |
+| `taurusdb features` | 显示当前实例的内核版本和特性矩阵 |
+| `taurusdb explain+ "<SQL>"` | 增强 EXPLAIN，显示 NDP/PQ/OFFSET pushdown 信息 |
+| `taurusdb flashback <table> --at "..." [--where "..."]` | 闪回查询 |
+
+非 TaurusDB 实例执行这些命令会给出明确提示：“当前连接的实例不是 TaurusDB，该命令不可用”。
+
+当前 CLI 仍是脚手架状态，上表描述的是**第一阶段目标命令面**，不是已全部交付的实现清单。
+
+#### 4.2.3 诊断命令（下一阶段）
+
+与 MCP 侧对应，CLI 后续可增加：
+
+- `taurusdb diagnose slow-query`
+- `taurusdb diagnose connection-spike`
+- `taurusdb diagnose lock-contention`
+- `taurusdb diagnose replication-lag`
+- `taurusdb diagnose storage-pressure`
+
+这些命令建议仍保持只读，并优先输出“可操作结论 + 证据摘要”，而不是直接把原始监控指标倾倒给用户。
+
+#### 4.2.4 共同 flags
 
 ```
 --datasource <name>
@@ -1009,25 +1264,28 @@ Guardrail 要把决策落成执行参数：
 
 ### 4.3 两种形态的 Tool / 命令映射
 
-| core 能力         | MCP Tool               | CLI 命令                     |
-| ----------------- | ---------------------- | ---------------------------- |
-| `listDataSources` | `list_data_sources`    | `taurusdb sources`           |
-| `listDatabases`   | `list_databases`       | `taurusdb databases`         |
-| `listTables`      | `list_tables`          | `taurusdb tables`            |
-| `describeTable`   | `describe_table`       | `taurusdb describe <table>`  |
-| `sampleRows`      | `sample_rows`          | `taurusdb sample <table>`    |
-| `executeReadonly` | `execute_readonly_sql` | `taurusdb query "<SQL>"`     |
-| `explain`         | `explain_sql`          | `taurusdb explain "<SQL>"`   |
-| `getQueryStatus`  | `get_query_status`     | `taurusdb status <query_id>` |
-| `cancelQuery`     | `cancel_query`         | `taurusdb cancel <query_id>` |
-| `executeMutation` | `execute_sql`          | `taurusdb exec "<SQL>"`      |
+| core 能力                  | MCP Tool                   | CLI 命令                                      |
+| -------------------------- | -------------------------- | --------------------------------------------- |
+| `listDataSources`          | `list_data_sources`        | `taurusdb sources`                            |
+| `listDatabases`            | `list_databases`           | `taurusdb databases`                          |
+| `listTables`               | `list_tables`              | `taurusdb tables`                             |
+| `describeTable`            | `describe_table`           | `taurusdb describe <table>`                   |
+| `sampleRows`               | `sample_rows`              | `taurusdb sample <table>`                     |
+| `executeReadonly`          | `execute_readonly_sql`     | `taurusdb query "<SQL>"`                      |
+| `explain`                  | `explain_sql`              | `taurusdb explain "<SQL>"`                    |
+| `getQueryStatus`           | `get_query_status`         | `taurusdb status <query_id>`                  |
+| `cancelQuery`              | `cancel_query`             | `taurusdb cancel <query_id>`                  |
+| `executeMutation`          | `execute_sql`              | `taurusdb exec "<SQL>"`                       |
+| 🆕 `getKernelInfo`         | `get_kernel_info`          | `taurusdb features`(与下一行合并展示)         |
+| 🆕 `listFeatures`          | `list_taurus_features`     | `taurusdb features`                           |
+| 🆕 `explainEnhanced`       | `explain_sql_enhanced`     | `taurusdb explain+ "<SQL>"`                   |
+| 🆕 `flashbackQuery`        | `flashback_query`          | `taurusdb flashback <table> --at "..."`       |
 
-**CLI 额外增值命令**（没有对应 Tool，因为它们本质是前端编排）：
+**CLI 后续可选能力**（不计入第一阶段范围）：
 
-- `taurusdb ask` — 单次 AI 问答
-- `taurusdb agent` — 多轮 AI Agent
 - `taurusdb repl` — 交互式 REPL
-- `taurusdb doctor` — 健康检查
+- `taurusdb ask` / `agent` — AI 前端编排
+- `taurusdb doctor` — 诊断与健康检查
 
 ### 4.4 为什么不单独做 `generate_sql` Tool
 
@@ -1037,6 +1295,29 @@ Guardrail 要把决策落成执行参数：
 - **CLI 形态**：CLI 内嵌的 Agent 负责自然语言到 SQL，core 提供 schema + guardrail + execute
 
 真正应该产品化的是 **执行与治理**，不是把 SQL 文本生成本身封装成服务。
+
+### 4.5 动态 Tool 注册机制 🆕
+
+MCP Server 启动时按以下顺序决定注册集合：
+
+```text
+1. 创建 engine
+2. 若存在默认数据源，对默认数据源做一次 capability probe
+3. 通用 Tool 总是注册
+4. capability Tool 总是注册
+5. 如果 probe 结果表明是 TaurusDB：
+   - `parallel_query` 或 `ndp_pushdown` 可用 → 注册 `explain_sql_enhanced`
+   - `flashback_query` 可用 → 注册 `flashback_query`
+6. 其余专属 Tool 作为后续阶段扩展，不在当前首阶段注册
+```
+
+这个机制保证了：
+
+- 非 TaurusDB 实例不会看到专属 Tool
+- 低版本 TaurusDB 只看到它真正支持的 Tool
+- `list_taurus_features` 始终可用，用于回答“当前支持什么”
+
+当前注册逻辑已经落在 `packages/mcp/src/tools/registry.ts`，方向是“通用 Tool 常驻，专属 Tool 薄门控”，而不是维护一大套复杂注册状态机。
 
 ---
 
@@ -1119,6 +1400,89 @@ const server = new McpServer({
 }
 ```
 
+**🆕 能力不支持响应(TaurusDB 专属 Tool 遇到低版本实例)**
+
+```json
+{
+  "ok": false,
+  "summary": "The requested TaurusDB feature is not available on this instance.",
+  "error": {
+    "code": "UNSUPPORTED_FEATURE",
+    "message": "Flashback query requires kernel version >= 2.0.69.250900, current: 2.0.57.240900.",
+    "retryable": false
+  },
+  "data": {
+    "feature": "flashback_query",
+    "required_version": "2.0.69.250900",
+    "current_version": "2.0.57.240900"
+  },
+  "metadata": { "task_id": "task-04" }
+}
+```
+
+**🆕 `list_taurus_features` 响应示例**
+
+```json
+{
+  "ok": true,
+  "summary": "TaurusDB instance detected. Kernel version 2.0.69.250900, 9 of 12 features available.",
+  "data": {
+    "kernel": {
+      "is_taurusdb": true,
+      "kernel_version": "2.0.69.250900",
+      "mysql_compat": "8.0",
+      "instance_spec_hint": "large"
+    },
+    "features": {
+      "flashback_query": {
+        "available": true,
+        "enabled": true,
+        "min_version": "2.0.69.250900"
+      },
+      "parallel_query": {
+        "available": true,
+        "enabled": false,
+        "param": "force_parallel_execute=OFF"
+      },
+      "ndp_pushdown": {
+        "available": true,
+        "enabled": true,
+        "mode": "REPLICA_ON"
+      },
+      "offset_pushdown": { "available": true, "enabled": true },
+      "recycle_bin": {
+        "available": true,
+        "enabled": true,
+        "min_version": "2.0.57.240900"
+      },
+      "statement_outline": {
+        "available": true,
+        "enabled": false,
+        "min_version": "2.0.42.230600"
+      },
+      "column_compression": {
+        "available": true,
+        "min_version": "2.0.54.240600"
+      },
+      "multi_tenant": {
+        "available": true,
+        "active": false,
+        "min_version": "2.0.54.240600"
+      },
+      "partition_mdl": { "available": true, "min_version": "2.0.57.240900" },
+      "dynamic_masking": {
+        "available": true,
+        "enabled": false,
+        "min_version": "2.0.69.250900"
+      },
+      "nonblocking_ddl": { "available": true, "min_version": "2.0.54.240600" },
+      "hot_row_update": { "available": true, "min_version": "2.0.54.240600" }
+    }
+  },
+  "metadata": { "task_id": "task-05" }
+}
+```
+
 ### 5.3 CLI 输出格式
 
 CLI 同时支持多种输出格式（通过 `--format`）：
@@ -1156,6 +1520,29 @@ $ taurusdb query "..." --format json
 $ taurusdb query "..." --format csv > report.csv
 ```
 
+**🆕 `taurusdb features` 输出示例**
+
+```
+$ taurusdb features
+
+Instance: prod_orders  (kernel: 2.0.69.250900, MySQL 8.0 compatible, large spec)
+
+┌──────────────────────┬───────────┬──────────┬──────────────────┐
+│ Feature              │ Available │ Enabled  │ Min Kernel       │
+├──────────────────────┼───────────┼──────────┼──────────────────┤
+│ flashback_query      │    ✓      │    ✓     │ 2.0.69.250900    │
+│ parallel_query       │    ✓      │    ✗     │ -                │
+│ ndp_pushdown         │    ✓      │  REPLICA │ -                │
+│ recycle_bin          │    ✓      │    ✓     │ 2.0.57.240900    │
+│ statement_outline    │    ✓      │    ✗     │ 2.0.42.230600    │
+│ multi_tenant         │    ✓      │  inactive│ 2.0.54.240600    │
+│ ...                  │           │          │                  │
+└──────────────────────┴───────────┴──────────┴──────────────────┘
+
+Hint: parallel_query is available but disabled. Enable with:
+      SET GLOBAL force_parallel_execute=ON;
+```
+
 ### 5.4 结果裁剪策略
 
 结果必须有上限，否则模型上下文或终端都会失控。默认策略：
@@ -1174,14 +1561,15 @@ $ taurusdb query "..." --format csv > report.csv
 
 ### 6.1 默认安全策略
 
-| 策略                 | 说明                                                   |
-| -------------------- | ------------------------------------------------------ |
-| 默认只读             | 两种形态默认只注册 schema 和只读能力                   |
-| mutations 需显式开启 | 设置 `TAURUSDB_ENABLE_MUTATIONS=true` 后才暴露写入能力 |
-| 单语句               | 不允许一次调用执行多条 SQL                             |
-| 默认超时             | 每次查询都有最大执行时长                               |
-| 结果上限             | 返回行数、列数、文本长度都有限制                       |
-| 审计必达             | 至少记录 `task_id`、`query_id/sql_hash` 和决策结果     |
+| 策略                 | 说明                                                                   |
+| -------------------- | ---------------------------------------------------------------------- |
+| 默认只读             | 两种形态默认只注册 schema 和只读能力                                   |
+| mutations 需显式开启 | 设置 `TAURUSDB_ENABLE_MUTATIONS=true` 后才暴露写入能力                 |
+| 单语句               | 不允许一次调用执行多条 SQL                                             |
+| 默认超时             | 每次查询都有最大执行时长                                               |
+| 结果上限             | 返回行数、列数、文本长度都有限制                                       |
+| 审计必达             | 至少记录 `task_id`、`query_id/sql_hash` 和决策结果                     |
+| 专属能力门控         | TaurusDB 专属写操作(回收站恢复)同样受 `TAURUSDB_ENABLE_MUTATIONS` 控制 |
 
 ### 6.2 数据库权限建议
 
@@ -1191,6 +1579,11 @@ $ taurusdb query "..." --format csv > report.csv
 - 写账号：仅在明确开启 mutations 的环境使用
 
 不要让默认 profile 直接使用 DBA 账号。
+
+对 TaurusDB 专属能力:
+
+- 能力发现 / 增强 EXPLAIN / 闪回查询 / 回收站列表 → 只读账号足够
+- 回收站恢复 → 必须写账号
 
 ### 6.3 推荐环境变量
 
@@ -1210,11 +1603,8 @@ TAURUSDB_MAX_STATEMENT_MS=15000
 # 审计
 TAURUSDB_AUDIT_LOG_PATH=~/.taurusdb/audit.jsonl
 
-# CLI 专用：LLM 配置
-TAURUSDB_LLM_PROVIDER=pangu        # anthropic | pangu | openai | ollama
-TAURUSDB_LLM_API_KEY=xxx
-TAURUSDB_LLM_BASE_URL=https://...  # 可选,自建 LLM 网关
-TAURUSDB_LLM_MODEL=xxx
+# TaurusDB 专属能力
+TAURUSDB_DISABLE_TAURUS_TOOLS=false       # 紧急开关,强制关闭所有专属 Tool
 ```
 
 ### 6.4 部署建议
@@ -1229,57 +1619,139 @@ TAURUSDB_LLM_MODEL=xxx
 
 ### 6.5 数据出境防御（MCP 与 CLI 同等重要）
 
-**MCP 形态** 和 **CLI Agent 形态** 的返回值都会流向 LLM，需要同样严格的数据出境控制：
+**MCP 形态** 和未来的 **CLI AI 形态** 的返回值都会流向 LLM，需要同样严格的数据出境控制：
 
 - 结果集行数和列数限制
 - 敏感字段自动脱敏
 - 审计只记 hash 不记原文
 - 大字段截断
+- 闪回查询的结果同样受 `max_rows` 限制
 
-**CLI 命令模式**（非 Agent）不经 LLM，但仍要小心控制台输出被他人看到。
+**CLI 命令模式**（非 AI）不经 LLM，但仍要小心控制台输出被他人看到。
 
 ---
 
-## 7. 测试与演进
+## 7. 当前边界与后续阶段
 
-### 7.1 测试分层
+### 7.1 当前已落地的安全与恢复边界
+
+当前项目刻意只保留三层最小闭环：
+
+1. **最小 Guardrail**
+   多语句、DCL、`TRUNCATE`、`DROP DATABASE`、无 `WHERE` 的 `UPDATE/DELETE` 直接阻断。
+
+2. **Token 确认流**
+   对高风险写 SQL 返回 `CONFIRMATION_REQUIRED`，由前端携带 `confirmation_token` 重试。
+
+3. **TaurusDB 原生差异化只读能力**
+   当前只桥接 `get_kernel_info`、`list_taurus_features`、`explain_sql_enhanced`、`flashback_query`。
+
+这个边界的目的不是“功能少”，而是避免把首阶段做成一套过重的安全编排系统。
+
+### 7.2 当前明确不做的部分
+
+以下能力统一移到后续阶段，不再在本阶段文档中视为已交付：
+
+- `list_recycle_bin`
+- `restore_from_recycle_bin`
+- `check_instance_safety_posture`
+- `preflight_safety_check`
+- `query_sql_history`
+- `inspect_binlog_changes`
+- 基于 Binlog / 全量 SQL / SQL 审计的历史追溯闭环
+- CLI `doctor` / `ask` / `agent` / `repl`
+
+### 7.3 为什么这样收敛
+
+原因很直接：
+
+- 这些能力依赖真实的 TaurusDB 语法、视图、日志源和运维配置，文档级设想不足以支撑稳定实现。
+- 把 schema cache、capability cache、confirmation strategy、history orchestration 一次性塞进首版，会显著抬高理解和维护成本。
+- 首阶段更重要的是先把 `core` / `mcp` 的边界、动态注册和最小安全模型做扎实。
+
+### 7.4 下一阶段的增量方向
+
+当首阶段稳定后，建议按以下顺序扩展：
+
+1. 场景化诊断链路
+   先引入一条新的诊断层，重点不是“多一个 SQL Tool”，而是把管控面指标、TaurusDB 内核视图和 SQL 现场联合起来做根因分析。
+
+   第一批建议直接做 5 个：
+
+   - `diagnose_slow_query`
+   - `diagnose_connection_spike`
+   - `diagnose_lock_contention`
+   - `diagnose_replication_lag`
+   - `diagnose_storage_pressure`
+
+   建议的实现边界：
+
+   - `core/diagnostics` 负责诊断编排与证据归一化
+   - control-plane adapter 负责 CES / 实例元数据
+   - data-plane collector 负责 `processlist`、锁等待、复制状态、慢 SQL / Top SQL 等内核证据
+   - `mcp` / `cli` 只负责把诊断结果包装成 Tool / 命令
+
+2. 回收站链路
+   前提是补齐 TaurusDB 回收站查询视图与恢复语法的权威示例。
+
+3. 历史追溯链路
+   先明确全量 SQL / SQL 审计 / Binlog 的真实接入面，再决定是否产品化 `history` / `binlog-changes`。
+
+4. CLI 高阶形态
+   在命令模式稳定后，再考虑 REPL、AI、doctor。
+
+5. 更多 TaurusDB 专属观测能力
+   如分区、Statement Outline、长事务、只读节点状态等。
+
+## 8. 测试与演进
+
+### 8.1 当前测试重点
 
 **core 包单元测试**：
 
 - SQL 分类、风险规则、AST 解析
-- Token 签发与校验
+- confirmation token 的签发与校验
 - 结果裁剪和脱敏
-- Confirmation Strategy 的两种实现
+- capability probe 的版本比较与 feature matrix 构建
+- flashback 时间解析与 SQL 构造
+- enhanced explain 的 TaurusDB hint 解析
 
 **MCP 包测试**：
 
-- Tool Schema 正确性
-- Envelope 稳定性
-- `init` 命令的客户端集成
+- Tool schema 与 envelope 稳定性
+- `execute_sql` 的确认流
+- 动态 Tool 注册
+- 非 TaurusDB 实例上的降级行为
 
 **CLI 包测试**：
 
-- 命令参数解析
-- 输出格式（table / json / csv）
-- REPL 交互（补全、历史）
-- AI Agent 的 tool-calling 循环（mock LLM）
+- 当前仅需覆盖脚手架入口与后续命令面的基础约束
 
 **集成测试**：
 
-- 使用 `testcontainers-node` 起真实 MySQL
-- schema 工具链路
-- 只读执行链路
-- 写 SQL 二阶段确认（MCP token 模式 + CLI 交互模式）
-- 长查询取消
+- 真实 MySQL 基线链路
+- 如条件允许，对接真实 TaurusDB 开发实例验证 capability probe
+- `explain_sql_enhanced` 与 `flashback_query` 的端到端验证
 
-### 7.2 Phase 2 演进方向
+### 8.2 首阶段实施顺序
 
-在首版数据面闭环稳定后：
+```text
+Step 1: capability/ 模块
+Step 2: MCP 启动时 probe + 动态 Tool 注册
+Step 3: explain_sql_enhanced
+Step 4: flashback_query
+Step 5: CLI 命令模式基础骨架
+```
 
-- 慢 SQL 摘要和热点表分析
-- 管控面实例发现与 endpoint 解析
-- MCP Resources 形式的 schema 快照
-- 预设 Prompt 模板
-- 更细粒度的行列级访问策略
-- CLI AI Agent 的更多 LLM provider（自建网关、私有部署模型）
-- CLI 脚本化友好特性（`--no-color`、`--quiet`、退出码规范）
+### 8.3 后续演进方向
+
+- 场景化诊断 Tool：
+  - `diagnose_slow_query`
+  - `diagnose_connection_spike`
+  - `diagnose_lock_contention`
+  - `diagnose_replication_lag`
+  - `diagnose_storage_pressure`
+- 回收站 Tool 与命令
+- 全量 SQL / SQL 审计 / Binlog 驱动的历史追溯
+- CLI REPL / AI / doctor
+- 更丰富的 TaurusDB 专属观测能力

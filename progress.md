@@ -8,7 +8,32 @@
 
 - `packages/core`: 共享数据面能力与 `TaurusDBEngine`
 - `packages/mcp`: MCP `stdio` server、tool registry、`init`
-- `packages/cli`: 只有骨架，还未实现真实 CLI 功能
+- `packages/cli`: 只有 scaffold，还未进入真实实现阶段
+
+当前首阶段范围已经收敛为：
+
+- 通用 MySQL 数据面 Tool
+- minimal guardrail + token confirmation
+- TaurusDB capability probe
+- 4 个 TaurusDB 首阶段 Tool：
+  - `get_kernel_info`
+  - `list_taurus_features`
+  - `explain_sql_enhanced`
+  - `flashback_query`
+
+当前明确不在首阶段范围内：
+
+- recycle bin
+- SQL history / Binlog / preflight
+- CLI REPL / ask / agent / doctor
+
+下一阶段优先候选：
+
+- `diagnose_slow_query`
+- `diagnose_connection_spike`
+- `diagnose_lock_contention`
+- `diagnose_replication_lag`
+- `diagnose_storage_pressure`
 
 ---
 
@@ -48,10 +73,25 @@
 
 - 引入 `TaurusDBEngine`
 - server/tool 层不再直接拼装散装模块
-- schema / guardrail / executor / confirmation / query tracker 已统一从 engine 暴露
+- schema / guardrail / executor / confirmation / query tracker / capability probe 已统一从 engine 暴露
 - `core` 不依赖 MCP SDK
+- guardrail 已收敛为 minimal 模型
+- 移除了重型 schema-aware 校验、EXPLAIN 预检查和复杂缓存依赖
 
-### 2.4 MCP 主功能
+### 2.4 TaurusDB 首阶段能力
+
+已完成：
+
+- `capability/` 模块
+- TaurusDB kernel / feature probe
+- 启动时 capability probe
+- 动态 Tool 注册
+- `get_kernel_info`
+- `list_taurus_features`
+- `explain_sql_enhanced`
+- `flashback_query`
+
+### 2.5 MCP 主功能
 
 已完成：
 
@@ -78,7 +118,7 @@
 - `stdio` 集成测试
 - `init` merge 行为测试
 
-### 2.5 本地 MySQL 测试基础设施
+### 2.6 本地 MySQL 测试基础设施
 
 已完成：
 
@@ -134,6 +174,7 @@
 待完成：
 
 - 用云端 TaurusDB 复跑 schema / readonly / explain / mutation 主链路
+- 用云端 TaurusDB 验证 capability probe / enhanced explain / flashback_query
 - 验证网络、白名单、安全组、TLS 等环境因素
 - 验证 TaurusDB 内核与本地 MySQL 的 explain / 元数据差异
 - 验证云端真实账号权限与 timeout / cancel 行为
@@ -145,28 +186,37 @@
 - 补更多真实数据库 e2e 场景
 - 补更完整的长查询取消测试
 - 继续同步 `docs/taurusdb-mcp-implementation-plan.md` 的“当前完成度”
-- 如果需要，增加 `doctor` 类诊断能力到后续 CLI
+- 下一阶段优先设计 diagnostics 层，而不是继续堆零散 Tool
+- 后续阶段再评估 recycle bin 与 history/binlog 类能力
 
 ---
 
 ## 5. CLI 还差哪些
 
-CLI 当前仍未开始真实实现。
+CLI 当前仍未开始真实实现，第一阶段目标应控制在命令模式。
 
 待完成：
 
 - 命令模式
-- REPL
-- `ask`
-- `agent`
-- 终端确认流
+- token-based 终端确认包装
 - 输出格式化（table / json / csv）
-- LLM provider 接入
+- TaurusDB 专属命令：
+  - `features`
+  - `explain+`
+  - `flashback`
 
 当前状态：
 
 - 只有 `packages/cli` 包骨架
-- 设计文档已写，但代码未落地
+- 设计文档已按首阶段范围收口
+- 代码未落地
+
+后续阶段再考虑：
+
+- REPL
+- `ask`
+- `agent`
+- `doctor`
 
 ---
 
@@ -175,6 +225,7 @@ CLI 当前仍未开始真实实现。
 建议按这个顺序继续：
 
 1. 先把本地 MySQL 环境变量配好，跑通本地 MCP e2e
-2. 再把同一批核心场景切换到云端 TaurusDB
-3. 云端稳定后，再决定是否继续做 CLI，还是继续补 MCP 诊断与测试能力
-
+2. 再把 capability probe / enhanced explain / flashback 切到云端 TaurusDB 验证
+3. 云端稳定后，开始 CLI 命令模式
+4. 诊断层（CES + 内核 + SQL 现场）作为下一阶段正式能力设计与实现
+5. recycle bin、history/binlog、CLI 高阶交互全部放到后续阶段再决定
