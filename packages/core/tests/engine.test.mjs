@@ -155,6 +155,55 @@ test("engine lists datasources through profile loader and marks default datasour
   assert.equal(await engine.getDefaultDataSource(), "alpha");
 });
 
+test("engine exposes scaffolded diagnostic results with a stable contract", async () => {
+  const ctx = makeContext();
+  const engine = new TaurusDBEngine({
+    config: makeConfig(),
+    profileLoader: {
+      async load() {
+        return new Map();
+      },
+      async getDefault() {
+        return undefined;
+      },
+      async get() {
+        return undefined;
+      },
+    },
+    secretResolver: {},
+    datasourceResolver: {},
+    connectionPool: { async close() {} },
+    schemaIntrospector: {},
+    guardrail: {},
+    executor: {},
+    confirmationStore: {},
+    capabilityProbe: makeCapabilityProbe(),
+  });
+
+  const slowQuery = await engine.diagnoseSlowQuery({ sqlHash: "sql_hash_1" }, ctx);
+  const lockContention = await engine.diagnoseLockContention({ table: "orders" }, ctx);
+  const connectionSpike = await engine.diagnoseConnectionSpike({ user: "app_user" }, ctx);
+  const replicationLag = await engine.diagnoseReplicationLag({ replicaId: "replica-1" }, ctx);
+  const storagePressure = await engine.diagnoseStoragePressure({ scope: "table", table: "orders" }, ctx);
+
+  assert.equal(slowQuery.tool, "diagnose_slow_query");
+  assert.equal(slowQuery.status, "inconclusive");
+  assert.equal(slowQuery.rootCauseCandidates[0].confidence, "low");
+  assert.equal(slowQuery.suspiciousEntities.sqls[0].sqlHash, "sql_hash_1");
+
+  assert.equal(lockContention.tool, "diagnose_lock_contention");
+  assert.equal(lockContention.suspiciousEntities.tables[0].table, "orders");
+
+  assert.equal(connectionSpike.tool, "diagnose_connection_spike");
+  assert.equal(connectionSpike.suspiciousEntities.users[0].user, "app_user");
+
+  assert.equal(replicationLag.tool, "diagnose_replication_lag");
+  assert.match(replicationLag.summary, /scaffolded/i);
+
+  assert.equal(storagePressure.tool, "diagnose_storage_pressure");
+  assert.equal(storagePressure.suspiciousEntities.tables[0].table, "orders");
+});
+
 test("engine delegates context, schema, guardrail, and executor methods", async () => {
   const ctx = makeContext();
   const expectedDatabases = [{ name: "demo" }];

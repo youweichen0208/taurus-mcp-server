@@ -97,3 +97,23 @@ export { normalizeSql, sqlHash } from "./utils/hash.js";
 export { generateQueryId, generateTaskId } from "./utils/id.js";
 export { logger, withTaskContext } from "./utils/logger.js";
 export type { FlashbackInput } from "./taurus/flashback.js";
+export { createPlaceholderDiagnosticResult } from "./diagnostics/types.js";
+export type {
+  DiagnosticBaseInput,
+  DiagnosticConfidence,
+  DiagnosticEvidenceItem,
+  DiagnosticEvidenceLevel,
+  DiagnosticResult,
+  DiagnosticRootCauseCandidate,
+  DiagnosticSeverity,
+  DiagnosticStatus,
+  DiagnosticSuspiciousEntities,
+  DiagnosticToolName,
+  DiagnosisWindow,
+  DiagnoseConnectionSpikeInput,
+  DiagnoseLockContentionInput,
+  DiagnoseReplicationLagInput,
+  DiagnoseSlowQueryInput,
+  DiagnoseStoragePressureInput,
+  PlaceholderDiagnosticOptions,
+} from "./diagnostics/types.js";

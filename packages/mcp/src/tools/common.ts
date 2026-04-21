@@ -2,6 +2,7 @@ import type {
   CancelResult,
   DataSourceInfo,
   DatabaseInfo,
+  DiagnosticResult,
   EnhancedExplainResult,
   ExplainResult,
   FeatureMatrix,
@@ -72,6 +73,33 @@ export const contextInputShape = {
     .describe("Statement timeout in milliseconds. Clamped by the server-side maximum."),
 } as const;
 
+export const diagnosticBaseInputShape = {
+  ...contextInputShape,
+  time_range: z
+    .object({
+      from: z.string().trim().min(1).optional(),
+      to: z.string().trim().min(1).optional(),
+      relative: z.string().trim().min(1).optional(),
+    })
+    .optional()
+    .describe("Optional diagnosis window. Use from/to or a relative window such as 15m or 1h."),
+  evidence_level: z
+    .enum(["basic", "standard", "full"])
+    .optional()
+    .describe("How much evidence the diagnostic should attempt to gather."),
+  include_raw_evidence: z
+    .boolean()
+    .optional()
+    .describe("Whether to include raw evidence references in the response."),
+  max_candidates: z
+    .number()
+    .int()
+    .positive()
+    .max(10)
+    .optional()
+    .describe("Maximum number of root-cause candidates to return."),
+} as const;
+
 export function metadata(taskId: string, extra: Omit<ResponseMetadata, "task_id"> = {}): ResponseMetadata {
   return {
     task_id: taskId,
@@ -132,6 +160,16 @@ export function asOptionalPositiveInteger(value: unknown, fieldName: string): nu
   }
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
     throw new ToolInputError(`Invalid ${fieldName}: expected a positive integer.`);
+  }
+  return value;
+}
+
+export function asOptionalBoolean(value: unknown, fieldName: string): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "boolean") {
+    throw new ToolInputError(`Invalid ${fieldName}: expected a boolean.`);
   }
   return value;
 }
@@ -390,5 +428,58 @@ export function toPublicEnhancedExplainResult(
       offset_pushdown: result.taurusHints.offsetPushdown,
     },
     optimization_suggestions: result.optimizationSuggestions,
+  };
+}
+
+export function toPublicDiagnosticResult(result: DiagnosticResult) {
+  return {
+    tool: result.tool,
+    status: result.status,
+    severity: result.severity,
+    summary: result.summary,
+    diagnosis_window: {
+      from: result.diagnosisWindow.from,
+      to: result.diagnosisWindow.to,
+      relative: result.diagnosisWindow.relative,
+    },
+    root_cause_candidates: result.rootCauseCandidates.map((candidate: DiagnosticResult["rootCauseCandidates"][number]) => ({
+      code: candidate.code,
+      title: candidate.title,
+      confidence: candidate.confidence,
+      rationale: candidate.rationale,
+    })),
+    key_findings: result.keyFindings,
+    suspicious_entities: result.suspiciousEntities
+      ? {
+          sqls: result.suspiciousEntities.sqls?.map((item: NonNullable<NonNullable<DiagnosticResult["suspiciousEntities"]>["sqls"]>[number]) => ({
+            sql_hash: item.sqlHash,
+            digest_text: item.digestText,
+            reason: item.reason,
+          })),
+          sessions: result.suspiciousEntities.sessions?.map((item: NonNullable<NonNullable<DiagnosticResult["suspiciousEntities"]>["sessions"]>[number]) => ({
+            session_id: item.sessionId,
+            user: item.user,
+            state: item.state,
+            reason: item.reason,
+          })),
+          tables: result.suspiciousEntities.tables?.map((item: NonNullable<NonNullable<DiagnosticResult["suspiciousEntities"]>["tables"]>[number]) => ({
+            table: item.table,
+            reason: item.reason,
+          })),
+          users: result.suspiciousEntities.users?.map((item: NonNullable<NonNullable<DiagnosticResult["suspiciousEntities"]>["users"]>[number]) => ({
+            user: item.user,
+            client_host: item.clientHost,
+            reason: item.reason,
+          })),
+        }
+      : undefined,
+    evidence: result.evidence.map((item: DiagnosticResult["evidence"][number]) => ({
+      source: item.source,
+      title: item.title,
+      summary: item.summary,
+      raw_ref: item.rawRef,
+    })),
+    recommended_actions: result.recommendedActions,
+    limitations: result.limitations,
   };
 }

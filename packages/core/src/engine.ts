@@ -67,6 +67,15 @@ import {
   flashbackReadonlyOptions,
   type FlashbackInput,
 } from "./taurus/flashback.js";
+import {
+  createPlaceholderDiagnosticResult,
+  type DiagnoseConnectionSpikeInput,
+  type DiagnoseLockContentionInput,
+  type DiagnoseReplicationLagInput,
+  type DiagnoseSlowQueryInput,
+  type DiagnoseStoragePressureInput,
+  type DiagnosticResult,
+} from "./diagnostics/types.js";
 import { normalizeSql, sqlHash } from "./utils/hash.js";
 
 export interface DataSourceInfo {
@@ -111,6 +120,10 @@ export interface EnhancedExplainResult {
     offsetPushdown: boolean;
   };
   optimizationSuggestions: string[];
+}
+
+function withDatasourceSummary(prefix: string, datasource: string): string {
+  return `${prefix} on datasource ${datasource}.`;
 }
 
 export interface TaurusDBEngineDeps {
@@ -350,6 +363,184 @@ export class TaurusDBEngine {
     ctx: SessionContext,
   ): Promise<FeatureMatrix> {
     return this.capabilityProbe.listFeatures(ctx);
+  }
+
+  async diagnoseSlowQuery(
+    input: DiagnoseSlowQueryInput,
+    ctx: SessionContext,
+  ): Promise<DiagnosticResult> {
+    const suspiciousSql =
+      input.sql || input.sqlHash || input.digestText
+        ? [
+            {
+              sqlHash: input.sqlHash,
+              digestText: input.digestText,
+              reason: "Provided as the diagnosis target for future explain and slow-SQL correlation.",
+            },
+          ]
+        : undefined;
+
+    return createPlaceholderDiagnosticResult("diagnose_slow_query", input, {
+      summary: withDatasourceSummary("Slow-query diagnosis is scaffolded but not implemented", ctx.datasource),
+      candidateTitle: "Evidence collectors pending",
+      candidateRationale:
+        "This tool has a stable contract, but explain correlation, slow-SQL sampling, and TaurusDB feature analysis are not wired yet.",
+      keyFindings: [
+        suspiciousSql ? "A target SQL identifier was provided for future correlation." : "No target SQL identifier was provided yet.",
+        "No explain, slow-SQL, or table-statistics evidence was collected in this run.",
+      ],
+      suspiciousEntities: suspiciousSql ? { sqls: suspiciousSql } : undefined,
+      recommendedActions: [
+        "Use explain_sql or explain_sql_enhanced for immediate plan inspection.",
+        "Implement slow-SQL collectors and table/index evidence before enabling this tool in production.",
+      ],
+      limitations: [
+        "No slow-SQL source is connected yet.",
+        "No live EXPLAIN or TaurusDB feature correlation is performed yet.",
+      ],
+    });
+  }
+
+  async diagnoseConnectionSpike(
+    input: DiagnoseConnectionSpikeInput,
+    ctx: SessionContext,
+  ): Promise<DiagnosticResult> {
+    const suspiciousUsers =
+      input.user
+        ? [
+            {
+              user: input.user,
+              clientHost: input.clientHost,
+              reason: "Provided as the connection spike focus for future processlist and metric correlation.",
+            },
+          ]
+        : undefined;
+
+    return createPlaceholderDiagnosticResult("diagnose_connection_spike", input, {
+      summary: withDatasourceSummary("Connection-spike diagnosis is scaffolded but not implemented", ctx.datasource),
+      candidateTitle: "Connection evidence not collected",
+      candidateRationale:
+        "This tool needs processlist snapshots, connection counters, and control-plane metrics, but those collectors are not wired yet.",
+      keyFindings: [
+        input.compareBaseline ? "Baseline comparison was requested." : "Baseline comparison was not requested.",
+        "No CES connection metrics or processlist snapshots were collected in this run.",
+      ],
+      suspiciousEntities: suspiciousUsers ? { users: suspiciousUsers } : undefined,
+      recommendedActions: [
+        "Inspect processlist and connection counters manually until this diagnostic is implemented.",
+        "Add CES and connection-state collectors before exposing this tool by default.",
+      ],
+      limitations: [
+        "No control-plane metrics are connected yet.",
+        "No live processlist or thread-state evidence is collected yet.",
+      ],
+    });
+  }
+
+  async diagnoseLockContention(
+    input: DiagnoseLockContentionInput,
+    ctx: SessionContext,
+  ): Promise<DiagnosticResult> {
+    const suspiciousEntities = {
+      sessions: input.blockerSessionId
+        ? [
+            {
+              sessionId: input.blockerSessionId,
+              reason: "Provided as the suspected blocker session for future wait-chain analysis.",
+            },
+          ]
+        : undefined,
+      tables: input.table
+        ? [
+            {
+              table: input.table,
+              reason: "Provided as the suspected lock hotspot for future blocker/waiter correlation.",
+            },
+          ]
+        : undefined,
+    };
+
+    return createPlaceholderDiagnosticResult("diagnose_lock_contention", input, {
+      summary: withDatasourceSummary("Lock-contention diagnosis is scaffolded but not implemented", ctx.datasource),
+      candidateTitle: "Wait-chain analysis pending",
+      candidateRationale:
+        "This tool needs lock-wait views, long-transaction snapshots, and deadlock evidence, but those collectors are not wired yet.",
+      keyFindings: [
+        input.table ? `Table focus provided: ${input.table}.` : "No table focus was provided.",
+        input.blockerSessionId
+          ? `Potential blocker session provided: ${input.blockerSessionId}.`
+          : "No blocker session identifier was provided.",
+      ],
+      suspiciousEntities:
+        suspiciousEntities.sessions || suspiciousEntities.tables ? suspiciousEntities : undefined,
+      recommendedActions: [
+        "Inspect blocker and waiter sessions manually until wait-chain collectors are implemented.",
+        "Add lock-wait, deadlock, and metadata-lock collectors before enabling this tool in production.",
+      ],
+      limitations: [
+        "No lock-wait or deadlock view is queried yet.",
+        "No blocker/waiter chain is constructed yet.",
+      ],
+    });
+  }
+
+  async diagnoseReplicationLag(
+    input: DiagnoseReplicationLagInput,
+    ctx: SessionContext,
+  ): Promise<DiagnosticResult> {
+    return createPlaceholderDiagnosticResult("diagnose_replication_lag", input, {
+      summary: withDatasourceSummary("Replication-lag diagnosis is scaffolded but not implemented", ctx.datasource),
+      candidateTitle: "Replication evidence unavailable",
+      candidateRationale:
+        "This tool needs replica topology, applier state, and lag metrics, but those signals are not connected yet.",
+      keyFindings: [
+        input.replicaId ? `Replica focus provided: ${input.replicaId}.` : "No replica identifier was provided.",
+        input.channel ? `Replication channel provided: ${input.channel}.` : "No replication channel was provided.",
+      ],
+      recommendedActions: [
+        "Validate replication topology and lag metrics before implementing this diagnostic.",
+        "Add replica-state and control-plane lag collectors before exposing this tool in production.",
+      ],
+      limitations: [
+        "No replication topology or replica-state collector is connected yet.",
+        "No CES lag metric is connected yet.",
+      ],
+    });
+  }
+
+  async diagnoseStoragePressure(
+    input: DiagnoseStoragePressureInput,
+    ctx: SessionContext,
+  ): Promise<DiagnosticResult> {
+    const suspiciousTables =
+      input.table
+        ? [
+            {
+              table: input.table,
+              reason: "Provided as the storage-pressure focus for future SQL and table-level correlation.",
+            },
+          ]
+        : undefined;
+
+    return createPlaceholderDiagnosticResult("diagnose_storage_pressure", input, {
+      summary: withDatasourceSummary("Storage-pressure diagnosis is scaffolded but not implemented", ctx.datasource),
+      candidateTitle: "Storage evidence not collected",
+      candidateRationale:
+        "This tool needs CES storage metrics, temporary-table counters, and SQL-level scan evidence, but those collectors are not wired yet.",
+      keyFindings: [
+        `Scope requested: ${input.scope ?? "instance"}.`,
+        suspiciousTables ? `Table focus provided: ${input.table}.` : "No table focus was provided.",
+      ],
+      suspiciousEntities: suspiciousTables ? { tables: suspiciousTables } : undefined,
+      recommendedActions: [
+        "Inspect temporary-table, filesort, and disk metrics manually until this diagnostic is implemented.",
+        "Add CES storage metrics and SQL evidence collectors before enabling this tool in production.",
+      ],
+      limitations: [
+        "No CES storage metrics are connected yet.",
+        "No SQL-to-storage-pressure correlation is performed yet.",
+      ],
+    });
   }
 
   async explain(sql: string, ctx: SessionContext): Promise<ExplainResult> {

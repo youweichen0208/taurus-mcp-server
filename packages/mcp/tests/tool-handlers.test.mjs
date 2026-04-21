@@ -18,6 +18,13 @@ import {
   getKernelInfoTool,
   listTaurusFeaturesTool,
 } from "../dist/tools/taurus/capability.js";
+import {
+  diagnoseConnectionSpikeTool,
+  diagnoseLockContentionTool,
+  diagnoseReplicationLagTool,
+  diagnoseSlowQueryTool,
+  diagnoseStoragePressureTool,
+} from "../dist/tools/taurus/diagnostics.js";
 import { explainSqlEnhancedTool } from "../dist/tools/taurus/explain.js";
 import { flashbackQueryTool } from "../dist/tools/taurus/flashback.js";
 
@@ -180,6 +187,81 @@ function createDeps(engineOverrides = {}) {
         droppedColumns: [],
         truncatedColumns: [],
         durationMs: 7,
+      }),
+      diagnoseSlowQuery: async (input) => ({
+        tool: "diagnose_slow_query",
+        status: "inconclusive",
+        severity: "info",
+        summary: `slow query placeholder for ${input.sqlHash ?? "unknown"}`,
+        diagnosisWindow: { relative: "15m" },
+        rootCauseCandidates: [
+          {
+            code: "diagnose_slow_query_pending",
+            title: "pending",
+            confidence: "low",
+            rationale: "pending",
+          },
+        ],
+        keyFindings: ["pending"],
+        suspiciousEntities: {
+          sqls: [{ sqlHash: input.sqlHash, digestText: input.digestText, reason: "focus" }],
+        },
+        evidence: [{ source: "diagnostics_scaffold", title: "pending", summary: "pending" }],
+        recommendedActions: ["implement it"],
+        limitations: ["pending"],
+      }),
+      diagnoseConnectionSpike: async (input) => ({
+        tool: "diagnose_connection_spike",
+        status: "inconclusive",
+        severity: "info",
+        summary: "connection spike placeholder",
+        diagnosisWindow: { relative: "15m" },
+        rootCauseCandidates: [{ code: "pending", title: "pending", confidence: "low", rationale: "pending" }],
+        keyFindings: ["pending"],
+        suspiciousEntities: input.user
+          ? { users: [{ user: input.user, clientHost: input.clientHost, reason: "focus" }] }
+          : undefined,
+        evidence: [{ source: "diagnostics_scaffold", title: "pending", summary: "pending" }],
+        recommendedActions: ["implement it"],
+        limitations: ["pending"],
+      }),
+      diagnoseLockContention: async (input) => ({
+        tool: "diagnose_lock_contention",
+        status: "inconclusive",
+        severity: "info",
+        summary: "lock placeholder",
+        diagnosisWindow: { relative: "15m" },
+        rootCauseCandidates: [{ code: "pending", title: "pending", confidence: "low", rationale: "pending" }],
+        keyFindings: ["pending"],
+        suspiciousEntities: input.table ? { tables: [{ table: input.table, reason: "focus" }] } : undefined,
+        evidence: [{ source: "diagnostics_scaffold", title: "pending", summary: "pending" }],
+        recommendedActions: ["implement it"],
+        limitations: ["pending"],
+      }),
+      diagnoseReplicationLag: async (input) => ({
+        tool: "diagnose_replication_lag",
+        status: "not_applicable",
+        severity: "info",
+        summary: "replication placeholder",
+        diagnosisWindow: { relative: "15m" },
+        rootCauseCandidates: [{ code: "pending", title: "pending", confidence: "low", rationale: "pending" }],
+        keyFindings: [input.replicaId ?? "pending"],
+        evidence: [{ source: "diagnostics_scaffold", title: "pending", summary: "pending" }],
+        recommendedActions: ["implement it"],
+        limitations: ["pending"],
+      }),
+      diagnoseStoragePressure: async (input) => ({
+        tool: "diagnose_storage_pressure",
+        status: "inconclusive",
+        severity: "info",
+        summary: "storage placeholder",
+        diagnosisWindow: { relative: "15m" },
+        rootCauseCandidates: [{ code: "pending", title: "pending", confidence: "low", rationale: "pending" }],
+        keyFindings: [input.scope ?? "instance"],
+        suspiciousEntities: input.table ? { tables: [{ table: input.table, reason: "focus" }] } : undefined,
+        evidence: [{ source: "diagnostics_scaffold", title: "pending", summary: "pending" }],
+        recommendedActions: ["implement it"],
+        limitations: ["pending"],
       }),
       getQueryStatus: async (queryId) => ({ queryId, status: "completed", durationMs: 10 }),
       cancelQuery: async (queryId) => ({ queryId, status: "cancelled" }),
@@ -544,4 +626,56 @@ test("execute_sql returns confirmation_invalid when token validation fails", asy
   assert.equal(result.ok, false);
   assert.equal(result.error.code, ErrorCode.CONFIRMATION_INVALID);
   assert.match(result.error.message, /token expired/);
+});
+
+test("diagnose_slow_query validates that at least one SQL identifier is provided", async () => {
+  const result = await diagnoseSlowQueryTool.handler({}, createDeps(), context);
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, ErrorCode.SQL_SYNTAX_ERROR);
+  assert.match(result.error.message, /sql, sql_hash, or digest_text/);
+});
+
+test("diagnostic tool handlers return structured diagnostic payloads", async () => {
+  const deps = createDeps();
+
+  const slowQuery = await diagnoseSlowQueryTool.handler({ sql_hash: "sql_hash_1" }, deps, context);
+  assert.equal(slowQuery.ok, true);
+  assert.equal(slowQuery.data.tool, "diagnose_slow_query");
+  assert.equal(slowQuery.data.suspicious_entities.sqls[0].sql_hash, "sql_hash_1");
+
+  const connectionSpike = await diagnoseConnectionSpikeTool.handler(
+    { user: "app_user", client_host: "10.0.0.8", compare_baseline: true },
+    deps,
+    context,
+  );
+  assert.equal(connectionSpike.ok, true);
+  assert.equal(connectionSpike.data.tool, "diagnose_connection_spike");
+  assert.equal(connectionSpike.data.suspicious_entities.users[0].client_host, "10.0.0.8");
+
+  const lockContention = await diagnoseLockContentionTool.handler(
+    { table: "orders", blocker_session_id: "123" },
+    deps,
+    context,
+  );
+  assert.equal(lockContention.ok, true);
+  assert.equal(lockContention.data.tool, "diagnose_lock_contention");
+  assert.equal(lockContention.data.suspicious_entities.tables[0].table, "orders");
+
+  const replicationLag = await diagnoseReplicationLagTool.handler(
+    { replica_id: "replica-1", channel: "default" },
+    deps,
+    context,
+  );
+  assert.equal(replicationLag.ok, true);
+  assert.equal(replicationLag.data.tool, "diagnose_replication_lag");
+  assert.equal(replicationLag.data.status, "not_applicable");
+
+  const storagePressure = await diagnoseStoragePressureTool.handler(
+    { scope: "table", table: "orders" },
+    deps,
+    context,
+  );
+  assert.equal(storagePressure.ok, true);
+  assert.equal(storagePressure.data.tool, "diagnose_storage_pressure");
+  assert.equal(storagePressure.data.key_findings[0], "table");
 });

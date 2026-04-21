@@ -121,6 +121,85 @@ MCP 当前已经具备：
 
 诊断 Tool 也应遵守同样原则：MCP 只包装 schema、输入输出和 envelope，真正的联合诊断逻辑放在 `core`。
 
+### 4.3 诊断 Tool 的协议收敛建议
+
+建议不要为 5 个诊断 Tool 分别发明完全不同的 schema，而是统一成：
+
+- 一套 `DiagnosticBaseInput`
+- 一套 `DiagnosticResult`
+- 每个 Tool 只补少量场景专属字段
+
+建议的基础输入字段：
+
+```typescript
+type DiagnosticBaseInput = {
+  datasource?: string;
+  database?: string;
+  time_range?: {
+    from?: string;
+    to?: string;
+    relative?: string;
+  };
+  evidence_level?: "basic" | "standard" | "full";
+  include_raw_evidence?: boolean;
+  max_candidates?: number;
+};
+```
+
+建议的统一输出字段：
+
+```typescript
+type DiagnosticResult = {
+  tool: string;
+  status: "ok" | "inconclusive" | "not_applicable";
+  severity: "info" | "warning" | "high" | "critical";
+  summary: string;
+  diagnosis_window: {
+    from?: string;
+    to?: string;
+    relative?: string;
+  };
+  root_cause_candidates: Array<{
+    code: string;
+    title: string;
+    confidence: "low" | "medium" | "high";
+    rationale: string;
+  }>;
+  key_findings: string[];
+  suspicious_entities?: object;
+  evidence: Array<{
+    source: string;
+    title: string;
+    summary: string;
+    raw_ref?: string;
+  }>;
+  recommended_actions: string[];
+  limitations?: string[];
+};
+```
+
+这样做的目的很简单：
+
+- MCP 和 CLI 共用同一份结果 contract
+- 前端可以稳定渲染 `summary / candidates / actions / evidence`
+- 后续新增 `diagnose_high_cpu` 一类 Tool 时不用重做结果协议
+
+每个 Tool 只补这些专属输入即可：
+
+| Tool | 专属输入 |
+| --- | --- |
+| `diagnose_slow_query` | `sql` / `sql_hash` / `digest_text` |
+| `diagnose_connection_spike` | `user` / `client_host` / `compare_baseline` |
+| `diagnose_lock_contention` | `table` / `blocker_session_id` |
+| `diagnose_replication_lag` | `replica_id` / `channel` |
+| `diagnose_storage_pressure` | `scope` / `table` |
+
+实现约束建议：
+
+- `diagnose_slow_query` 没有 `sql`、`sql_hash`、`digest_text` 时直接报输入不足
+- `diagnose_replication_lag` 在无复制链路场景返回 `not_applicable`
+- 缺 CES、缺 TaurusDB 特性、缺慢 SQL 源时，不要 silent degrade，要写进 `limitations`
+
 ## 5. 当前文件布局
 
 当前与 MCP 直接相关的关键路径如下：
@@ -229,6 +308,12 @@ MCP 启动流程当前应保持如下简单链路：
    - 先实现并本地验证 `diagnose_slow_query`、`diagnose_lock_contention`
    - 再实现 `diagnose_connection_spike`、`diagnose_storage_pressure` 的本地半闭环
    - 最后在云端 TaurusDB 完整验证 `diagnose_replication_lag`，并补齐前两类 Tool 的 CES / TaurusDB 证据
+
+   首批 schema 设计建议：
+
+   - 先冻结 `DiagnosticBaseInput`
+   - 再冻结 `DiagnosticResult`
+   - 最后为 5 个 Tool 逐个补专属输入和 evidence collector 列表
 
 2. recycle bin Tool
    前提是补齐权威 SQL / CALL 语法与元数据视图。

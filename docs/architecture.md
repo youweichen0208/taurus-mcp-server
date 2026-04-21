@@ -1209,6 +1209,127 @@ Guardrail 要把决策落成执行参数：
 - 可疑 SQL / 会话 / 表
 - 下一步建议动作
 
+#### 4.1.5 诊断 Tool 共同输入骨架（建议）
+
+这组 Tool 建议共享一套基础输入字段，再按场景补专属参数：
+
+```typescript
+type DiagnosticBaseInput = {
+  datasource?: string;
+  database?: string;
+  time_range?: {
+    from?: string;      // ISO-8601
+    to?: string;        // ISO-8601
+    relative?: string;  // 5m | 15m | 1h | 24h
+  };
+  evidence_level?: "basic" | "standard" | "full";
+  include_raw_evidence?: boolean;
+  max_candidates?: number;
+};
+```
+
+建议默认值：
+
+- `time_range.relative = "15m"`
+- `evidence_level = "standard"`
+- `include_raw_evidence = false`
+- `max_candidates = 3`
+
+各 Tool 的专属输入建议如下：
+
+```typescript
+type DiagnoseSlowQueryInput = DiagnosticBaseInput & {
+  sql?: string;
+  sql_hash?: string;
+  digest_text?: string;
+};
+
+type DiagnoseConnectionSpikeInput = DiagnosticBaseInput & {
+  user?: string;
+  client_host?: string;
+  compare_baseline?: boolean;
+};
+
+type DiagnoseLockContentionInput = DiagnosticBaseInput & {
+  table?: string;
+  blocker_session_id?: string;
+};
+
+type DiagnoseReplicationLagInput = DiagnosticBaseInput & {
+  replica_id?: string;
+  channel?: string;
+};
+
+type DiagnoseStoragePressureInput = DiagnosticBaseInput & {
+  scope?: "instance" | "database" | "table";
+  table?: string;
+};
+```
+
+输入约束建议：
+
+- `diagnose_slow_query` 至少要提供 `sql`、`sql_hash`、`digest_text` 之一
+- `diagnose_replication_lag` 在单机实例上应直接返回“不适用”而不是硬查空结果
+- `time_range` 同时给 `from/to` 与 `relative` 时，优先显式 `from/to`
+
+#### 4.1.6 诊断 Tool 共同输出骨架（建议）
+
+5 个诊断 Tool 建议统一返回同一类诊断结果，而不是各自发明一套结构：
+
+```typescript
+type DiagnosticResult = {
+  tool: string;
+  status: "ok" | "inconclusive" | "not_applicable";
+  severity: "info" | "warning" | "high" | "critical";
+  summary: string;
+  diagnosis_window: {
+    from?: string;
+    to?: string;
+    relative?: string;
+  };
+  root_cause_candidates: Array<{
+    code: string;
+    title: string;
+    confidence: "low" | "medium" | "high";
+    rationale: string;
+  }>;
+  key_findings: string[];
+  suspicious_entities?: {
+    sqls?: Array<{ sql_hash?: string; digest_text?: string; reason: string }>;
+    sessions?: Array<{ session_id?: string; user?: string; state?: string; reason: string }>;
+    tables?: Array<{ table: string; reason: string }>;
+    users?: Array<{ user: string; client_host?: string; reason: string }>;
+  };
+  evidence: Array<{
+    source: string;
+    title: string;
+    summary: string;
+    raw_ref?: string;
+  }>;
+  recommended_actions: string[];
+  limitations?: string[];
+};
+```
+
+输出设计要求：
+
+- `summary` 必须是可直接给客户或一线支持看的结论句
+- `root_cause_candidates` 只给候选和置信度，不假装“绝对根因”
+- `evidence` 默认给摘要；只有 `include_raw_evidence=true` 才附更多原始内容
+- `limitations` 要明确说明“缺少 CES 指标”“当前不是 TaurusDB”“当前实例无复制链路”等上下文缺口
+
+#### 4.1.7 五个诊断 Tool 的最小返回重点
+
+为避免实现时越做越散，每个 Tool 至少保证输出以下重点：
+
+| Tool | 必须回答的问题 |
+| --- | --- |
+| `diagnose_slow_query` | 是索引/扫描问题、排序/临时表问题、锁等待问题，还是未利用 TaurusDB 特性 |
+| `diagnose_connection_spike` | 是连接风暴、慢请求堆积、线程耗尽，还是客户端重试 |
+| `diagnose_lock_contention` | blocker 是谁、waiter 是谁、锁型是什么、先处理谁 |
+| `diagnose_replication_lag` | 是大事务、DDL、热点写入、IO 压力还是回放线程跟不上 |
+| `diagnose_storage_pressure` | 是容量压力还是 IO 压力，是业务 SQL 导致还是后台活动导致 |
+
 ### 4.2 CLI 命令集合（由 `@huaweicloud/taurusdb-cli` 实现）
 
 #### 4.2.1 通用命令
