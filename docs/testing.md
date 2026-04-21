@@ -351,6 +351,161 @@ npm run test --workspace @huaweicloud/taurusdb-mcp
 - [local-mysql-seed.sql](/Users/youweichen/projects/taurus-mcp-server/testdata/mysql/local-mysql-seed.sql)
 - [local-mysql-profiles.example.json](/Users/youweichen/projects/taurus-mcp-server/testdata/mysql/local-mysql-profiles.example.json)
 
+### 8.5 推荐验证顺序
+
+如果当前目标是把 MCP 从“代码已完成”推进到“真实环境已验证”，建议按下面 4 个阶段执行。
+
+#### 阶段一：本地 MySQL 自动化 e2e
+
+目标：先证明 MCP 主链路在真实数据库上跑通。
+
+执行步骤：
+
+1. 初始化本地测试库：
+
+```bash
+mysql -uroot -p < testdata/mysql/local-mysql-schema.sql
+mysql -uroot -p < testdata/mysql/local-mysql-seed.sql
+```
+
+2. 配置本地测试环境变量：
+
+```bash
+export TAURUSDB_RUN_LOCAL_MYSQL_TESTS=true
+export TAURUSDB_TEST_MYSQL_HOST=127.0.0.1
+export TAURUSDB_TEST_MYSQL_PORT=3306
+export TAURUSDB_TEST_MYSQL_DATABASE=taurus_mcp_test
+export TAURUSDB_TEST_MYSQL_USER=taurus_ro
+export TAURUSDB_TEST_MYSQL_PASSWORD='your_ro_password'
+export TAURUSDB_TEST_MYSQL_MUTATION_USER=taurus_rw
+export TAURUSDB_TEST_MYSQL_MUTATION_PASSWORD='your_rw_password'
+export TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN='mysql://root:root@127.0.0.1:3306/mysql'
+```
+
+3. 构建并执行本地 e2e：
+
+```bash
+npm run build
+npm run test --workspace @huaweicloud/taurusdb-mcp
+```
+
+自动化重点覆盖：
+
+- `list_data_sources`
+- `list_databases`
+- `list_tables`
+- `describe_table`
+- `sample_rows`
+- `execute_readonly_sql`
+- `explain_sql`
+- `get_query_status`
+- `cancel_query`
+- `execute_sql` + confirmation flow
+
+通过标准：
+
+- 本地 MySQL e2e 全绿
+- readonly / mutation 账号分离符合预期
+- `execute_sql` 只在开启 mutations 时暴露
+- confirmation token 主链路稳定
+
+#### 阶段二：本地手工 smoke
+
+目标：确认 MCP 从客户端视角可正常消费，而不只是自动化用例通过。
+
+建议按下面顺序验证：
+
+1. `list_data_sources`
+2. `list_tables`，目标库为 `taurus_mcp_test`
+3. `describe_table`，目标表为 `orders`
+4. `sample_rows`，目标表为 `users`
+5. `execute_readonly_sql`，执行一个简单 `SELECT`
+6. `explain_sql`，执行一个带过滤条件的查询
+7. `execute_sql`，先不带 `confirmation_token`
+8. 使用返回的 `confirmation_token` 重试 `execute_sql`
+9. `get_query_status`
+10. `cancel_query`
+
+手工 smoke 重点观察：
+
+- 是否返回标准 response envelope：`ok`、`summary`、`metadata`
+- `metadata.task_id` 是否存在
+- `metadata.query_id`、`metadata.sql_hash`、`metadata.statement_type` 是否合理
+- 写 SQL 是否先返回 `CONFIRMATION_REQUIRED`
+- 错误 token 是否返回 `CONFIRMATION_INVALID`
+- stdout 是否只输出协议内容，日志是否只写入 stderr
+
+通过标准：
+
+- discovery / readonly / explain / mutation / status / cancel 全部可手工复现
+- 返回结构适合客户端消费
+- 没有出现未处理异常或协议污染
+
+#### 阶段三：云端 TaurusDB 验证
+
+目标：确认 TaurusDB 专属能力在真实环境下成立。
+
+建议先验证通用主链路，再验证 Taurus 专属能力。
+
+第一轮验证：
+
+1. schema 探查主链路
+2. `execute_readonly_sql`
+3. `explain_sql`
+4. `execute_sql` + confirmation
+5. `get_query_status`
+6. `cancel_query`
+
+第二轮验证 Taurus 专属 Tool：
+
+1. `get_kernel_info`
+2. `list_taurus_features`
+3. `explain_sql_enhanced`
+4. `flashback_query`
+
+云端验证时额外关注：
+
+- capability probe 结果是否合理
+- `explain_sql_enhanced` 是否返回 TaurusDB 特性提示
+- `flashback_query` 是否只读且符合 feature gate
+- 网络、白名单、安全组、TLS、真实账号权限是否影响调用
+- TaurusDB 与本地 MySQL 在 explain / 元数据上的差异是否符合预期
+
+通过标准：
+
+- 通用主链路在 TaurusDB 上复跑通过
+- capability probe 结果可信
+- `explain_sql_enhanced` 可用
+- `flashback_query` 在支持环境下可用，或在不支持环境下明确不可用
+
+#### 阶段四：开始 diagnostics 第一刀
+
+目标：在 MCP 主链路稳定后，再把 diagnostics 从 scaffold 推进到真实能力。
+
+建议实现顺序：
+
+1. `diagnose_slow_query`
+2. `diagnose_lock_contention`
+
+原因：
+
+- 这两个在架构上更容易形成本地可验证闭环
+- 不依赖完整 CES / 云拓扑就能先落一版 collector + analyzer
+
+这一阶段建议先做：
+
+- collector 最小版
+- 统一 `DiagnosticResult` 输出骨架
+- 最小 root-cause candidate
+- 证据摘要
+- 推荐动作
+
+这一阶段暂时不要做：
+
+- diagnostics 默认注册到 MCP tool registry
+- replication lag / storage pressure 的云侧完整 collector
+- CLI diagnose 命令
+
 ---
 
 ## 9. 测试用例设计
