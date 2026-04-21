@@ -99,6 +99,34 @@
 
 两种形态**共享 core 包中所有业务能力**，只在人机交互和 LLM 集成层面不同。
 
+### 1.4.1 云厂商 RDS CLI 竞品对照（阿里云 / AWS）
+
+为了校准 `taurusdb-cli` 的产品边界，可以先看两类成熟云 CLI 的公开命令面。下面结论基于官方 CLI / API 文档整理；其中“更偏控制面还是数据面”是**基于公开命令面的归纳判断**。
+
+| 维度 | 阿里云 CLI | AWS CLI | 对 `taurusdb-cli` 的启发 |
+| --- | --- | --- | --- |
+| CLI 形态 | 统一 `aliyun` CLI，按产品 + OpenAPI 动作调用，例如 `aliyun rds DescribeDBInstances` | 统一 `aws` CLI，按 service namespace + command 调用，例如 `aws rds describe-db-instances` | 我们不需要再做一层“云 API 通用壳”，而应直接收口到 TaurusDB 场景命令 |
+| RDS 典型入口 | 实例列表用 `DescribeDBInstances`，实例详情常见用 `DescribeDBInstanceAttribute` | 实例列表/详情常见从 `describe-db-instances` 进入，可按实例标识或过滤条件查询 | 竞品 CLI 的主入口是“实例资源管理”，而不是“对库执行 SQL” |
+| 参数与过滤 | 偏 OpenAPI 参数风格，强调 `--region`、`--profile`、大小写敏感参数；支持 `--output` 用 JMESPath 抽取并表格化 | 命令参考原生支持 `--filters`、`--query`、`--output`，过滤和脚本集成体验成熟 | 我们 CLI 也应保留明确的 `--datasource` / `--database` / `--format` / `--timeout`，但核心过滤对象应是 schema / SQL 结果，而不是云资源元数据 |
+| 输出能力 | 官方提供 JSON 返回，也支持 `--output` 提取字段并直接表格化 | 官方支持 `json`、`yaml`、`yaml-stream`、`text`、`table`，并可结合 `--query` 做客户端过滤 | 我们 CLI 第一阶段保留 `table/json/csv` 已足够；没必要复刻完整通用云 CLI 的输出矩阵 |
+| 分页 / 轮询 | 支持 `--pager` 聚合分页结果、`--waiter` 轮询结果状态 | 命令参考原生支持分页，`describe-db-instances` 可 `--no-paginate` / `--page-size` / `--max-items` | 对我们更重要的不是资源分页，而是 `query_id` 状态查询和取消能力 |
+| 多凭证 / 多环境 | 官方文档强调多 profile、region、endpoint 切换，适合多账号多地域管控 | 官方文档强调 named profiles、config/credentials 文件、region/output 配置 | 我们也需要稳定的数据源 profile，但重点应落在数据库连接上下文，而不是云账号编排 |
+| 更偏控制面还是数据面 | 更偏控制面。公开命令面围绕实例、网络、参数、备份、属性等 OpenAPI 操作展开 | 更偏控制面。RDS CLI 公开命令面围绕 DB instance / snapshot / parameter group 等资源操作展开 | 这正好反衬出 `taurusdb-cli` 的差异化：**不是云资源控制台 CLI，而是数据库数据面执行与治理 CLI** |
+| 与本项目最直接的差异 | 更适合“查实例、改配置、做运维编排” | 更适合“资源管理 + 自动化脚本” | 我们的首要价值应放在 `describe` / `sample` / `query` / `explain` / `exec` / `flashback` / `diagnose`，而不是补一套实例 CRUD 命令 |
+
+可直接参考的官方入口：
+
+- 阿里云 CLI 概览：Alibaba Cloud CLI is built based on API，并支持多 profile、多输出格式、自动重试与插件机制[^aliyun-overview]
+- 阿里云 CLI 选项：`--profile`、`--region`、`--output`、`--pager`、`--waiter`[^aliyun-options]
+- 阿里云 RDS API：`DescribeDBInstances`、`DescribeDBInstanceAttribute`[^aliyun-rds-list] [^aliyun-rds-attr]
+- AWS CLI RDS 命令参考：`aws rds describe-db-instances`，支持分页与过滤[^aws-rds]
+- AWS CLI 用户指南：输出格式、`--query` 过滤、named profiles[^aws-output] [^aws-filter] [^aws-profiles]
+
+基于这组竞品对照，`taurusdb-cli` 的定位应继续保持两个原则：
+
+1. 不与云厂商通用 CLI 正面竞争“控制面资源管理命令的完整度”。
+2. 把 CLI 产品力集中在**数据库数据面**：schema 上下文、SQL 执行治理、TaurusDB 专属能力和故障诊断。
+
 ### 1.5 TaurusDB 差异化叙事
 
 本项目不是"能连 TaurusDB 的 MySQL MCP"，而是**优先暴露 TaurusDB 内核差异化能力的数据面 Tool**。
@@ -118,6 +146,15 @@
 | 叙事 | 对应 Tool 组 | 故事场景 |
 | --- | --- | --- |
 | TaurusDB 能帮你定位故障 | 场景化诊断 Tool | “CPU 打满了怎么查？”“为什么主从延迟？”“为什么连接突然暴涨？” |
+
+[^aliyun-overview]: Alibaba Cloud CLI overview: https://www.alibabacloud.com/help/en/cli/overview
+[^aliyun-options]: Alibaba Cloud CLI command-line options: https://www.alibabacloud.com/help/en/cli/command-line-options
+[^aliyun-rds-list]: Alibaba Cloud RDS `DescribeDBInstances`: https://www.alibabacloud.com/help/en/rds/developer-reference/api-rds-2014-08-15-describedbinstances
+[^aliyun-rds-attr]: Alibaba Cloud RDS `DescribeDBInstanceAttribute`: https://www.alibabacloud.com/help/en/rds/developer-reference/api-rds-2014-08-15-describedbinstanceattribute
+[^aws-rds]: AWS CLI `describe-db-instances`: https://docs.aws.amazon.com/cli/latest/reference/rds/describe-db-instances.html
+[^aws-output]: AWS CLI output formats: https://docs.aws.amazon.com/cli/latest/userguide/cli-usage-output-format.html
+[^aws-filter]: AWS CLI filtering and `--query`: https://docs.aws.amazon.com/cli/latest/userguide/cli-usage-filter.html
+[^aws-profiles]: AWS CLI profiles and config files: https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html
 
 ---
 
