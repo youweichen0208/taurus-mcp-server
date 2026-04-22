@@ -109,8 +109,6 @@
 - `sample_rows`
 - `execute_readonly_sql`
 - `explain_sql`
-- `get_query_status`
-- `cancel_query`
 - `execute_sql`
 - `init`
 

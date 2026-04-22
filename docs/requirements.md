@@ -54,8 +54,7 @@ TaurusDB 的传统能力更容易先联想到管控面：
 | AI 不知道库里有什么      | 缺少稳定 schema 上下文 | 提供结构化 schema / sample 工具            |
 | 自然语言不能稳定落到 SQL | 只会停留在解释层       | 让 AI 或 CLI 先拿 schema，再生成 SQL       |
 | SQL 执行风险过高         | 自由执行容易误写或慢扫 | 引入 guardrail、确认流、超时、结果裁剪     |
-| 长查询无法追踪           | 执行后不透明           | 提供 `query_id`、状态查询、取消能力        |
-| 数据访问不可审计         | 缺少统一链路标识       | 统一记录 `task_id`、`query_id`、`sql_hash` |
+| 数据访问不可审计         | 缺少统一链路标识       | 统一记录 `task_id`、`sql_hash`             |
 
 ---
 
@@ -119,7 +118,7 @@ TaurusDB 的传统能力更容易先联想到管控面：
 | 双前端共享内核 | MCP 和 CLI 共享 `core`，不复制业务逻辑      |
 | 默认安全       | 默认只读，写 SQL 需显式开启与确认           |
 | 结果可解释     | 除结果外，还要返回执行摘要、风险、截断信息  |
-| 可审计         | 统一关联 `task_id`、`query_id`、`sql_hash`  |
+| 可审计         | 统一关联 `task_id`、`sql_hash`              |
 | 部署可控       | 推荐靠近 TaurusDB 数据面的安全网络环境部署  |
 | 诊断可落地     | 下一阶段支持高频故障的场景化联合诊断        |
 
@@ -260,7 +259,6 @@ TaurusDB 的传统能力更容易先联想到管控面：
 每次关键调用至少应可关联：
 
 - `task_id`
-- `query_id`
 - `sql_hash`
 - datasource / database
 - statement type
@@ -304,11 +302,11 @@ TaurusDB 的传统能力更容易先联想到管控面：
 
 首版发布前至少满足：
 
-- schema 探查、只读查询、explain、状态查询和取消构成完整主链路
+- schema 探查、只读查询、explain 和受控写入构成完整主链路
 - 写 SQL 默认关闭，开启后必须经过 guardrail 和确认流程
 - TaurusDB capability discovery、enhanced explain、flashback query 已落地
 - MCP 与 CLI 的业务逻辑统一落在 shared `core`
-- 至少 MCP 形态已能感知统一的 `task_id / query_id / sql_hash`
+- 至少 MCP 形态已能感知统一的 `task_id / sql_hash`
 - 结果截断、敏感字段脱敏、超时和取消能力都已落地
 - 文档清楚区分 README、requirements、architecture 和 implementation plan 的职责
 

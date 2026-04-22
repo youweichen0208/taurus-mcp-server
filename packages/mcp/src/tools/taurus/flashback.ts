@@ -95,7 +95,6 @@ export const flashbackQueryTool: ToolDefinition = {
         {
           summary: summarizeRows(result.rowCount, result.truncated),
           metadata: metadata(context.taskId, {
-            query_id: result.queryId,
             statement_type: "select",
             duration_ms: result.durationMs,
           }),

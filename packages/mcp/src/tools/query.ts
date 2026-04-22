@@ -11,12 +11,10 @@ import {
   statementTypeFromSql,
   summarizeMutation,
   summarizeRows,
-  toPublicCancelResult,
   toPublicExplainResult,
   toPublicGuardrailDecision,
   toPublicMutationResult,
   toPublicQueryResult,
-  toPublicQueryStatus,
 } from "./common.js";
 import type { GuardrailDecision, SessionContext } from "@huaweicloud/taurusdb-core";
 
@@ -140,7 +138,6 @@ export const executeReadonlySqlTool: ToolDefinition = {
         {
           summary: summarizeRows(result.rowCount, result.truncated),
           metadata: metadata(context.taskId, {
-            query_id: result.queryId,
             sql_hash: decision.sqlHash,
             statement_type: statementType,
             duration_ms: result.durationMs,
@@ -198,7 +195,6 @@ export const explainSqlTool: ToolDefinition = {
               ? "Explain generated. Executing this SQL would require explicit confirmation."
               : "Explain generated.",
           metadata: metadata(context.taskId, {
-            query_id: result.queryId,
             sql_hash: decision.sqlHash,
             statement_type: statementType,
             duration_ms: result.durationMs,
@@ -211,71 +207,6 @@ export const explainSqlTool: ToolDefinition = {
         metadata: metadata(context.taskId, {
           statement_type: statementType,
         }),
-      });
-    }
-  },
-};
-
-export const getQueryStatusTool: ToolDefinition = {
-  name: "get_query_status",
-  description: "Get the execution status of a previously issued query_id.",
-  inputSchema: {
-    query_id: z
-      .string()
-      .trim()
-      .min(1)
-      .describe("Query identifier returned by execute_readonly_sql, explain_sql, or execute_sql."),
-  },
-  async handler(input, deps, context): Promise<ToolResponse> {
-    try {
-      const queryId = asRequiredString(input.query_id, "query_id");
-      const result = await deps.engine.getQueryStatus(queryId);
-      return formatSuccess(
-        toPublicQueryStatus(result),
-        {
-          summary: `Query ${queryId} is ${result.status}.`,
-          metadata: metadata(context.taskId, {
-            query_id: result.queryId,
-            duration_ms: result.durationMs,
-          }),
-        },
-      );
-    } catch (error) {
-      return formatToolError(error, {
-        action: "get_query_status",
-        metadata: metadata(context.taskId),
-      });
-    }
-  },
-};
-
-export const cancelQueryTool: ToolDefinition = {
-  name: "cancel_query",
-  description: "Cancel a running query_id if it is still active.",
-  inputSchema: {
-    query_id: z
-      .string()
-      .trim()
-      .min(1)
-      .describe("Query identifier returned by a previous tool call."),
-  },
-  async handler(input, deps, context): Promise<ToolResponse> {
-    try {
-      const queryId = asRequiredString(input.query_id, "query_id");
-      const result = await deps.engine.cancelQuery(queryId);
-      return formatSuccess(
-        toPublicCancelResult(result),
-        {
-          summary: `Query ${queryId} cancellation result: ${result.status}.`,
-          metadata: metadata(context.taskId, {
-            query_id: result.queryId,
-          }),
-        },
-      );
-    } catch (error) {
-      return formatToolError(error, {
-        action: "cancel_query",
-        metadata: metadata(context.taskId),
       });
     }
   },
@@ -334,7 +265,6 @@ export const executeSqlTool: ToolDefinition = {
         {
           summary: summarizeMutation(result.affectedRows),
           metadata: metadata(context.taskId, {
-            query_id: result.queryId,
             sql_hash: decision.sqlHash,
             statement_type: statementType,
             duration_ms: result.durationMs,

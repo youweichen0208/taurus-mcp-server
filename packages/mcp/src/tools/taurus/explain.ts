@@ -69,7 +69,6 @@ export const explainSqlEnhancedTool: ToolDefinition = {
         {
           summary: "Enhanced EXPLAIN generated.",
           metadata: metadata(context.taskId, {
-            query_id: result.standardPlan.queryId,
             sql_hash: decision.sqlHash,
             statement_type: statementType,
             duration_ms: result.standardPlan.durationMs,
