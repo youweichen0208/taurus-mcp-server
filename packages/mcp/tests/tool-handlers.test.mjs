@@ -3,16 +3,13 @@ import test from "node:test";
 
 import { ErrorCode } from "../dist/utils/formatter.js";
 import {
-  cancelQueryTool,
   executeReadonlySqlTool,
   executeSqlTool,
   explainSqlTool,
-  getQueryStatusTool,
 } from "../dist/tools/query.js";
 import {
   describeTableTool,
   listDataSourcesTool,
-  sampleRowsTool,
 } from "../dist/tools/discovery.js";
 import {
   getKernelInfoTool,
@@ -56,13 +53,6 @@ function createDeps(engineOverrides = {}) {
         table: "orders",
         columns: [],
         indexes: [],
-      }),
-      sampleRows: async () => ({
-        database: "app",
-        table: "orders",
-        columns: [{ name: "id" }],
-        rows: [[1]],
-        sampleSize: 1,
       }),
       inspectSql: async () => ({
         action: "allow",
@@ -326,33 +316,6 @@ test("describe_table validates required database context", async () => {
   assert.match(result.error.message, /Missing database/);
 });
 
-test("sample_rows applies default sample size and public field mapping", async () => {
-  let capturedN;
-  const deps = createDeps({
-    sampleRows: async (_ctx, database, table, n) => {
-      capturedN = n;
-      return {
-        database,
-        table,
-        columns: [{ name: "id", type: "bigint" }],
-        rows: [[1]],
-        redactedColumns: ["email"],
-        truncatedColumns: [],
-        sampleSize: 1,
-        truncated: false,
-        totalRowCount: 200,
-      };
-    },
-  });
-
-  const result = await sampleRowsTool.handler({ database: "app", table: "orders" }, deps, context);
-  assert.equal(result.ok, true);
-  assert.equal(capturedN, 5);
-  assert.equal(result.data.sample_size, 1);
-  assert.deepEqual(result.data.redacted_columns, ["email"]);
-  assert.equal(result.data.total_row_count, 200);
-});
-
 test("execute_readonly_sql returns blocked response when guardrail blocks SQL", async () => {
   const deps = createDeps({
     inspectSql: async () => ({
@@ -469,7 +432,6 @@ test("execute_readonly_sql executes when confirmation token validates", async ()
 
   assert.equal(result.ok, true);
   assert.deepEqual(calls, [{ token: "ctok_ok", sql: "SELECT * FROM orders" }]);
-  assert.equal(result.metadata.query_id, "qry_ro_confirmed");
   assert.equal(result.metadata.duration_ms, 5000);
   assert.equal(result.data.row_count, 1);
 });
@@ -554,38 +516,6 @@ test("flashback_query returns structured readonly result", async () => {
   assert.equal(result.data.database, "app");
   assert.equal(result.data.table, "orders");
   assert.equal(result.data.row_count, 1);
-});
-
-test("get_query_status and cancel_query adapt query lifecycle responses", async () => {
-  const deps = createDeps({
-    getQueryStatus: async (queryId) => ({
-      queryId,
-      status: "running",
-      taskId: "task_x",
-      datasource: "main",
-      mode: "ro",
-      startedAt: 10,
-      endedAt: undefined,
-      durationMs: 55,
-      error: undefined,
-    }),
-    cancelQuery: async (queryId) => ({
-      queryId,
-      status: "cancelled",
-      message: undefined,
-    }),
-  });
-
-  const status = await getQueryStatusTool.handler({ query_id: "qry_42" }, deps, context);
-  assert.equal(status.ok, true);
-  assert.equal(status.data.query_id, "qry_42");
-  assert.equal(status.data.task_id, "task_x");
-  assert.equal(status.data.duration_ms, 55);
-
-  const cancel = await cancelQueryTool.handler({ query_id: "qry_42" }, deps, context);
-  assert.equal(cancel.ok, true);
-  assert.equal(cancel.data.query_id, "qry_42");
-  assert.equal(cancel.data.status, "cancelled");
 });
 
 test("execute_sql returns confirmation_invalid when token validation fails", async () => {

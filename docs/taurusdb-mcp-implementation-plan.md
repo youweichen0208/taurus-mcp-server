@@ -46,7 +46,7 @@ MCP 当前已经具备：
 第一阶段只保留三类能力：
 
 1. 通用数据面能力
-   `list_*`、`describe_table`、`sample_rows`、`execute_readonly_sql`、`execute_sql`、`explain_sql`、`status`、`cancel`
+   `list_*`、`describe_table`、`execute_readonly_sql`、`execute_sql`、`explain_sql`、`status`、`cancel`
 
 2. 最小安全模型
    AST 分类、tool scope 校验、静态阻断规则、token confirmation、结果裁剪/脱敏

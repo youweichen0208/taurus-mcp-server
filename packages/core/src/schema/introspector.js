@@ -13,12 +13,6 @@ function normalizeName(value, fieldName) {
     }
     return trimmed;
 }
-function validateSampleSize(n) {
-    if (!Number.isInteger(n) || n <= 0) {
-        throw new SchemaIntrospectionError("INVALID_INTROSPECTION_INPUT", `Invalid sample size: ${n}. It must be a positive integer.`);
-    }
-    return n;
-}
 export class AdapterSchemaIntrospector {
     adapters;
     constructor(options) {
@@ -32,9 +26,6 @@ export class AdapterSchemaIntrospector {
     }
     async describeTable(ctx, database, table) {
         return this.getAdapter(ctx.engine).describeTable(ctx, normalizeName(database, "database"), normalizeName(table, "table"));
-    }
-    async sampleRows(ctx, database, table, n) {
-        return this.getAdapter(ctx.engine).sampleRows(ctx, normalizeName(database, "database"), normalizeName(table, "table"), validateSampleSize(n));
     }
     getAdapter(engine) {
         const adapter = this.adapters[engine];

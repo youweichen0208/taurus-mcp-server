@@ -12,7 +12,7 @@ export { createGuardrail } from "./safety/guardrail.js";
 export type { Guardrail, GuardrailDecision, GuardrailRuntimeLimits, InspectInput, } from "./safety/guardrail.js";
 export type { ExplainRiskSummary, RiskLevel, ValidationResult } from "./safety/sql-validator.js";
 export { SchemaIntrospectionError } from "./schema/introspector.js";
-export type { ColumnInfo, DatabaseInfo, IndexInfo, SampleResult, SchemaIntrospector, TableInfo, TableSchema, } from "./schema/introspector.js";
+export type { ColumnInfo, DatabaseInfo, IndexInfo, SchemaIntrospector, TableInfo, TableSchema, } from "./schema/introspector.js";
 export { ErrorCode, formatBlocked, formatConfirmationRequired, formatError, formatSuccess, } from "./utils/formatter.js";
 export type { ErrorCode as ErrorCodeValue, ResponseMetadata, StatementType, ToolError, ToolResponse, } from "./utils/formatter.js";
 export { normalizeSql, sqlHash } from "./utils/hash.js";

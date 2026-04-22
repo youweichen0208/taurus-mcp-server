@@ -41,7 +41,6 @@ CLI 第一阶段只做命令模式，不做 REPL / AI / doctor。
 - `taurusdb databases`
 - `taurusdb tables`
 - `taurusdb describe`
-- `taurusdb sample`
 - `taurusdb query`
 - `taurusdb exec`
 - `taurusdb explain`
@@ -75,7 +74,6 @@ CLI 需要的 core 能力：
 - `listDatabases`
 - `listTables`
 - `describeTable`
-- `sampleRows`
 - `inspectSql`
 - `explain`
 - `explainEnhanced`

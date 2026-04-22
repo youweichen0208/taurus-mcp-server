@@ -20,7 +20,6 @@ export type ToolError = {
 };
 export type ResponseMetadata = {
     task_id: string;
-    query_id?: string;
     sql_hash?: string;
     statement_type?: StatementType;
     duration_ms?: number;

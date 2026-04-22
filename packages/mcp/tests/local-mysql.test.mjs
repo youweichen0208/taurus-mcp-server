@@ -194,18 +194,6 @@ localMysqlTest("local mysql MCP covers discovery, readonly query, and explain", 
     assert.equal(describe.structuredContent.data.engine_hints.likely_time_columns.includes("created_at"), true);
     assert.equal(describe.structuredContent.data.indexes.some((index) => index.name === "idx_orders_status_created_at"), true);
 
-    const sample = await client.callTool({
-      name: "sample_rows",
-      arguments: {
-        database: requiredEnv("TAURUSDB_TEST_MYSQL_DATABASE"),
-        table: "users",
-        n: 2,
-      },
-    });
-    assert.equal(sample.isError, false);
-    assert.equal(sample.structuredContent.data.sample_size, 2);
-    assert.deepEqual(sample.structuredContent.data.redacted_columns, ["email", "phone", "id_card"]);
-
     const readonly = await client.callTool({
       name: "execute_readonly_sql",
       arguments: {
@@ -215,35 +203,7 @@ localMysqlTest("local mysql MCP covers discovery, readonly query, and explain", 
     assert.equal(readonly.isError, false);
     assert.equal(readonly.structuredContent.ok, true);
     assert.equal(readonly.structuredContent.metadata.statement_type, "select");
-    assert.match(readonly.structuredContent.metadata.query_id, /^qry_/);
     assert.equal(readonly.structuredContent.data.row_count, 3);
-
-    const status = await client.callTool({
-      name: "get_query_status",
-      arguments: {
-        query_id: readonly.structuredContent.metadata.query_id,
-      },
-    });
-    assert.equal(status.isError, false);
-    assert.equal(status.structuredContent.data.status, "completed");
-
-    const cancelCompleted = await client.callTool({
-      name: "cancel_query",
-      arguments: {
-        query_id: readonly.structuredContent.metadata.query_id,
-      },
-    });
-    assert.equal(cancelCompleted.isError, false);
-    assert.equal(cancelCompleted.structuredContent.data.status, "completed");
-
-    const cancelMissing = await client.callTool({
-      name: "cancel_query",
-      arguments: {
-        query_id: "qry_missing_local_mysql",
-      },
-    });
-    assert.equal(cancelMissing.isError, false);
-    assert.equal(cancelMissing.structuredContent.data.status, "not_found");
 
     const explain = await client.callTool({
       name: "explain_sql",

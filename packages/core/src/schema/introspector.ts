@@ -48,30 +48,16 @@ export interface TableSchema {
   rowCountEstimate?: number;
 }
 
-export interface SampleResult {
-  database: string;
-  table: string;
-  columns: Array<{ name: string; type?: string }>;
-  rows: unknown[][];
-  redactedColumns?: string[];
-  truncatedColumns?: string[];
-  sampleSize?: number;
-  truncated?: boolean;
-  totalRowCount?: number;
-}
-
 export interface SchemaAdapter {
   listDatabases(ctx: SessionContext): Promise<DatabaseInfo[]>;
   listTables(ctx: SessionContext, database: string): Promise<TableInfo[]>;
   describeTable(ctx: SessionContext, database: string, table: string): Promise<TableSchema>;
-  sampleRows(ctx: SessionContext, database: string, table: string, n: number): Promise<SampleResult>;
 }
 
 export interface SchemaIntrospector {
   listDatabases(ctx: SessionContext): Promise<DatabaseInfo[]>;
   listTables(ctx: SessionContext, database: string): Promise<TableInfo[]>;
   describeTable(ctx: SessionContext, database: string, table: string): Promise<TableSchema>;
-  sampleRows(ctx: SessionContext, database: string, table: string, n: number): Promise<SampleResult>;
 }
 
 export class SchemaIntrospectionError extends Error {
@@ -99,16 +85,6 @@ function normalizeName(value: string, fieldName: string): string {
   return trimmed;
 }
 
-function validateSampleSize(n: number): number {
-  if (!Number.isInteger(n) || n <= 0) {
-    throw new SchemaIntrospectionError(
-      "INVALID_INTROSPECTION_INPUT",
-      `Invalid sample size: ${n}. It must be a positive integer.`,
-    );
-  }
-  return n;
-}
-
 export class AdapterSchemaIntrospector implements SchemaIntrospector {
   private readonly adapters: Partial<Record<DatabaseEngine, SchemaAdapter>>;
 
@@ -129,20 +105,6 @@ export class AdapterSchemaIntrospector implements SchemaIntrospector {
       ctx,
       normalizeName(database, "database"),
       normalizeName(table, "table"),
-    );
-  }
-
-  async sampleRows(
-    ctx: SessionContext,
-    database: string,
-    table: string,
-    n: number,
-  ): Promise<SampleResult> {
-    return this.getAdapter(ctx.engine).sampleRows(
-      ctx,
-      normalizeName(database, "database"),
-      normalizeName(table, "table"),
-      validateSampleSize(n),
     );
   }
 

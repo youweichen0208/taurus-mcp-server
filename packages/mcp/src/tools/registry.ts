@@ -10,18 +10,15 @@ import {
 } from "@huaweicloud/taurusdb-core";
 import type { ServerDeps } from "../server.js";
 import {
-  cancelQueryTool,
   executeReadonlySqlTool,
   executeSqlTool,
   explainSqlTool,
-  getQueryStatusTool,
 } from "./query.js";
 import {
   describeTableTool,
   listDatabasesTool,
   listDataSourcesTool,
   listTablesTool,
-  sampleRowsTool,
 } from "./discovery.js";
 import { pingTool } from "./ping.js";
 import { getKernelInfoTool, listTaurusFeaturesTool } from "./taurus/capability.js";
@@ -138,11 +135,8 @@ export const commonToolDefinitions: ToolDefinition[] = [
   listDatabasesTool,
   listTablesTool,
   describeTableTool,
-  sampleRowsTool,
   executeReadonlySqlTool,
   explainSqlTool,
-  getQueryStatusTool,
-  cancelQueryTool,
   executeSqlTool,
 ];
 

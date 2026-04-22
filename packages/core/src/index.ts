@@ -72,7 +72,6 @@ export type {
   ColumnInfo,
   DatabaseInfo,
   IndexInfo,
-  SampleResult,
   SchemaIntrospector,
   TableInfo,
   TableSchema,

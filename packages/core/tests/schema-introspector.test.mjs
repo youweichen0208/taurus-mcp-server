@@ -41,15 +41,6 @@ function makeAdapter(name) {
         indexes: [],
       };
     },
-    async sampleRows(_ctx, database, table, n) {
-      calls.push({ fn: "sampleRows", database, table, n });
-      return {
-        database,
-        table,
-        columns: [],
-        rows: [],
-      };
-    },
   };
   return { adapter, calls };
 }
@@ -75,15 +66,13 @@ test("schema introspector routes calls to adapter by engine", async () => {
   assert.equal(tables[0].name, "pg_table");
 
   await introspector.describeTable(mysqlCtx, "demo", "orders");
-  await introspector.sampleRows(pgCtx, "analytics", "events", 10);
 
   assert.equal(mysql.calls.length, 2);
   assert.deepEqual(mysql.calls[0], { fn: "listDatabases" });
   assert.deepEqual(mysql.calls[1], { fn: "describeTable", database: "demo", table: "orders" });
 
-  assert.equal(pg.calls.length, 2);
+  assert.equal(pg.calls.length, 1);
   assert.deepEqual(pg.calls[0], { fn: "listTables", database: "analytics" });
-  assert.deepEqual(pg.calls[1], { fn: "sampleRows", database: "analytics", table: "events", n: 10 });
 });
 
 test("schema introspector throws when adapter is missing", async () => {
@@ -114,17 +103,4 @@ test("schema introspector validates database and table inputs", async () => {
     async () => introspector.describeTable(makeContext("mysql"), "demo", "  "),
     /Invalid table: value cannot be empty/,
   );
-});
-
-test("schema introspector validates sample row size", async () => {
-  const mysql = makeAdapter("mysql");
-  const introspector = new AdapterSchemaIntrospector({
-    adapters: { mysql: mysql.adapter },
-  });
-
-  await assert.rejects(async () => introspector.sampleRows(makeContext("mysql"), "demo", "orders", 0), (error) => {
-    assert.ok(error instanceof SchemaIntrospectionError);
-    assert.equal(error.code, "INVALID_INTROSPECTION_INPUT");
-    return true;
-  });
 });

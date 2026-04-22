@@ -52,11 +52,8 @@ test("stdio transport exposes expected tools and keeps logs on stderr", async ()
       "list_databases",
       "list_tables",
       "describe_table",
-      "sample_rows",
       "execute_readonly_sql",
       "explain_sql",
-      "get_query_status",
-      "cancel_query",
       "get_kernel_info",
       "list_taurus_features",
     ]);

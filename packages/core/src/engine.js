@@ -123,9 +123,6 @@ export class TaurusDBEngine {
     async describeTable(ctx, database, table) {
         return this.schemaIntrospector.describeTable(ctx, database, table);
     }
-    async sampleRows(ctx, database, table, n) {
-        return this.schemaIntrospector.sampleRows(ctx, database, table, n);
-    }
     async inspectSql(input) {
         return this.guardrail.inspect(input);
     }

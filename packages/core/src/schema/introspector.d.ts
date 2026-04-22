@@ -42,31 +42,15 @@ export interface TableSchema {
     comment?: string;
     rowCountEstimate?: number;
 }
-export interface SampleResult {
-    database: string;
-    table: string;
-    columns: Array<{
-        name: string;
-        type?: string;
-    }>;
-    rows: unknown[][];
-    redactedColumns?: string[];
-    truncatedColumns?: string[];
-    sampleSize?: number;
-    truncated?: boolean;
-    totalRowCount?: number;
-}
 export interface SchemaAdapter {
     listDatabases(ctx: SessionContext): Promise<DatabaseInfo[]>;
     listTables(ctx: SessionContext, database: string): Promise<TableInfo[]>;
     describeTable(ctx: SessionContext, database: string, table: string): Promise<TableSchema>;
-    sampleRows(ctx: SessionContext, database: string, table: string, n: number): Promise<SampleResult>;
 }
 export interface SchemaIntrospector {
     listDatabases(ctx: SessionContext): Promise<DatabaseInfo[]>;
     listTables(ctx: SessionContext, database: string): Promise<TableInfo[]>;
     describeTable(ctx: SessionContext, database: string, table: string): Promise<TableSchema>;
-    sampleRows(ctx: SessionContext, database: string, table: string, n: number): Promise<SampleResult>;
 }
 export declare class SchemaIntrospectionError extends Error {
     readonly code: "SCHEMA_ADAPTER_NOT_FOUND" | "INVALID_INTROSPECTION_INPUT";
@@ -81,7 +65,6 @@ export declare class AdapterSchemaIntrospector implements SchemaIntrospector {
     listDatabases(ctx: SessionContext): Promise<DatabaseInfo[]>;
     listTables(ctx: SessionContext, database: string): Promise<TableInfo[]>;
     describeTable(ctx: SessionContext, database: string, table: string): Promise<TableSchema>;
-    sampleRows(ctx: SessionContext, database: string, table: string, n: number): Promise<SampleResult>;
     private getAdapter;
 }
 export declare function createSchemaIntrospector(options: SchemaIntrospectorOptions): SchemaIntrospector;

@@ -399,46 +399,6 @@ export TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN='mysql://root:root@127.0.0.1:3306/mysql
   3. 返回 `primary_key`
   4. 返回 `engine_hints`
 
-### TC-L1-010 sample_rows 默认返回小样本
-
-- 优先级：`P0`
-- 测试层级：`L1`
-- 测试环境：本地 MySQL
-- 前置条件：`users` 表有数据
-- 测试步骤：
-  1. 调用 `sample_rows`
-  2. 不传 `n`
-- 预期结果：
-  1. 返回默认 sample size
-  2. 返回 `columns` 和 `rows`
-  3. 返回 `sample_size`
-
-### TC-L1-011 sample_rows 指定 n 生效
-
-- 优先级：`P1`
-- 测试层级：`L1`
-- 测试环境：本地 MySQL
-- 前置条件：目标表有足够数据
-- 测试步骤：
-  1. 调用 `sample_rows`
-  2. 指定 `n=2`
-- 预期结果：
-  1. `sample_size=2`
-  2. 返回 2 行或不超过 2 行
-
-### TC-L1-012 sample_rows 对敏感列脱敏
-
-- 优先级：`P0`
-- 测试层级：`L1`
-- 测试环境：本地 MySQL
-- 前置条件：`users` 表含 `email`、`phone`、`id_card` 等敏感字段
-- 测试步骤：
-  1. 调用 `sample_rows`
-  2. 观察返回数据和 `redacted_columns`
-- 预期结果：
-  1. 敏感字段不以原文暴露
-  2. `redacted_columns` 包含预期字段
-
 ### TC-L1-013 describe_table 请求不存在表时报错
 
 - 优先级：`P1`
@@ -466,9 +426,8 @@ export TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN='mysql://root:root@127.0.0.1:3306/mysql
 - 预期结果：
   1. `ok=true`
   2. 返回 `columns`、`rows`
-  3. `metadata.query_id` 存在
-  4. `metadata.sql_hash` 存在
-  5. `metadata.statement_type=select`
+  3. `metadata.task_id`、`metadata.sql_hash` 存在
+  4. `metadata.statement_type=select`
 
 ### TC-L1-015 execute_readonly_sql 执行 SHOW 成功
 
@@ -535,7 +494,7 @@ export TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN='mysql://root:root@127.0.0.1:3306/mysql
 - 预期结果：
   1. 返回 `plan`
   2. 返回 `guardrail`
-  3. 返回 `metadata.query_id`
+  3. 返回 `metadata.duration_ms`
   4. `summary` 可读
 
 ### TC-L1-020 只读大结果集触发裁剪
@@ -687,74 +646,9 @@ export TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN='mysql://root:root@127.0.0.1:3306/mysql
   2. 未产生部分提交
   3. 数据保持失败前状态
 
-## 3.8 H 组：Query Status、Cancel、Timeout
+## 3.8 H 组：Timeout 与异常路径
 
-### TC-L1-031 只读执行后可通过 query_id 查询状态
-
-- 优先级：`P0`
-- 测试层级：`L1`
-- 测试环境：本地 MySQL
-- 前置条件：已成功执行一条 readonly SQL
-- 测试步骤：
-  1. 取返回的 `metadata.query_id`
-  2. 调用 `get_query_status`
-- 预期结果：
-  1. 返回 `completed`
-  2. 返回相同 `query_id`
-
-### TC-L1-032 查询不存在的 query_id 返回 not_found
-
-- 优先级：`P0`
-- 测试层级：`L1`
-- 测试环境：本地 MySQL
-- 前置条件：server 已启动
-- 测试步骤：
-  1. 调用 `get_query_status`
-  2. `query_id=qry_missing_local_mysql`
-- 预期结果：
-  1. 返回 `status=not_found`
-  2. 无未处理异常
-
-### TC-L1-033 取消已完成查询返回 completed
-
-- 优先级：`P1`
-- 测试层级：`L1`
-- 测试环境：本地 MySQL
-- 前置条件：已有一条已完成查询
-- 测试步骤：
-  1. 调用 `cancel_query`
-  2. 使用已完成查询的 `query_id`
-- 预期结果：
-  1. 返回 `status=completed` 或约定的稳定结果
-
-### TC-L1-034 取消不存在查询返回 not_found
-
-- 优先级：`P0`
-- 测试层级：`L1`
-- 测试环境：本地 MySQL
-- 前置条件：server 已启动
-- 测试步骤：
-  1. 调用 `cancel_query`
-  2. `query_id=qry_missing_local_mysql`
-- 预期结果：
-  1. 返回 `status=not_found`
-
-### TC-L1-035 长查询取消路径可工作
-
-- 优先级：`P1`
-- 测试层级：`L1`
-- 测试环境：本地 MySQL
-- 前置条件：可制造慢查询
-- 测试步骤：
-  1. 发起一条可持续执行的查询
-  2. 在运行中调用 `cancel_query`
-  3. 再调用 `get_query_status`
-- 预期结果：
-  1. 取消请求成功
-  2. 最终状态为 `cancelled` 或等价结果
-  3. 无进程异常
-
-### TC-L1-036 timeout 路径返回结构化错误
+### TC-L1-031 timeout 路径返回结构化错误
 
 - 优先级：`P1`
 - 测试层级：`L1`

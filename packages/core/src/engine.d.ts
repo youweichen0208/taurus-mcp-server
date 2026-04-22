@@ -7,7 +7,7 @@ import { type CancelResult, type ExplainResult, type MutationOptions, type Mutat
 import { type ConfirmationStore, type ConfirmationToken, type ConfirmationValidationResult } from "./safety/confirmation-store.js";
 import { type Guardrail, type GuardrailDecision, type InspectInput } from "./safety/guardrail.js";
 import { type RiskLevel } from "./safety/sql-validator.js";
-import { type DatabaseInfo, type SampleResult, type SchemaIntrospector, type TableInfo, type TableSchema } from "./schema/introspector.js";
+import { type DatabaseInfo, type SchemaIntrospector, type TableInfo, type TableSchema } from "./schema/introspector.js";
 import { type SchemaCache } from "./schema/cache.js";
 export interface DataSourceInfo {
     name: string;
@@ -78,7 +78,6 @@ export declare class TaurusDBEngine {
     listDatabases(ctx: SessionContext): Promise<DatabaseInfo[]>;
     listTables(ctx: SessionContext, database: string): Promise<TableInfo[]>;
     describeTable(ctx: SessionContext, database: string, table: string): Promise<TableSchema>;
-    sampleRows(ctx: SessionContext, database: string, table: string, n: number): Promise<SampleResult>;
     inspectSql(input: InspectInput): Promise<GuardrailDecision>;
     explain(sql: string, ctx: SessionContext): Promise<ExplainResult>;
     executeReadonly(sql: string, ctx: SessionContext, opts?: ReadonlyOptions): Promise<QueryResult>;

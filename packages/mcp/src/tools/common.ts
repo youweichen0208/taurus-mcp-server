@@ -1,5 +1,4 @@
 import type {
-  CancelResult,
   DataSourceInfo,
   DatabaseInfo,
   DiagnosticResult,
@@ -10,16 +9,18 @@ import type {
   KernelInfo,
   MutationResult,
   QueryResult,
-  QueryStatus,
   ResponseMetadata,
   SessionContext,
   StatementType,
   TableInfo,
   TableSchema,
-  SampleResult,
 } from "@huaweicloud/taurusdb-core";
 import { z } from "zod";
-import { formatError, ErrorCode, type ToolResponse } from "../utils/formatter.js";
+import {
+  formatError,
+  ErrorCode,
+  type ToolResponse,
+} from "../utils/formatter.js";
 import type { ToolDeps, ToolInvokeContext } from "./registry.js";
 import { ToolInputError } from "./error-handling.js";
 
@@ -52,13 +53,17 @@ export const contextInputShape = {
     .trim()
     .min(1)
     .optional()
-    .describe("Datasource profile name. If omitted, the configured default datasource is used."),
+    .describe(
+      "Datasource profile name. If omitted, the configured default datasource is used.",
+    ),
   database: z
     .string()
     .trim()
     .min(1)
     .optional()
-    .describe("Database name. Overrides the datasource default database for this tool call."),
+    .describe(
+      "Database name. Overrides the datasource default database for this tool call.",
+    ),
   schema: z
     .string()
     .trim()
@@ -70,7 +75,9 @@ export const contextInputShape = {
     .int()
     .positive()
     .optional()
-    .describe("Statement timeout in milliseconds. Clamped by the server-side maximum."),
+    .describe(
+      "Statement timeout in milliseconds. Clamped by the server-side maximum.",
+    ),
 } as const;
 
 export const diagnosticBaseInputShape = {
@@ -82,7 +89,9 @@ export const diagnosticBaseInputShape = {
       relative: z.string().trim().min(1).optional(),
     })
     .optional()
-    .describe("Optional diagnosis window. Use from/to or a relative window such as 15m or 1h."),
+    .describe(
+      "Optional diagnosis window. Use from/to or a relative window such as 15m or 1h.",
+    ),
   evidence_level: z
     .enum(["basic", "standard", "full"])
     .optional()
@@ -100,7 +109,10 @@ export const diagnosticBaseInputShape = {
     .describe("Maximum number of root-cause candidates to return."),
 } as const;
 
-export function metadata(taskId: string, extra: Omit<ResponseMetadata, "task_id"> = {}): ResponseMetadata {
+export function metadata(
+  taskId: string,
+  extra: Omit<ResponseMetadata, "task_id"> = {},
+): ResponseMetadata {
   return {
     task_id: taskId,
     ...extra,
@@ -147,24 +159,35 @@ export function asRequiredString(value: unknown, fieldName: string): string {
   return trimmed;
 }
 
-export function asOptionalString(value: unknown, fieldName: string): string | undefined {
+export function asOptionalString(
+  value: unknown,
+  fieldName: string,
+): string | undefined {
   if (value === undefined) {
     return undefined;
   }
   return asRequiredString(value, fieldName);
 }
 
-export function asOptionalPositiveInteger(value: unknown, fieldName: string): number | undefined {
+export function asOptionalPositiveInteger(
+  value: unknown,
+  fieldName: string,
+): number | undefined {
   if (value === undefined) {
     return undefined;
   }
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    throw new ToolInputError(`Invalid ${fieldName}: expected a positive integer.`);
+    throw new ToolInputError(
+      `Invalid ${fieldName}: expected a positive integer.`,
+    );
   }
   return value;
 }
 
-export function asOptionalBoolean(value: unknown, fieldName: string): boolean | undefined {
+export function asOptionalBoolean(
+  value: unknown,
+  fieldName: string,
+): boolean | undefined {
   if (value === undefined) {
     return undefined;
   }
@@ -178,7 +201,9 @@ export function summarizeRows(rowCount: number, truncated: boolean): string {
   if (rowCount === 1) {
     return truncated ? "Returned 1 row (truncated)." : "Returned 1 row.";
   }
-  return truncated ? `Returned ${rowCount} rows (truncated).` : `Returned ${rowCount} rows.`;
+  return truncated
+    ? `Returned ${rowCount} rows (truncated).`
+    : `Returned ${rowCount} rows.`;
 }
 
 export function summarizeMutation(affectedRows: number): string {
@@ -286,20 +311,6 @@ export function toPublicTableSchema(schema: TableSchema) {
   };
 }
 
-export function toPublicSampleResult(sample: SampleResult) {
-  return {
-    database: sample.database,
-    table: sample.table,
-    columns: sample.columns,
-    rows: sample.rows,
-    redacted_columns: sample.redactedColumns,
-    truncated_columns: sample.truncatedColumns,
-    sample_size: sample.sampleSize,
-    truncated: sample.truncated,
-    total_row_count: sample.totalRowCount,
-  };
-}
-
 export function toPublicQueryResult(result: QueryResult) {
   return {
     columns: result.columns,
@@ -322,28 +333,6 @@ export function toPublicMutationResult(result: MutationResult) {
   };
 }
 
-export function toPublicQueryStatus(status: QueryStatus) {
-  return {
-    query_id: status.queryId,
-    status: status.status,
-    task_id: status.taskId,
-    datasource: status.datasource,
-    mode: status.mode,
-    started_at: status.startedAt,
-    ended_at: status.endedAt,
-    duration_ms: status.durationMs,
-    error: status.error,
-  };
-}
-
-export function toPublicCancelResult(result: CancelResult) {
-  return {
-    query_id: result.queryId,
-    status: result.status,
-    message: result.message,
-  };
-}
-
 export function toPublicGuardrailDecision(decision: GuardrailDecision) {
   return {
     action: decision.action,
@@ -363,7 +352,10 @@ export function toPublicGuardrailDecision(decision: GuardrailDecision) {
   };
 }
 
-export function toPublicExplainResult(result: ExplainResult, decision: GuardrailDecision) {
+export function toPublicExplainResult(
+  result: ExplainResult,
+  decision: GuardrailDecision,
+) {
   return {
     plan: result.plan,
     risk_summary: {
@@ -402,7 +394,10 @@ function toPublicFeatureStatus(status: Record<string, unknown>) {
 
 export function toPublicFeatureMatrix(features: FeatureMatrix) {
   return Object.fromEntries(
-    Object.entries(features).map(([name, status]) => [name, toPublicFeatureStatus(status)]),
+    Object.entries(features).map(([name, status]) => [
+      name,
+      toPublicFeatureStatus(status),
+    ]),
   );
 }
 
@@ -442,43 +437,71 @@ export function toPublicDiagnosticResult(result: DiagnosticResult) {
       to: result.diagnosisWindow.to,
       relative: result.diagnosisWindow.relative,
     },
-    root_cause_candidates: result.rootCauseCandidates.map((candidate: DiagnosticResult["rootCauseCandidates"][number]) => ({
-      code: candidate.code,
-      title: candidate.title,
-      confidence: candidate.confidence,
-      rationale: candidate.rationale,
-    })),
+    root_cause_candidates: result.rootCauseCandidates.map(
+      (candidate: DiagnosticResult["rootCauseCandidates"][number]) => ({
+        code: candidate.code,
+        title: candidate.title,
+        confidence: candidate.confidence,
+        rationale: candidate.rationale,
+      }),
+    ),
     key_findings: result.keyFindings,
     suspicious_entities: result.suspiciousEntities
       ? {
-          sqls: result.suspiciousEntities.sqls?.map((item: NonNullable<NonNullable<DiagnosticResult["suspiciousEntities"]>["sqls"]>[number]) => ({
-            sql_hash: item.sqlHash,
-            digest_text: item.digestText,
-            reason: item.reason,
-          })),
-          sessions: result.suspiciousEntities.sessions?.map((item: NonNullable<NonNullable<DiagnosticResult["suspiciousEntities"]>["sessions"]>[number]) => ({
-            session_id: item.sessionId,
-            user: item.user,
-            state: item.state,
-            reason: item.reason,
-          })),
-          tables: result.suspiciousEntities.tables?.map((item: NonNullable<NonNullable<DiagnosticResult["suspiciousEntities"]>["tables"]>[number]) => ({
-            table: item.table,
-            reason: item.reason,
-          })),
-          users: result.suspiciousEntities.users?.map((item: NonNullable<NonNullable<DiagnosticResult["suspiciousEntities"]>["users"]>[number]) => ({
-            user: item.user,
-            client_host: item.clientHost,
-            reason: item.reason,
-          })),
+          sqls: result.suspiciousEntities.sqls?.map(
+            (
+              item: NonNullable<
+                NonNullable<DiagnosticResult["suspiciousEntities"]>["sqls"]
+              >[number],
+            ) => ({
+              sql_hash: item.sqlHash,
+              digest_text: item.digestText,
+              reason: item.reason,
+            }),
+          ),
+          sessions: result.suspiciousEntities.sessions?.map(
+            (
+              item: NonNullable<
+                NonNullable<DiagnosticResult["suspiciousEntities"]>["sessions"]
+              >[number],
+            ) => ({
+              session_id: item.sessionId,
+              user: item.user,
+              state: item.state,
+              reason: item.reason,
+            }),
+          ),
+          tables: result.suspiciousEntities.tables?.map(
+            (
+              item: NonNullable<
+                NonNullable<DiagnosticResult["suspiciousEntities"]>["tables"]
+              >[number],
+            ) => ({
+              table: item.table,
+              reason: item.reason,
+            }),
+          ),
+          users: result.suspiciousEntities.users?.map(
+            (
+              item: NonNullable<
+                NonNullable<DiagnosticResult["suspiciousEntities"]>["users"]
+              >[number],
+            ) => ({
+              user: item.user,
+              client_host: item.clientHost,
+              reason: item.reason,
+            }),
+          ),
         }
       : undefined,
-    evidence: result.evidence.map((item: DiagnosticResult["evidence"][number]) => ({
-      source: item.source,
-      title: item.title,
-      summary: item.summary,
-      raw_ref: item.rawRef,
-    })),
+    evidence: result.evidence.map(
+      (item: DiagnosticResult["evidence"][number]) => ({
+        source: item.source,
+        title: item.title,
+        summary: item.summary,
+        raw_ref: item.rawRef,
+      }),
+    ),
     recommended_actions: result.recommendedActions,
     limitations: result.limitations,
   };

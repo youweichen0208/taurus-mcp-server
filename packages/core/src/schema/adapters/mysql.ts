@@ -4,7 +4,6 @@ import type {
   ColumnInfo,
   DatabaseInfo,
   IndexInfo,
-  SampleResult,
   SchemaAdapter,
   TableInfo,
   TableSchema,
@@ -30,9 +29,6 @@ const TIME_COLUMN_PATTERNS = [
 ];
 
 const TIME_DATA_TYPES = new Set(["date", "datetime", "timestamp", "time", "year"]);
-const SAMPLE_MAX_FIELD_CHARS = 1024;
-const LARGE_SAMPLE_FIELD_PATTERNS = [/blob/i, /text/i];
-
 type Row = Record<string, unknown>;
 
 export type MySqlSchemaAdapterOptions = {
@@ -41,10 +37,6 @@ export type MySqlSchemaAdapterOptions = {
 
 function quoteLiteral(value: string): string {
   return `'${value.replace(/\\/g, "\\\\").replace(/'/g, "''")}'`;
-}
-
-function quoteIdentifier(value: string): string {
-  return `\`${value.replace(/`/g, "``")}\``;
 }
 
 function normalizeType(value: unknown): string {
@@ -175,30 +167,6 @@ function buildEngineHints(columns: ColumnInfo[], indexes: IndexInfo[], primaryKe
   };
 }
 
-function shouldExcludeSampleColumn(column: ColumnInfo): boolean {
-  return LARGE_SAMPLE_FIELD_PATTERNS.some((pattern) => pattern.test(column.dataType));
-}
-
-function maskSensitiveValue(value: unknown): unknown {
-  if (value === null || value === undefined) {
-    return value;
-  }
-  return "[REDACTED]";
-}
-
-function truncateFieldValue(value: unknown, maxChars: number): { value: unknown; truncated: boolean } {
-  if (typeof value !== "string") {
-    return { value, truncated: false };
-  }
-  if (value.length <= maxChars) {
-    return { value, truncated: false };
-  }
-  return {
-    value: `${value.slice(0, maxChars)}...[TRUNCATED]`,
-    truncated: true,
-  };
-}
-
 export class MySqlSchemaAdapter implements SchemaAdapter {
   private readonly connectionPool: ConnectionPool;
 
@@ -326,86 +294,6 @@ export class MySqlSchemaAdapter implements SchemaAdapter {
       rowCountEstimate,
     };
     return schema;
-  }
-
-  async sampleRows(
-    ctx: SessionContext,
-    database: string,
-    table: string,
-    n: number,
-  ): Promise<SampleResult> {
-    const schema = await this.describeTable(ctx, database, table);
-    const sampleSizeCap = Math.min(n, ctx.limits.maxRows);
-    const sampleColumns = schema.columns
-      .filter((column) => !shouldExcludeSampleColumn(column))
-      .slice(0, ctx.limits.maxColumns);
-    const columnNames = sampleColumns.map((column) => column.name);
-
-    if (columnNames.length === 0) {
-      return {
-        database,
-        table,
-        columns: [],
-        rows: [],
-        redactedColumns: [],
-        truncatedColumns: [],
-        sampleSize: 0,
-        truncated: false,
-        totalRowCount: 0,
-      };
-    }
-
-    const columnSql =
-      columnNames.length > 0 ? columnNames.map((name) => quoteIdentifier(name)).join(", ") : "*";
-
-    const sql = `
-      SELECT ${columnSql}
-      FROM ${quoteIdentifier(database)}.${quoteIdentifier(table)}
-      LIMIT ${sampleSizeCap}
-    `;
-    const rows = await this.queryObjects(ctx, sql);
-    const sensitiveColumns = new Set(schema.engineHints?.sensitiveColumns ?? []);
-    const redactedColumns = new Set<string>();
-    const truncatedColumns = new Set<string>();
-
-    const mappedRows = rows.map((row) =>
-      sampleColumns.map((column) => {
-        const rawValue = row[column.name];
-
-        if (sensitiveColumns.has(column.name)) {
-          redactedColumns.add(column.name);
-          return maskSensitiveValue(rawValue);
-        }
-
-        const truncated = truncateFieldValue(rawValue, SAMPLE_MAX_FIELD_CHARS);
-        if (truncated.truncated) {
-          truncatedColumns.add(column.name);
-        }
-        return truncated.value;
-      }),
-    );
-
-    const orderedRedactedColumns = sampleColumns
-      .map((column) => column.name)
-      .filter((name) => redactedColumns.has(name));
-    const orderedTruncatedColumns = sampleColumns
-      .map((column) => column.name)
-      .filter((name) => truncatedColumns.has(name));
-
-    return {
-      database,
-      table,
-      columns: sampleColumns.map((column) => ({
-        name: column.name,
-        type: column.dataType,
-      })),
-      rows: mappedRows,
-      redactedColumns: orderedRedactedColumns,
-      truncatedColumns: orderedTruncatedColumns,
-      sampleSize: mappedRows.length,
-      truncated: false,
-      totalRowCount: mappedRows.length,
-    };
   }
 
   private mapIndexes(rows: Row[]): IndexInfo[] {

@@ -56,7 +56,6 @@ import { type RiskLevel } from "./safety/sql-validator.js";
 import {
   createSchemaIntrospector,
   type DatabaseInfo,
-  type SampleResult,
   type SchemaIntrospector,
   type TableInfo,
   type TableSchema,
@@ -332,15 +331,6 @@ export class TaurusDBEngine {
 
   async describeTable(ctx: SessionContext, database: string, table: string): Promise<TableSchema> {
     return this.schemaIntrospector.describeTable(ctx, database, table);
-  }
-
-  async sampleRows(
-    ctx: SessionContext,
-    database: string,
-    table: string,
-    n: number,
-  ): Promise<SampleResult> {
-    return this.schemaIntrospector.sampleRows(ctx, database, table, n);
   }
 
   async inspectSql(input: InspectInput): Promise<GuardrailDecision> {

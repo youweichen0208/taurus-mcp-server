@@ -334,10 +334,6 @@ test("engine delegates context, schema, guardrail, and executor methods", async 
         calls.push(["describeTable", arg, database, table]);
         return expectedSchema;
       },
-      async sampleRows(arg, database, table, n) {
-        calls.push(["sampleRows", arg, database, table, n]);
-        return expectedSample;
-      },
     },
     guardrail: {
       async inspect(input) {
@@ -388,7 +384,6 @@ test("engine delegates context, schema, guardrail, and executor methods", async 
   assert.equal(await engine.listDatabases(ctx), expectedDatabases);
   assert.equal(await engine.listTables(ctx, "demo"), expectedTables);
   assert.equal(await engine.describeTable(ctx, "demo", "users"), expectedSchema);
-  assert.equal(await engine.sampleRows(ctx, "demo", "users", 5), expectedSample);
   assert.equal(
     await engine.inspectSql({ toolName: "execute_readonly_sql", sql: "SELECT 1", context: ctx }),
     expectedDecision,
@@ -403,7 +398,7 @@ test("engine delegates context, schema, guardrail, and executor methods", async 
   assert.equal(await engine.listFeatures(ctx), expectedFeatures);
   assert.deepEqual(await engine.explainEnhanced("SELECT 1", ctx), expectedEnhancedExplain);
 
-  assert.equal(calls.length, 16);
+  assert.equal(calls.length, 15);
   assert.deepEqual(calls[0], ["resolveContext", { datasource: "local_mysql" }, "task_001"]);
 });
 

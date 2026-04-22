@@ -109,7 +109,7 @@
 | RDS 典型入口 | 实例列表用 `DescribeDBInstances`，实例详情常见用 `DescribeDBInstanceAttribute` | 实例列表/详情常见从 `describe-db-instances` 进入，可按实例标识或过滤条件查询 | 竞品 CLI 的主入口是“实例资源管理”，而不是“对库执行 SQL” |
 | 参数与过滤 | 偏 OpenAPI 参数风格，强调 `--region`、`--profile`、大小写敏感参数；支持 `--output` 用 JMESPath 抽取并表格化 | 命令参考原生支持 `--filters`、`--query`、`--output`，过滤和脚本集成体验成熟 | 我们 CLI 也应保留明确的 `--datasource` / `--database` / `--format` / `--timeout`，但核心过滤对象应是 schema / SQL 结果，而不是云资源元数据 |
 | 输出能力 | 官方提供 JSON 返回，也支持 `--output` 提取字段并直接表格化 | 官方支持 `json`、`yaml`、`yaml-stream`、`text`、`table`，并可结合 `--query` 做客户端过滤 | 我们 CLI 第一阶段保留 `table/json/csv` 已足够；没必要复刻完整通用云 CLI 的输出矩阵 |
-| 分页 / 轮询 | 支持 `--pager` 聚合分页结果、`--waiter` 轮询结果状态 | 命令参考原生支持分页，`describe-db-instances` 可 `--no-paginate` / `--page-size` / `--max-items` | 对我们更重要的不是资源分页，而是 `query_id` 状态查询和取消能力 |
+| 分页 / 轮询 | 支持 `--pager` 聚合分页结果、`--waiter` 轮询结果状态 | 命令参考原生支持分页，`describe-db-instances` 可 `--no-paginate` / `--page-size` / `--max-items` | 对我们更重要的不是资源分页，而是 schema / explain / 受控执行这些数据面主链路 |
 | 多凭证 / 多环境 | 官方文档强调多 profile、region、endpoint 切换，适合多账号多地域管控 | 官方文档强调 named profiles、config/credentials 文件、region/output 配置 | 我们也需要稳定的数据源 profile，但重点应落在数据库连接上下文，而不是云账号编排 |
 | 更偏控制面还是数据面 | 更偏控制面。公开命令面围绕实例、网络、参数、备份、属性等 OpenAPI 操作展开 | 更偏控制面。RDS CLI 公开命令面围绕 DB instance / snapshot / parameter group 等资源操作展开 | 这正好反衬出 `taurusdb-cli` 的差异化：**不是云资源控制台 CLI，而是数据库数据面执行与治理 CLI** |
 | 与本项目最直接的差异 | 更适合“查实例、改配置、做运维编排” | 更适合“资源管理 + 自动化脚本” | 我们的首要价值应放在 `describe` / `sample` / `query` / `explain` / `exec` / `flashback` / `diagnose`，而不是补一套实例 CRUD 命令 |
@@ -256,7 +256,7 @@ taurusdb-mcp    taurusdb-cli   ← 两个前端互不依赖
 → MCP Server 解析数据源、数据库、schema 上下文
 → core.Guardrail 做最小阻断和确认判断
 → core.SqlExecutor 在数据面建立会话执行
-→ 返回 rows / columns / truncated / duration_ms / query_id
+→ 返回 rows / columns / truncated / duration_ms / task_id / sql_hash
 → AI 组织最终自然语言回答
 ```
 
@@ -493,12 +493,6 @@ export class TaurusDBEngine {
     database: string,
     table: string,
   ): Promise<TableSchema>;
-  sampleRows(
-    ctx: SessionContext,
-    database: string,
-    table: string,
-    n: number,
-  ): Promise<SampleResult>;
 
   // Guardrail
   inspectSql(input: InspectInput): Promise<GuardrailDecision>;
@@ -724,7 +718,7 @@ Schema 层负责：
 
 1. 从系统表中抽取数据库、表、字段、索引、主键、注释
 2. 输出模型友好和终端友好的结构化 schema
-3. 为上层的 `describe_table` / `sample_rows` / SQL 生成提供稳定字段语义
+3. 为上层的 `describe_table` / `execute_readonly_sql` / SQL 生成提供稳定字段语义
 
 推荐返回字段至少包括：
 
@@ -785,8 +779,8 @@ class SqlExecutor {
 - 按内核类型加载 driver adapter
 - 只允许单语句执行
 - 只读查询与写查询走不同连接池（绑定不同账号）
-- 每次执行都生成 `query_id`
-- 长查询可查询状态、可取消
+- 每次调用都生成 `task_id`
+- 对外默认返回最小有用 metadata，不把查询生命周期概念暴露给 MCP 客户端
 - 写 SQL 由服务端包裹为单次事务边界
 
 ##### 🆕 增强 EXPLAIN 的实现要点
@@ -819,7 +813,7 @@ flowchart TB
   I --> J{statement type}
   J -->|readonly| K[executeReadonly]
   J -->|mutation| L[executeMutation in transaction]
-  K --> M[生成 query_id, register tracker]
+  K --> M[注册内部执行跟踪]
   L --> M
   M --> N[执行 SQL]
   N --> O{成功?}
@@ -1091,7 +1085,7 @@ Guardrail 要把决策落成执行参数：
 
 每次调用记录:
 
-- `task_id`、`query_id`
+- `task_id`
 - `datasource`、`database`
 - `statement_type`、`risk_level`、`decision`
 - `sql_hash`(**不记 SQL 原文**,原文追溯走全量 SQL)
@@ -1143,11 +1137,8 @@ Guardrail 要把决策落成执行参数：
 | `list_databases`       | 是       | 查看数据库列表                |
 | `list_tables`          | 是       | 查看表列表                    |
 | `describe_table`       | 是       | 查看字段、索引、主键、注释    |
-| `sample_rows`          | 是       | 拉取少量样本                  |
 | `execute_readonly_sql` | 是       | 只读查询主入口                |
 | `explain_sql`          | 是       | SQL 计划和风险解释入口        |
-| `get_query_status`     | 是       | 长查询状态跟踪                |
-| `cancel_query`         | 是       | 取消仍在运行的查询            |
 | `execute_sql`          | 否       | 变更 SQL 执行入口，需显式开启 |
 
 #### 4.1.2 🆕 TaurusDB 专属 Tool（当前首阶段）
@@ -1379,12 +1370,9 @@ type DiagnosticResult = {
 | `taurusdb databases [--datasource NAME]` | 列出数据库 |
 | `taurusdb tables [--database NAME]` | 列出表 |
 | `taurusdb describe <table>` | 查看表结构 |
-| `taurusdb sample <table>` | 查看样本行 |
 | `taurusdb query "<SQL>"` | 执行只读 SQL |
 | `taurusdb exec "<SQL>"` | 执行写 SQL（需 mutations） |
 | `taurusdb explain "<SQL>"` | SQL 计划分析 |
-| `taurusdb status <query_id>` | 查询状态 |
-| `taurusdb cancel <query_id>` | 取消运行中查询 |
 | `taurusdb init` | 初始化本地配置 |
 
 #### 4.2.2 🆕 TaurusDB 专属命令
@@ -1430,11 +1418,8 @@ type DiagnosticResult = {
 | `listDatabases`            | `list_databases`           | `taurusdb databases`                          |
 | `listTables`               | `list_tables`              | `taurusdb tables`                             |
 | `describeTable`            | `describe_table`           | `taurusdb describe <table>`                   |
-| `sampleRows`               | `sample_rows`              | `taurusdb sample <table>`                     |
 | `executeReadonly`          | `execute_readonly_sql`     | `taurusdb query "<SQL>"`                      |
 | `explain`                  | `explain_sql`              | `taurusdb explain "<SQL>"`                    |
-| `getQueryStatus`           | `get_query_status`         | `taurusdb status <query_id>`                  |
-| `cancelQuery`              | `cancel_query`             | `taurusdb cancel <query_id>`                  |
 | `executeMutation`          | `execute_sql`              | `taurusdb exec "<SQL>"`                       |
 | 🆕 `getKernelInfo`         | `get_kernel_info`          | `taurusdb features`(与下一行合并展示)         |
 | 🆕 `listFeatures`          | `list_taurus_features`     | `taurusdb features`                           |
@@ -1517,7 +1502,6 @@ const server = new McpServer({
   },
   "metadata": {
     "task_id": "task-01",
-    "query_id": "qry-01",
     "sql_hash": "8bb4...",
     "statement_type": "select",
     "duration_ms": 182
@@ -1659,7 +1643,7 @@ $ taurusdb query "SELECT dt, count(*) FROM orders GROUP BY dt LIMIT 3"
 │ 2026-04-10 │ 141      │
 │ 2026-04-11 │ 156      │
 └────────────┴──────────┘
-3 rows in 182ms  |  query_id: qry-01
+3 rows in 182ms
 ```
 
 **JSON 格式（管道友好）**
@@ -1670,7 +1654,7 @@ $ taurusdb query "..." --format json
   "ok": true,
   "columns": [...],
   "rows": [...],
-  "metadata": { "query_id": "qry-01", "duration_ms": 182 }
+  "metadata": { "task_id": "task-01", "duration_ms": 182 }
 }
 ```
 
@@ -1728,7 +1712,7 @@ Hint: parallel_query is available but disabled. Enable with:
 | 单语句               | 不允许一次调用执行多条 SQL                                             |
 | 默认超时             | 每次查询都有最大执行时长                                               |
 | 结果上限             | 返回行数、列数、文本长度都有限制                                       |
-| 审计必达             | 至少记录 `task_id`、`query_id/sql_hash` 和决策结果                     |
+| 审计必达             | 至少记录 `task_id`、`sql_hash` 和决策结果                              |
 | 专属能力门控         | TaurusDB 专属写操作(回收站恢复)同样受 `TAURUSDB_ENABLE_MUTATIONS` 控制 |
 
 ### 6.2 数据库权限建议

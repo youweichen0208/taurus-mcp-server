@@ -41,11 +41,8 @@
 - `list_databases`
 - `list_tables`
 - `describe_table`
-- `sample_rows`
 - `execute_readonly_sql`
 - `explain_sql`
-- `get_query_status`
-- `cancel_query`
 - `execute_sql`
 - `init`
 - TaurusDB 首阶段专属能力：
@@ -82,7 +79,7 @@
 本项目测试的核心目标不是“某个接口能返回数据”这么简单，而是要证明下面 5 件事：
 
 1. MCP Server 作为 `stdio` 工具服务可正常启动、注册工具并稳定响应。
-2. 数据面主链路正确：schema 探查、只读执行、Explain、写 SQL、状态查询、取消查询都能工作。
+2. 数据面主链路正确：schema 探查、只读执行、Explain、写 SQL 与确认流都能工作。
 3. 安全边界正确：只读/写入分流、guardrail 阻断/确认逻辑、confirmation token 一次性校验都符合预期。
 4. 返回结构可消费：response envelope、metadata、error code、日志边界对 MCP 客户端是稳定的。
 5. TaurusDB 差异化能力的门控正确：能力探测决定专属 Tool 是否暴露，Taurus 专属功能在兼容环境下可工作。
@@ -179,7 +176,6 @@
 重点字段：
 
 - `metadata.task_id`
-- `metadata.query_id`
 - `metadata.sql_hash`
 - `metadata.statement_type`
 - `metadata.duration_ms`
@@ -211,16 +207,15 @@
 - 大结果集是否触发 `truncated`
 - `row_truncated` / `column_truncated` / `field_truncated` 是否准确
 - `redacted_columns` / `dropped_columns` / `truncated_columns` 是否符合预期
-- `sample_rows` 是否对敏感列做脱敏
 
-### 5.6 查询生命周期
+### 5.6 执行结果与异常路径
 
 需要观察：
 
-- `query_id` 是否稳定返回
-- `get_query_status` 状态是否在 `running/completed/failed/cancelled/not_found` 之间正确切换
-- `cancel_query` 对 running/completed/not_found 的行为是否合理
-- timeout、取消、连接失败时状态和错误码是否一致
+- `duration_ms` 是否稳定返回
+- timeout、连接失败、语法错误时错误码是否一致
+- Explain 和 readonly 在成功路径上的 metadata 是否稳定
+- mutation 确认前后返回结构是否一致可消费
 
 ### 5.7 日志与协议边界
 
@@ -395,11 +390,8 @@ npm run test --workspace @huaweicloud/taurusdb-mcp
 - `list_databases`
 - `list_tables`
 - `describe_table`
-- `sample_rows`
 - `execute_readonly_sql`
 - `explain_sql`
-- `get_query_status`
-- `cancel_query`
 - `execute_sql` + confirmation flow
 
 通过标准：
@@ -413,31 +405,117 @@ npm run test --workspace @huaweicloud/taurusdb-mcp
 
 目标：确认 MCP 从客户端视角可正常消费，而不只是自动化用例通过。
 
+建议先确保本地测试库是通过 compose 启动的：
+
+```bash
+docker compose -f testdata/mysql/compose.yaml up -d
+docker compose -f testdata/mysql/compose.yaml ps
+```
+
+如果你要彻底重建本地数据：
+
+```bash
+docker compose -f testdata/mysql/compose.yaml down -v
+docker compose -f testdata/mysql/compose.yaml up -d
+```
+
+建议手工验证前先准备这组环境变量：
+
+```bash
+export TAURUSDB_SQL_ENGINE=mysql
+export TAURUSDB_SQL_DATASOURCE=local_mysql
+export TAURUSDB_SQL_HOST=127.0.0.1
+export TAURUSDB_SQL_PORT=3306
+export TAURUSDB_SQL_DATABASE=taurus_mcp_test
+export TAURUSDB_SQL_USER=taurus_ro
+export TAURUSDB_SQL_PASSWORD='taurus_ro_password'
+export TAURUSDB_SQL_MUTATION_USER=taurus_rw
+export TAURUSDB_SQL_MUTATION_PASSWORD='taurus_rw_password'
+export TAURUSDB_DEFAULT_DATASOURCE=local_mysql
+export TAURUSDB_MCP_ENABLE_MUTATIONS=true
+export TAURUSDB_MCP_LOG_LEVEL=info
+```
+
+然后构建并启动 MCP：
+
+```bash
+npm run build
+node packages/mcp/dist/index.js
+```
+
 建议按下面顺序验证：
 
 1. `list_data_sources`
 2. `list_tables`，目标库为 `taurus_mcp_test`
 3. `describe_table`，目标表为 `orders`
-4. `sample_rows`，目标表为 `users`
-5. `execute_readonly_sql`，执行一个简单 `SELECT`
-6. `explain_sql`，执行一个带过滤条件的查询
-7. `execute_sql`，先不带 `confirmation_token`
-8. 使用返回的 `confirmation_token` 重试 `execute_sql`
-9. `get_query_status`
-10. `cancel_query`
+4. `execute_readonly_sql`，执行一个简单 `SELECT`
+5. `explain_sql`，执行一个带过滤条件的查询
+6. `execute_sql`，先不带 `confirmation_token`
+7. 使用返回的 `confirmation_token` 重试 `execute_sql`
+
+建议手工输入或发给 MCP client 的测试请求如下：
+
+1. `list_data_sources`
+   预期：
+   默认 datasource 为 `local_mysql`
+
+2. `list_tables`
+   参数：
+   `database=taurus_mcp_test`
+   预期：
+   返回 `orders`、`users`、`payments`、`audit_events`
+
+3. `describe_table`
+   参数：
+   `database=taurus_mcp_test`
+   `table=orders`
+   预期：
+   有 `primary_key`
+   有 `indexes`
+   `engine_hints.likely_time_columns` 包含 `created_at`
+
+4. `execute_readonly_sql`
+   SQL：
+   `SELECT id, email, phone, id_card FROM users ORDER BY id LIMIT 2`
+   预期：
+   `ok=true`
+   `metadata.statement_type=select`
+   返回结果可用于人工确认敏感字段呈现方式
+   `metadata.task_id`、`metadata.sql_hash` 存在
+
+5. `explain_sql`
+   SQL：
+   `SELECT id, status FROM orders WHERE status = 'paid' ORDER BY created_at DESC LIMIT 5`
+   预期：
+   返回 `plan`
+   返回 `guardrail`
+
+6. `execute_sql`
+   SQL：
+   `UPDATE orders SET status = 'paid' WHERE id = 1`
+   首次不带 `confirmation_token`
+   预期：
+   返回 `CONFIRMATION_REQUIRED`
+
+7. 再次执行 `execute_sql`
+   SQL 保持完全一致
+   携带上一步返回的 `confirmation_token`
+   预期：
+   返回 mutation 成功
+   `affected_rows` 合理
 
 手工 smoke 重点观察：
 
 - 是否返回标准 response envelope：`ok`、`summary`、`metadata`
 - `metadata.task_id` 是否存在
-- `metadata.query_id`、`metadata.sql_hash`、`metadata.statement_type` 是否合理
+- `metadata.sql_hash`、`metadata.statement_type`、`metadata.duration_ms` 是否合理
 - 写 SQL 是否先返回 `CONFIRMATION_REQUIRED`
 - 错误 token 是否返回 `CONFIRMATION_INVALID`
 - stdout 是否只输出协议内容，日志是否只写入 stderr
 
 通过标准：
 
-- discovery / readonly / explain / mutation / status / cancel 全部可手工复现
+- discovery / readonly / explain / mutation 全部可手工复现
 - 返回结构适合客户端消费
 - 没有出现未处理异常或协议污染
 
@@ -453,8 +531,6 @@ npm run test --workspace @huaweicloud/taurusdb-mcp
 2. `execute_readonly_sql`
 3. `explain_sql`
 4. `execute_sql` + confirmation
-5. `get_query_status`
-6. `cancel_query`
 
 第二轮验证 Taurus 专属 Tool：
 
@@ -554,10 +630,7 @@ npm run test --workspace @huaweicloud/taurusdb-mcp
 | C-02 | `list_databases` | 返回数据库列表 | 数据库名正确 |
 | C-03 | `list_tables` | 返回表/视图列表 | 表名、类型、行数估计合理 |
 | C-04 | `describe_table` | 返回列、索引、主键、engine hints | `primary_key`、`indexes`、`engine_hints` 正确 |
-| C-05 | `sample_rows` 默认采样 | 返回默认 sample size | `sample_size=5` 或约定默认值 |
-| C-06 | `sample_rows` 指定采样数 | 返回指定行数 | `sample_size` 正确 |
-| C-07 | `sample_rows` 敏感字段 | 返回脱敏结果 | `redacted_columns` 正确 |
-| C-08 | 表不存在 | 返回结构化错误 | 错误信息可定位 |
+| C-05 | 表不存在 | 返回结构化错误 | 错误信息可定位 |
 
 ### 9.4 D 组：只读 SQL 与 Explain
 
@@ -573,14 +646,14 @@ npm run test --workspace @huaweicloud/taurusdb-mcp
 | D-04 | 只读 SQL 大结果集 | 正确触发裁剪 | `truncated=true` |
 | D-05 | 非只读 SQL 调 `execute_readonly_sql` | 被阻断 | `BLOCKED_SQL` |
 | D-06 | 非法 SQL 调 `execute_readonly_sql` | 结构化报错 | `SQL_SYNTAX_ERROR` |
-| D-07 | `explain_sql` 正常执行 | 返回 plan 和 guardrail 信息 | `plan`、`guardrail`、`query_id` 正确 |
+| D-07 | `explain_sql` 正常执行 | 返回 plan 和 guardrail 信息 | `plan`、`guardrail`、`duration_ms` 正确 |
 | D-08 | 高风险 SQL 执行 Explain | Explain 可出结果，但 guardrail 风险提示存在 | `guardrail.action` 合理 |
 
 额外重点：
 
 - `metadata.sql_hash` 必须稳定返回
 - `metadata.statement_type` 必须符合 SQL 类型
-- `metadata.query_id` 必须可供后续状态查询使用
+- `metadata.duration_ms` 必须稳定返回
 
 ### 9.5 E 组：写 SQL 与 Confirmation Token
 
@@ -600,21 +673,17 @@ npm run test --workspace @huaweicloud/taurusdb-mcp
 | E-08 | 无 WHERE 的高风险 mutation | 被阻断 | guardrail 静态规则生效 |
 | E-09 | mutation 执行失败 | 回滚 | 数据未脏写 |
 
-### 9.6 F 组：Query Status、Cancel、Timeout 与异常路径
+### 9.6 F 组：Timeout 与异常路径
 
-目标：确认项目不是“只会成功返回”，而是有完整运行时状态。
+目标：确认项目不是“只会成功返回”，而是 timeout、连接失败和错误映射都稳定。
 
 核心用例：
 
 | 编号 | 用例 | 期望结果 | 关键观测点 |
 | --- | --- | --- | --- |
-| F-01 | 只读查询后查状态 | 返回 `completed` | `query_id` 关联正确 |
-| F-02 | 查询不存在的 `query_id` | 返回 `not_found` | 接口稳定 |
-| F-03 | 取消已完成查询 | 返回 `completed` 或约定结果 | 行为稳定 |
-| F-04 | 取消不存在查询 | 返回 `not_found` | 不抛未处理异常 |
-| F-05 | 制造慢查询后取消 | 返回 `cancelled` 或约定结果 | cancel path 正常 |
-| F-06 | 制造 timeout | 返回 `QUERY_TIMEOUT` | 错误码准确 |
-| F-07 | 连接失败 | 返回 `CONNECTION_FAILED` | 错误映射稳定 |
+| F-01 | 制造 timeout | 返回 `QUERY_TIMEOUT` | 错误码准确 |
+| F-02 | 连接失败 | 返回 `CONNECTION_FAILED` | 错误映射稳定 |
+| F-03 | 非法 SQL | 返回结构化错误 | `SQL_SYNTAX_ERROR` 稳定 |
 
 ### 9.7 G 组：TaurusDB 能力探测与专属 Tool
 
@@ -705,7 +774,7 @@ mysql -uroot -p < testdata/mysql/local-mysql-seed.sql
 目标：
 
 - 跑通 discovery / readonly / explain / mutation confirmation 主链路
-- 验证数据库副作用、裁剪、脱敏、状态查询、取消
+- 验证数据库副作用、裁剪、脱敏、timeout 和错误映射
 
 ### 10.3 第三步：本地手工走一遍 MCP 调用
 
@@ -715,12 +784,9 @@ mysql -uroot -p < testdata/mysql/local-mysql-seed.sql
 - `list_data_sources`
 - `list_tables`
 - `describe_table`
-- `sample_rows`
 - `execute_readonly_sql`
 - `explain_sql`
 - `execute_sql` + confirmation
-- `get_query_status`
-- `cancel_query`
 
 手工关注：
 
@@ -803,7 +869,6 @@ mysql -uroot -p < testdata/mysql/local-mysql-seed.sql
 - discovery 5 个 Tool 可用
 - readonly / explain 主链路稳定
 - mutation 默认关闭，开启后 confirmation 主链路稳定
-- `get_query_status` / `cancel_query` 行为稳定
 - stderr/stdout 边界正确
 - 错误码和 response envelope 稳定
 

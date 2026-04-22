@@ -92,11 +92,8 @@
 | `list_databases`       | 是                  | 验证 schema introspector 与 datasource context     |
 | `list_tables`          | 是                  | 验证数据库级表发现                                 |
 | `describe_table`       | 是                  | 验证列、索引、主键、engine hints                   |
-| `sample_rows`          | 是                  | 验证 sample、脱敏、裁剪、输出格式                  |
 | `execute_readonly_sql` | 是                  | 验证只读 SQL 执行、guardrail、结果裁剪、错误映射   |
 | `explain_sql`          | 是                  | 验证 explain 结果、风险摘要、metadata              |
-| `get_query_status`     | 是                  | 验证 query tracker 与 `query_id` 生命周期          |
-| `cancel_query`         | 是                  | 验证 cancel path、running/completed/not_found 行为 |
 | `execute_sql`          | 是                  | 验证 mutation 开关、确认流、写入执行、受影响行数   |
 | `init`                 | 是                  | 不依赖数据库，可本地直接测试客户端配置写入         |
 
@@ -154,13 +151,11 @@
 - `list_databases`
 - `list_tables`
 - `describe_table`
-- `sample_rows`
 
 重点看：
 
 - datasource / database 上下文是否正确
 - 表字段、索引、主键是否返回正确
-- sample 是否有截断和脱敏行为
 - 错误输入是否映射到正确错误码
 
 ### 4.3 C 组：只读 SQL 能力
@@ -177,7 +172,7 @@
 
 重点看：
 
-- `query_id`、`task_id`、`sql_hash` 是否返回
+- `task_id`、`sql_hash` 是否返回
 - `SELECT` / `SHOW` / `DESCRIBE` 是否能执行
 - 非只读 SQL 是否被 `execute_readonly_sql` 阻断
 - explain 返回的 risk summary 是否完整
@@ -201,14 +196,12 @@
 - 带正确 token 时是否执行成功
 - 同一 token 是否不可重复使用
 
-### 4.5 E 组：查询状态、取消与异常路径
+### 4.5 E 组：异常路径
 
-目标：确认运行时行为不是 demo 级别，而是可观测、可追踪。
+目标：确认运行时行为不是 demo 级别，而是 timeout、连接失败和错误映射都稳定。
 
 覆盖项：
 
-- `get_query_status`
-- `cancel_query`
 - timeout path
 - connection failure path
 - datasource not found path
@@ -503,7 +496,6 @@ claude mcp get huaweicloud-taurusdb-local
 如果这些都正常，再继续测：
 
 - `describe_table`
-- `sample_rows`
 - `execute_readonly_sql`
 - `explain_sql`
 - `execute_sql`
@@ -558,7 +550,6 @@ claude mcp remove huaweicloud-taurusdb-local
 - `list_databases`
 - `list_tables`
 - `describe_table`
-- `sample_rows`
 
 ### 7.2 只读 SQL
 
@@ -615,27 +606,18 @@ SELECT * FROM orders; DELETE FROM orders WHERE id = 1;
 - `DATASOURCE_NOT_FOUND`
 - `CONNECTION_FAILED`
 
-### 7.6 状态与取消
+### 7.6 超时与异常
 
-建议制造一条慢查询，再测：
+建议优先补测：
 
-- `get_query_status`
-- `cancel_query`
+- timeout
+- 非法 SQL
+- datasource 不存在
 
-如果本地不好构造长查询，也至少要测：
+当前 MCP 首阶段对外接口已经收口为同步返回模式：
 
-- 已完成 query 的 status
-- 不存在 query 的 status / cancel
-
-当前 MCP 还有一个现实边界：
-
-- `query_id` 目前是在执行完成后随结果返回
-- 因此纯 MCP 客户端侧很难在“查询仍在运行时”拿到 `query_id` 并发起取消
-
-所以当前本地 MySQL 自动化集成测试里，`cancel_query` 主要验证：
-
-- 已完成 query 的 `completed` 路径
-- 不存在 query 的 `not_found` 路径
+- 不再把查询生命周期管理作为 MCP 默认暴露能力
+- 手工 smoke 重点回到 `task_id`、`sql_hash`、confirmation flow 和错误映射
 
 如果要完整覆盖“运行中查询取消”，更适合后续补：
 

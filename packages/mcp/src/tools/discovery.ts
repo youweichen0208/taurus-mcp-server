@@ -9,11 +9,9 @@ import {
   resolveContext,
   toPublicDataSourceInfo,
   toPublicDatabaseInfo,
-  toPublicSampleResult,
   toPublicTableInfo,
   toPublicTableSchema,
   asRequiredString,
-  asOptionalPositiveInteger,
 } from "./common.js";
 
 export const listDataSourcesTool: ToolDefinition = {
@@ -135,44 +133,6 @@ export const describeTableTool: ToolDefinition = {
   },
 };
 
-export const sampleRowsTool: ToolDefinition = {
-  name: "sample_rows",
-  description: "Fetch a small, redacted sample of rows from a table.",
-  inputSchema: {
-    ...contextInputShape,
-    table: asRequiredStringSchema("Table name to sample from."),
-    n: asPositiveIntegerSchema("Number of sample rows to return.").optional().default(5),
-  },
-  async handler(input, deps, context): Promise<ToolResponse> {
-    try {
-      const ctx = await resolveContext(input, deps, context, true);
-      const database = requireDatabase(input.database, ctx);
-      const table = asRequiredString(input.table, "table");
-      const n = asOptionalPositiveInteger(input.n, "n") ?? 5;
-      const sample = await deps.engine.sampleRows(ctx, database, table, n);
-      return formatSuccess(
-        {
-          datasource: ctx.datasource,
-          ...toPublicSampleResult(sample),
-        },
-        {
-          summary: `Fetched ${n} sample rows from ${database}.${table}.`,
-          metadata: metadata(context.taskId),
-        },
-      );
-    } catch (error) {
-      return formatToolError(error, {
-        action: "sample_rows",
-        metadata: metadata(context.taskId),
-      });
-    }
-  },
-};
-
 function asRequiredStringSchema(description: string) {
   return z.string().trim().min(1).describe(description);
-}
-
-function asPositiveIntegerSchema(description: string) {
-  return z.number().int().positive().describe(description);
 }
