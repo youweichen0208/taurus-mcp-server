@@ -22,7 +22,9 @@ const asOfSchema = z
   .refine((value) => Boolean(value.timestamp) !== Boolean(value.relative), {
     message: "Provide exactly one of as_of.timestamp or as_of.relative.",
   })
-  .describe("Flashback point in time. Use either an absolute timestamp or a relative duration like 5m.");
+  .describe(
+    "Flashback point in time. Use either an absolute timestamp or a relative duration like 5m.",
+  );
 
 function parseColumns(input: unknown): string[] | undefined {
   if (input === undefined) {
@@ -31,12 +33,16 @@ function parseColumns(input: unknown): string[] | undefined {
   if (!Array.isArray(input)) {
     throw new Error("Invalid columns: expected an array of strings.");
   }
-  return input.map((value, index) => asRequiredString(value, `columns[${index}]`));
+  return input.map((value, index) =>
+    asRequiredString(value, `columns[${index}]`),
+  );
 }
 
 function parseAsOf(
   input: unknown,
-): { timestamp: string; relative?: never } | { timestamp?: never; relative: string } {
+):
+  | { timestamp: string; relative?: never }
+  | { timestamp?: never; relative: string } {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new Error("Invalid as_of: expected an object.");
   }
@@ -46,7 +52,9 @@ function parseAsOf(
   const relative = asOptionalString(record.relative, "as_of.relative");
 
   if (Boolean(timestamp) === Boolean(relative)) {
-    throw new Error("Provide exactly one of as_of.timestamp or as_of.relative.");
+    throw new Error(
+      "Provide exactly one of as_of.timestamp or as_of.relative.",
+    );
   }
 
   if (timestamp) {
@@ -62,11 +70,28 @@ export const flashbackQueryTool: ToolDefinition = {
     "Run a TaurusDB flashback SELECT against a historical timestamp using the normal readonly execution path.",
   inputSchema: {
     ...contextInputShape,
-    table: z.string().trim().min(1).describe("Table name to query historically."),
+    table: z
+      .string()
+      .trim()
+      .min(1)
+      .describe("Table name to query historically."),
     as_of: asOfSchema,
-    where: z.string().trim().min(1).optional().describe("Optional SQL WHERE clause body."),
-    columns: z.array(z.string().trim().min(1)).optional().describe("Optional column projection."),
-    limit: z.number().int().positive().optional().describe("Maximum rows to return."),
+    where: z
+      .string()
+      .trim()
+      .min(1)
+      .optional()
+      .describe("Optional SQL WHERE clause body."),
+    columns: z
+      .array(z.string().trim().min(1))
+      .optional()
+      .describe("Optional column projection."),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("Maximum rows to return."),
   },
   async handler(input, deps, context): Promise<ToolResponse> {
     try {
