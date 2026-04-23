@@ -16,6 +16,10 @@ test("config uses documented defaults when env is empty", () => {
   assert.equal(config.limits.maxFieldChars, 2048);
   assert.equal(config.audit.includeRawSql, false);
   assert.equal(config.audit.logPath, "~/.taurusdb-mcp/audit.jsonl");
+  assert.equal(config.slowSqlSource.taurusApi.enabled, false);
+  assert.equal(config.slowSqlSource.taurusApi.requestTimeoutMs, 5000);
+  assert.equal(config.slowSqlSource.taurusApi.defaultLookbackMinutes, 60);
+  assert.equal(config.slowSqlSource.taurusApi.maxRecords, 20);
 });
 
 test("config maps env vars into typed fields", () => {
@@ -29,6 +33,16 @@ test("config maps env vars into typed fields", () => {
     TAURUSDB_MCP_MAX_FIELD_CHARS: "999",
     TAURUSDB_MCP_AUDIT_LOG_PATH: "~/audit.jsonl",
     TAURUSDB_MCP_AUDIT_INCLUDE_RAW_SQL: "1",
+    TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_ENABLED: "true",
+    TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_ENDPOINT: "https://gaussdb.cn-north-4.myhuaweicloud.com",
+    TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_PROJECT_ID: "project-1",
+    TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_INSTANCE_ID: "instance-1",
+    TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_NODE_ID: "node-1",
+    TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_AUTH_TOKEN: "token-1",
+    TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_LANGUAGE: "en-us",
+    TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_TIMEOUT_MS: "9000",
+    TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_DEFAULT_LOOKBACK_MINUTES: "180",
+    TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_MAX_RECORDS: "40",
   });
 
   assert.equal(config.defaultDatasource, "local_mysql");
@@ -40,6 +54,16 @@ test("config maps env vars into typed fields", () => {
   assert.equal(config.limits.maxFieldChars, 999);
   assert.equal(config.audit.logPath, `${os.homedir()}/audit.jsonl`);
   assert.equal(config.audit.includeRawSql, true);
+  assert.equal(config.slowSqlSource.taurusApi.enabled, true);
+  assert.equal(config.slowSqlSource.taurusApi.endpoint, "https://gaussdb.cn-north-4.myhuaweicloud.com");
+  assert.equal(config.slowSqlSource.taurusApi.projectId, "project-1");
+  assert.equal(config.slowSqlSource.taurusApi.instanceId, "instance-1");
+  assert.equal(config.slowSqlSource.taurusApi.nodeId, "node-1");
+  assert.equal(config.slowSqlSource.taurusApi.authToken, "token-1");
+  assert.equal(config.slowSqlSource.taurusApi.language, "en-us");
+  assert.equal(config.slowSqlSource.taurusApi.requestTimeoutMs, 9000);
+  assert.equal(config.slowSqlSource.taurusApi.defaultLookbackMinutes, 180);
+  assert.equal(config.slowSqlSource.taurusApi.maxRecords, 40);
 });
 
 test("config throws on invalid boolean env values", () => {
@@ -69,11 +93,22 @@ test("redactConfigForLog redacts sensitive keys recursively", () => {
     enableMutations: false,
     limits: { maxRows: 1, maxColumns: 1, maxStatementMs: 1, maxFieldChars: 1 },
     audit: { logPath: "/tmp/audit.jsonl", includeRawSql: false },
+    slowSqlSource: {
+      taurusApi: {
+        enabled: true,
+        endpoint: "https://example.com",
+        authToken: "token_123",
+        requestTimeoutMs: 5000,
+        defaultLookbackMinutes: 60,
+        maxRecords: 20,
+      },
+    },
     token: "abc",
     nested: { password: "p1", api_key: "k1", keep: "x" },
   });
 
   assert.equal(redacted.token, "[REDACTED]");
+  assert.equal(redacted.slowSqlSource.taurusApi.authToken, "[REDACTED]");
   assert.equal(redacted.nested.password, "[REDACTED]");
   assert.equal(redacted.nested.api_key, "[REDACTED]");
   assert.equal(redacted.nested.keep, "x");

@@ -145,10 +145,10 @@ TaurusDB 的传统能力更容易先联想到管控面：
 | F-01 | 数据源初始化与配置 | 是 | 目标支持 | P0 |
 | F-02 | 数据源 / 数据库 / 表发现 | 是 | 目标支持 | P0 |
 | F-03 | 表结构查看 | 是 | 目标支持 | P0 |
-| F-04 | 样本数据预览 | 是 | 目标支持 | P0 |
+| F-04 | 会话 / 连接状态查看 | 是 | 目标支持 | P0 |
 | F-05 | 只读 SQL 执行 | 是 | 目标支持 | P0 |
 | F-06 | SQL explain 与风险解释 | 是 | 目标支持 | P0 |
-| F-07 | 查询状态跟踪与取消 | 是 | 目标支持 | P0 |
+| F-07 | 结果裁剪、脱敏与超时限制 | 是 | 目标支持 | P0 |
 | F-08 | 受控写 SQL 执行 | 是 | 目标支持 | P0 |
 | F-09 | TaurusDB 内核能力发现 | 是 | 目标支持 | P0 |
 | F-10 | TaurusDB 增强 explain | 是 | 目标支持 | P0 |
@@ -158,9 +158,9 @@ TaurusDB 的传统能力更容易先联想到管控面：
 
 | 编号 | 能力 | MCP | CLI | 优先级 |
 | --- | --- | --- | --- | --- |
-| D-01 | `diagnose_slow_query` | 规划 | 规划 | P1 |
-| D-02 | `diagnose_connection_spike` | 规划 | 规划 | P1 |
-| D-03 | `diagnose_lock_contention` | 规划 | 规划 | P1 |
+| D-01 | `diagnose_slow_query` | 已落第一版（未默认暴露） | 规划 | P1 |
+| D-02 | `diagnose_connection_spike` | 已落第一版（未默认暴露） | 规划 | P1 |
+| D-03 | `diagnose_lock_contention` | 已落第一版（未默认暴露） | 规划 | P1 |
 | D-04 | `diagnose_replication_lag` | 规划 | 规划 | P1 |
 | D-05 | `diagnose_storage_pressure` | 规划 | 规划 | P1 |
 
@@ -178,7 +178,7 @@ TaurusDB 的传统能力更容易先联想到管控面：
 | S-01 | Config / Profile Loader | 多来源读取配置、数据源和凭证 |
 | S-02 | Secret Resolver | 统一解析 secret 来源 |
 | S-03 | Session Context Resolver | 解析 datasource / database / schema / limits |
-| S-04 | Schema Introspector | 探查数据库、表、列、索引、样本 |
+| S-04 | Schema Introspector | 探查数据库、表、列、索引 |
 | S-05 | Minimal SQL Guardrail | SQL 解析、分类、最小规则校验、风险判定 |
 | S-06 | Confirmation Store | token 签发与校验 |
 | S-07 | SQL Executor | explain、执行、超时、状态追踪、取消 |
@@ -193,6 +193,14 @@ TaurusDB 的传统能力更容易先联想到管控面：
 | S-11 | Diagnostics Orchestrator | 场景化诊断编排、证据聚合、根因候选输出 |
 | S-12 | Control-plane Adapter | CES / 实例元数据等指标接入 |
 | S-13 | Data-plane Collectors | `processlist`、锁等待、复制状态、慢 SQL 等证据采集 |
+
+当前状态补充：
+
+- `processlist` collector 与 `show_processlist` 已落地
+- `diagnose_slow_query` 已落 explain-based 第一版，并可用 `digest_text` 从 `performance_schema` 解析 sample SQL；当前也会吸收 digest 级 `avg_lock_time_ms`、临时表与 scan/no-index 运行时摘要
+- `diagnose_slow_query` 已接入 TaurusDB slow-log external source 第一版，可通过外部 API 解析 sample SQL 与基础运行时指标
+- 锁等待 collector 已落地到 `diagnose_lock_contention` 第一版
+- 复制状态与 DAS / Top SQL / 全量 SQL 等后续 collector 仍待实现
 
 ### 5.3 前端专属能力
 
@@ -307,7 +315,7 @@ TaurusDB 的传统能力更容易先联想到管控面：
 - TaurusDB capability discovery、enhanced explain、flashback query 已落地
 - MCP 与 CLI 的业务逻辑统一落在 shared `core`
 - 至少 MCP 形态已能感知统一的 `task_id / sql_hash`
-- 结果截断、敏感字段脱敏、超时和取消能力都已落地
+- 结果截断、敏感字段脱敏与超时限制能力都已落地
 - 文档清楚区分 README、requirements、architecture 和 implementation plan 的职责
 
 ### 9.2 测试重点
@@ -317,7 +325,7 @@ TaurusDB 的传统能力更容易先联想到管控面：
 | Core | SQL classifier、validator、executor、confirmation、redaction、capability probe |
 | MCP | Tool schema、envelope、stdio 边界、`init` 配置写入、动态 Tool 注册 |
 | CLI | 第一阶段只要求命令模式设计收口，不要求 REPL / AI 已实现 |
-| Integration | schema 探查、只读执行、写 SQL 确认、查询取消、TaurusDB capability probe |
+| Integration | schema 探查、只读执行、`show_processlist`、写 SQL 确认、TaurusDB capability probe |
 
 ---
 

@@ -155,7 +155,7 @@ test("engine lists datasources through profile loader and marks default datasour
   assert.equal(await engine.getDefaultDataSource(), "alpha");
 });
 
-test("engine exposes scaffolded diagnostic results with a stable contract", async () => {
+test("engine exposes evidence-backed slow/connection/lock diagnosis plus stable scaffold contracts", async () => {
   const ctx = makeContext();
   const engine = new TaurusDBEngine({
     config: makeConfig(),
@@ -175,27 +175,232 @@ test("engine exposes scaffolded diagnostic results with a stable contract", asyn
     connectionPool: { async close() {} },
     schemaIntrospector: {},
     guardrail: {},
-    executor: {},
+    executor: {
+      async explain() {
+        return {
+          queryId: "qry_explain_1",
+          plan: [{ table: "orders", Extra: "Using filesort; Using temporary" }],
+          riskSummary: {
+            fullTableScanLikely: true,
+            indexHitLikely: false,
+            estimatedRows: 250_000,
+            usesTempStructure: true,
+            usesFilesort: true,
+            riskHints: ["full table scan likely"],
+          },
+          recommendations: ["Add a covering index for the filter and sort columns."],
+          durationMs: 9,
+        };
+      },
+      async executeReadonly(sql) {
+        if (sql.includes("events_statements_history_long")) {
+          return {
+            queryId: "qry_wait_history_1",
+            columns: [
+              { name: "event_name" },
+              { name: "sample_count" },
+              { name: "statement_count" },
+              { name: "total_wait_ms" },
+              { name: "avg_wait_ms" },
+            ],
+            rows: [
+              ["wait/lock/metadata/sql/mdl", 6, 2, 180.5, 30.083],
+              ["wait/io/table/sql/handler", 4, 2, 48.0, 12.0],
+            ],
+            rowCount: 2,
+            originalRowCount: 2,
+            truncated: false,
+            rowTruncated: false,
+            columnTruncated: false,
+            fieldTruncated: false,
+            redactedColumns: [],
+            droppedColumns: [],
+            truncatedColumns: [],
+            durationMs: 4,
+          };
+        }
+        if (sql.includes("events_statements_summary_by_digest")) {
+          return {
+            queryId: "qry_digest_1",
+            columns: [
+              { name: "schema_name" },
+              { name: "digest" },
+              { name: "digest_text" },
+              { name: "query_sample_text" },
+              { name: "exec_count" },
+              { name: "avg_latency_ms" },
+              { name: "max_latency_ms" },
+              { name: "avg_lock_time_ms" },
+              { name: "avg_rows_examined" },
+              { name: "avg_sort_rows" },
+              { name: "avg_tmp_tables" },
+              { name: "avg_tmp_disk_tables" },
+              { name: "select_scan_count" },
+              { name: "no_index_used_count" },
+            ],
+            rows: [
+              [
+                "demo",
+                "digest_1",
+                "SELECT * FROM orders ORDER BY created_at DESC",
+                "SELECT * FROM orders ORDER BY created_at DESC",
+                12,
+                87.5,
+                240.0,
+                25.0,
+                50000,
+                50000,
+                1,
+                1,
+                12,
+                12,
+              ],
+            ],
+            rowCount: 1,
+            originalRowCount: 1,
+            truncated: false,
+            rowTruncated: false,
+            columnTruncated: false,
+            fieldTruncated: false,
+            redactedColumns: [],
+            droppedColumns: [],
+            truncatedColumns: [],
+            durationMs: 5,
+          };
+        }
+        if (sql.includes("performance_schema.data_lock_waits")) {
+          return {
+            queryId: "qry_lock_waits_1",
+            columns: [
+              { name: "waiting_session_id" },
+              { name: "waiting_user" },
+              { name: "waiting_state" },
+              { name: "waiting_trx_state" },
+              { name: "wait_age_seconds" },
+              { name: "blocking_session_id" },
+              { name: "blocking_user" },
+              { name: "blocking_state" },
+              { name: "blocking_trx_state" },
+              { name: "blocking_trx_age_seconds" },
+              { name: "locked_schema" },
+              { name: "locked_table" },
+              { name: "locked_index" },
+              { name: "waiting_lock_type" },
+              { name: "waiting_lock_mode" },
+              { name: "blocking_lock_type" },
+              { name: "blocking_lock_mode" },
+            ],
+            rows: [
+              [301, "app_user", "update", "LOCK WAIT", 95, 201, "app_user", "updating", "RUNNING", 240, "demo", "orders", "PRIMARY", "RECORD", "X", "RECORD", "X"],
+              [302, "app_user", "update", "LOCK WAIT", 72, 201, "app_user", "updating", "RUNNING", 240, "demo", "orders", "PRIMARY", "RECORD", "X", "RECORD", "X"],
+            ],
+            rowCount: 2,
+            originalRowCount: 2,
+            truncated: false,
+            rowTruncated: false,
+            columnTruncated: false,
+            fieldTruncated: false,
+            redactedColumns: [],
+            droppedColumns: [],
+            truncatedColumns: [],
+            durationMs: 6,
+          };
+        }
+        return {
+          queryId: "qry_processlist_1",
+          columns: [
+            { name: "session_id" },
+            { name: "user" },
+            { name: "host" },
+            { name: "database_name" },
+            { name: "command" },
+            { name: "time_seconds" },
+            { name: "state" },
+          ],
+          rows: [
+            [101, "app_user", "10.0.0.8:51000", "demo", "Sleep", 95, "idle"],
+            [102, "app_user", "10.0.0.8:51001", "demo", "Query", 82, "executing"],
+            [103, "app_user", "10.0.0.8:51002", "demo", "Query", 66, "sending data"],
+          ],
+          rowCount: 3,
+          originalRowCount: 3,
+          truncated: false,
+          rowTruncated: false,
+          columnTruncated: false,
+          fieldTruncated: false,
+          redactedColumns: [],
+          droppedColumns: [],
+          truncatedColumns: [],
+          durationMs: 7,
+        };
+      },
+    },
     confirmationStore: {},
     capabilityProbe: makeCapabilityProbe(),
   });
 
-  const slowQuery = await engine.diagnoseSlowQuery({ sqlHash: "sql_hash_1" }, ctx);
+  const slowQuery = await engine.diagnoseSlowQuery(
+    { sql: "SELECT * FROM orders ORDER BY created_at DESC" },
+    ctx,
+  );
   const lockContention = await engine.diagnoseLockContention({ table: "orders" }, ctx);
   const connectionSpike = await engine.diagnoseConnectionSpike({ user: "app_user" }, ctx);
   const replicationLag = await engine.diagnoseReplicationLag({ replicaId: "replica-1" }, ctx);
   const storagePressure = await engine.diagnoseStoragePressure({ scope: "table", table: "orders" }, ctx);
 
   assert.equal(slowQuery.tool, "diagnose_slow_query");
-  assert.equal(slowQuery.status, "inconclusive");
-  assert.equal(slowQuery.rootCauseCandidates[0].confidence, "low");
-  assert.equal(slowQuery.suspiciousEntities.sqls[0].sqlHash, "sql_hash_1");
+  assert.equal(slowQuery.status, "ok");
+  assert.equal(slowQuery.severity, "high");
+  assert.equal(slowQuery.rootCauseCandidates[0].code, "slow_query_full_table_scan");
+  assert.equal(slowQuery.evidence[0].source, "explain");
+  assert.match(slowQuery.recommendedActions[0], /index/i);
+
+  const slowQueryFromDigest = await engine.diagnoseSlowQuery(
+    { digestText: "SELECT * FROM orders ORDER BY created_at DESC", maxCandidates: 10 },
+    ctx,
+  );
+  assert.equal(slowQueryFromDigest.tool, "diagnose_slow_query");
+  assert.equal(slowQueryFromDigest.status, "ok");
+  assert.equal(slowQueryFromDigest.evidence[0].source, "statement_digest");
+  assert.match(slowQueryFromDigest.evidence[0].summary, /avg_lock_time_ms=25/);
+  assert.match(slowQueryFromDigest.evidence[0].summary, /avg_rows_examined=50000/);
+  assert.ok(
+    slowQueryFromDigest.evidence.some(
+      (item) =>
+        item.source === "statement_wait_history" &&
+        /wait\/lock\/metadata\/sql\/mdl/.test(item.summary),
+    ),
+  );
+  assert.ok(
+    slowQueryFromDigest.keyFindings.some((finding) => /25 ms of lock time per execution/i.test(finding)),
+  );
+  assert.ok(
+    slowQueryFromDigest.keyFindings.some((finding) => /top nested wait event/i.test(finding)),
+  );
+  assert.ok(
+    slowQueryFromDigest.rootCauseCandidates.some((candidate) => candidate.code === "slow_query_wait_event_lock_contention"),
+  );
+  assert.ok(
+    slowQueryFromDigest.recommendedActions.some((action) => /blocker sessions|transaction scope/i.test(action)),
+  );
+  assert.equal(
+    slowQueryFromDigest.suspiciousEntities.sqls[0].digestText,
+    "SELECT * FROM orders ORDER BY created_at DESC",
+  );
 
   assert.equal(lockContention.tool, "diagnose_lock_contention");
-  assert.equal(lockContention.suspiciousEntities.tables[0].table, "orders");
+  assert.equal(lockContention.status, "ok");
+  assert.equal(lockContention.severity, "warning");
+  assert.equal(lockContention.suspiciousEntities.sessions[0].sessionId, "201");
+  assert.equal(lockContention.suspiciousEntities.tables[0].table, "demo.orders");
+  assert.equal(lockContention.evidence[0].source, "lock_waits");
 
   assert.equal(connectionSpike.tool, "diagnose_connection_spike");
+  assert.equal(connectionSpike.status, "ok");
+  assert.equal(connectionSpike.severity, "warning");
   assert.equal(connectionSpike.suspiciousEntities.users[0].user, "app_user");
+  assert.equal(connectionSpike.evidence[0].source, "processlist");
+  assert.match(connectionSpike.recommendedActions[0], /show_processlist/);
 
   assert.equal(replicationLag.tool, "diagnose_replication_lag");
   assert.match(replicationLag.summary, /scaffolded/i);
@@ -204,12 +409,106 @@ test("engine exposes scaffolded diagnostic results with a stable contract", asyn
   assert.equal(storagePressure.suspiciousEntities.tables[0].table, "orders");
 });
 
+test("engine can resolve slow-query SQL from an external Taurus slow-log source", async () => {
+  const ctx = makeContext();
+  const engine = new TaurusDBEngine({
+    config: makeConfig(),
+    profileLoader: {
+      async load() {
+        return new Map();
+      },
+      async getDefault() {
+        return undefined;
+      },
+      async get() {
+        return undefined;
+      },
+    },
+    secretResolver: {},
+    datasourceResolver: {},
+    connectionPool: { async close() {} },
+    schemaIntrospector: {},
+    guardrail: {},
+    executor: {
+      async explain() {
+        return {
+          queryId: "qry_explain_external_1",
+          plan: [],
+          riskSummary: {
+            fullTableScanLikely: false,
+            indexHitLikely: true,
+            estimatedRows: 1200,
+            usesTempStructure: false,
+            usesFilesort: false,
+            riskHints: [],
+          },
+          recommendations: [],
+          durationMs: 8,
+        };
+      },
+      async executeReadonly() {
+        return {
+          queryId: "qry_readonly_unused",
+          columns: [],
+          rows: [],
+          rowCount: 0,
+          originalRowCount: 0,
+          truncated: false,
+          rowTruncated: false,
+          columnTruncated: false,
+          fieldTruncated: false,
+          redactedColumns: [],
+          droppedColumns: [],
+          truncatedColumns: [],
+          durationMs: 3,
+        };
+      },
+    },
+    confirmationStore: {},
+    capabilityProbe: makeCapabilityProbe(),
+    slowSqlSource: {
+      async resolve() {
+        return {
+          source: "taurus_api_slow_logs",
+          sql: "SELECT * FROM orders WHERE customer_id = 42 ORDER BY created_at DESC",
+          sqlHash: "sql_hash_external_1",
+          database: "demo",
+          avgLatencyMs: 132.5,
+          avgLockTimeMs: 18.2,
+          avgRowsExamined: 4000,
+          execCount: 6,
+          rawRef: "taurus_api:/v3/project/instances/instance/slow-logs/statistics",
+        };
+      },
+    },
+  });
+
+  const result = await engine.diagnoseSlowQuery(
+    { sqlHash: "sql_hash_external_1", timeRange: { relative: "1h" } },
+    ctx,
+  );
+
+  assert.equal(result.tool, "diagnose_slow_query");
+  assert.equal(result.status, "ok");
+  assert.ok(result.evidence.some((item) => item.source === "taurus_api_slow_logs"));
+  assert.ok(
+    result.evidence.some(
+      (item) => item.source === "taurus_api_slow_logs" && /avg_lock_time_ms=18.2/.test(item.summary),
+    ),
+  );
+  assert.ok(
+    result.rootCauseCandidates.some((candidate) => candidate.code === "slow_query_lock_wait_pressure"),
+  );
+  assert.ok(
+    result.suspiciousEntities.sqls.some((entry) => entry.sqlHash === "sql_hash_external_1"),
+  );
+});
+
 test("engine delegates context, schema, guardrail, and executor methods", async () => {
   const ctx = makeContext();
   const expectedDatabases = [{ name: "demo" }];
   const expectedTables = [{ database: "demo", name: "users" }];
   const expectedSchema = { database: "demo", table: "users", columns: [], indexes: [] };
-  const expectedSample = { database: "demo", table: "users", columns: [], rows: [] };
   const expectedDecision = {
     action: "allow",
     riskLevel: "low",
@@ -390,6 +689,14 @@ test("engine delegates context, schema, guardrail, and executor methods", async 
   );
   assert.equal(await engine.explain("SELECT 1", ctx), expectedExplain);
   assert.equal(await engine.executeReadonly("SELECT 1", ctx, { maxRows: 10 }), expectedReadonly);
+  assert.equal(
+    await engine.showProcesslist({ user: "app_user", includeInfo: true, maxRows: 10 }, ctx),
+    expectedReadonly,
+  );
+  assert.equal(
+    await engine.showLockWaits({ table: "orders", includeSql: true, maxRows: 10 }, ctx),
+    expectedReadonly,
+  );
   assert.equal(await engine.executeMutation("UPDATE users SET x = 1", makeContext({ limits: { ...ctx.limits, readonly: false } }), { timeoutMs: 2000 }), expectedMutation);
   assert.equal(await engine.getQueryStatus("qry_2"), expectedStatus);
   assert.equal(await engine.cancelQuery("qry_2"), expectedCancel);
@@ -398,8 +705,12 @@ test("engine delegates context, schema, guardrail, and executor methods", async 
   assert.equal(await engine.listFeatures(ctx), expectedFeatures);
   assert.deepEqual(await engine.explainEnhanced("SELECT 1", ctx), expectedEnhancedExplain);
 
-  assert.equal(calls.length, 15);
+  assert.equal(calls.length, 17);
   assert.deepEqual(calls[0], ["resolveContext", { datasource: "local_mysql" }, "task_001"]);
+  assert.equal(calls[7][0], "executeReadonly");
+  assert.match(calls[7][1], /FROM information_schema\.PROCESSLIST/);
+  assert.equal(calls[8][0], "executeReadonly");
+  assert.match(calls[8][1], /FROM performance_schema\.data_lock_waits/);
 });
 
 test("engine issues, validates, and handles confirmation tokens", async () => {

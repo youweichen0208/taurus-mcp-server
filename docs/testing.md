@@ -41,6 +41,7 @@
 - `list_databases`
 - `list_tables`
 - `describe_table`
+- `show_processlist`
 - `execute_readonly_sql`
 - `explain_sql`
 - `execute_sql`
@@ -51,7 +52,7 @@
   - `explain_sql_enhanced`
   - `flashback_query`
 
-当前已经有 scaffold 但**不应作为默认暴露功能验收**的能力：
+当前已经实现但**不应作为默认暴露功能验收**的 diagnostics 能力：
 
 - `diagnose_slow_query`
 - `diagnose_connection_spike`
@@ -70,7 +71,7 @@
 
 - 当前测试重点是 **MCP 协议适配 + 数据面主链路 + minimal guardrail + token confirmation + TaurusDB 首阶段差异化能力**
 - CLI 不作为本轮主测试对象
-- diagnostics 当前只做 contract/scaffold 验证，不做真实诊断能力验收
+- diagnostics 当前默认仍不暴露；其中 `diagnose_connection_spike` 与 `diagnose_lock_contention` 已有 evidence-backed 第一版，可做定向验证，但不作为首阶段默认 MCP 能力验收项
 
 ---
 
@@ -122,7 +123,7 @@
 - schema introspection
 - readonly / explain / mutation 主链路
 - confirmation token
-- query status / cancel
+- `show_processlist`
 - stdout/stderr 边界
 
 ### 4.3 L2：云端 TaurusDB 联调测试
@@ -235,7 +236,7 @@
 | 环境 | 目的 | 是否必测 | 主要覆盖 |
 | --- | --- | --- | --- |
 | 无数据库本地环境 | 跑默认自动化基线 | 是 | 构建、单测、协议层、handler、registry、init |
-| 本地 MySQL | 跑主功能集成测试 | 是 | schema、readonly、explain、mutation、confirmation、cancel |
+| 本地 MySQL | 跑主功能集成测试 | 是 | schema、readonly、explain、mutation、confirmation、`show_processlist` |
 | 云端 TaurusDB | 跑兼容性与专属能力验证 | 是 | capability probe、专属 Tool、真实网络/权限/TLS |
 
 不建议只测云端。
@@ -282,7 +283,7 @@
 
 - 真实 TaurusDB 环境行为
 - 网络与 TLS
-- 长查询取消的稳定性
+- diagnostics 在真实多会话场景下的稳定性
 - 大表/大结果集下的行为
 - 能力探测与 Taurus 内核差异
 
@@ -390,6 +391,7 @@ npm run test --workspace @huaweicloud/taurusdb-mcp
 - `list_databases`
 - `list_tables`
 - `describe_table`
+- `show_processlist`
 - `execute_readonly_sql`
 - `explain_sql`
 - `execute_sql` + confirmation flow
@@ -554,27 +556,28 @@ node packages/mcp/dist/index.js
 - `explain_sql_enhanced` 可用
 - `flashback_query` 在支持环境下可用，或在不支持环境下明确不可用
 
-#### 阶段四：开始 diagnostics 第一刀
+#### 阶段四：继续推进 diagnostics
 
-目标：在 MCP 主链路稳定后，再把 diagnostics 从 scaffold 推进到真实能力。
+目标：在 MCP 主链路稳定后，把 diagnostics 从 contract 层继续推进到真实能力。
 
-建议实现顺序：
+当前已完成：
 
-1. `diagnose_slow_query`
-2. `diagnose_lock_contention`
+1. `show_processlist`
+2. `diagnose_slow_query` 第一版
+3. `diagnose_connection_spike` 第一版
+4. `diagnose_lock_contention` 第一版
 
-原因：
+下一步建议实现顺序：
 
-- 这两个在架构上更容易形成本地可验证闭环
-- 不依赖完整 CES / 云拓扑就能先落一版 collector + analyzer
+1. 为 `diagnose_slow_query` 在 Taurus slow-log external source 之外，再补 DAS / Top SQL / 更强的 wait-event / 云侧运行时关联
+2. 为 `diagnose_connection_spike` 补 CES 侧证据
+3. 为 `diagnose_lock_contention` 补 MDL / deadlock history
 
-这一阶段建议先做：
+这一阶段继续关注：
 
-- collector 最小版
-- 统一 `DiagnosticResult` 输出骨架
-- 最小 root-cause candidate
-- 证据摘要
-- 推荐动作
+- collector 最小版是否真实接线
+- `DiagnosticResult` 输出骨架是否稳定
+- 根因候选、证据摘要、推荐动作是否可消费
 
 这一阶段暂时不要做：
 
@@ -699,22 +702,26 @@ node packages/mcp/dist/index.js
 | G-04 | `flashback_query` 在支持环境下执行 | 返回历史只读数据 | 当前表数据不被修改 |
 | G-05 | 不支持 flashback 的环境调用 | 返回合理错误或不暴露 tool | 行为与 feature gate 一致 |
 
-### 9.8 H 组：Diagnostics Scaffold
+### 9.8 H 组：Diagnostics
 
-目标：确认 diagnostics 当前处于 scaffold 状态，不应被误当成已上线能力。
+目标：确认 diagnostics 当前默认不暴露，同时已落地的两条诊断链路行为稳定。
 
 核心用例：
 
 | 编号 | 用例 | 期望结果 | 关键观测点 |
 | --- | --- | --- | --- |
 | H-01 | 默认 tool list | 不出现 diagnostics tool | 当前默认注册行为正确 |
-| H-02 | 直接测试 handler contract | 返回结构化 scaffold 结果 | 结果字段稳定 |
-| H-03 | 输入缺失 | 返回输入校验错误 | 校验提示清晰 |
+| H-02 | 直接测试 `diagnose_slow_query` handler | 返回 explain-based 结构化结果 | `root_cause_candidates`、`evidence`、`recommended_actions` 稳定 |
+| H-03 | 直接测试 `diagnose_connection_spike` handler | 返回 evidence-backed 结构化结果 | `root_cause_candidates`、`evidence`、`recommended_actions` 稳定 |
+| H-04 | 直接测试 `diagnose_lock_contention` handler | 返回 evidence-backed 结构化结果 | blocker / table / evidence 摘要稳定 |
+| H-05 | 其余 diagnostics handler contract | 返回结构化 scaffold 结果 | 结果字段稳定 |
+| H-06 | 输入缺失 | 返回输入校验错误 | 校验提示清晰 |
 
 说明：
 
-- 当前 diagnostics 只能做 contract 验证
-- 不应设计真实“诊断正确率”验收项
+- diagnostics 当前默认仍不注册到 MCP tool registry
+- `diagnose_slow_query`、`diagnose_connection_spike` 与 `diagnose_lock_contention` 可做本地 evidence chain 验证
+- 不应把当前版本当成完整“诊断正确率”验收
 
 ### 9.9 I 组：`init` 命令
 

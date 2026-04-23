@@ -97,6 +97,11 @@ export { generateQueryId, generateTaskId } from "./utils/id.js";
 export { logger, withTaskContext } from "./utils/logger.js";
 export type { FlashbackInput } from "./taurus/flashback.js";
 export { createPlaceholderDiagnosticResult } from "./diagnostics/types.js";
+export {
+  buildResolveSlowSqlInput,
+  createSlowSqlSource,
+  TaurusApiSlowSqlSource,
+} from "./diagnostics/slow-sql-source.js";
 export type {
   DiagnosticBaseInput,
   DiagnosticConfidence,
@@ -116,3 +121,8 @@ export type {
   DiagnoseStoragePressureInput,
   PlaceholderDiagnosticOptions,
 } from "./diagnostics/types.js";
+export type {
+  ExternalSlowSqlSample,
+  ResolveSlowSqlInput,
+  SlowSqlSource,
+} from "./diagnostics/slow-sql-source.js";

@@ -76,7 +76,7 @@ function summarizeDiagnostic(toolLabel: string, status: string): string {
 export const diagnoseSlowQueryTool: ToolDefinition = {
   name: "diagnose_slow_query",
   description:
-    "Diagnose why a SQL statement is slow using a shared diagnostic result schema. This handler is scaffolded and currently returns a structured placeholder result.",
+    "Diagnose why a SQL statement is slow using live EXPLAIN evidence and, when digest history is available, performance_schema runtime wait evidence.",
   inputSchema: {
     ...diagnosticBaseInputShape,
     sql: diagnosticString("SQL text to diagnose."),
@@ -112,7 +112,7 @@ export const diagnoseSlowQueryTool: ToolDefinition = {
 export const diagnoseConnectionSpikeTool: ToolDefinition = {
   name: "diagnose_connection_spike",
   description:
-    "Diagnose connection spikes by combining control-plane and kernel-side evidence. This handler is scaffolded and currently returns a structured placeholder result.",
+    "Diagnose connection spikes using live processlist evidence plus structured heuristic analysis.",
   inputSchema: {
     ...diagnosticBaseInputShape,
     user: diagnosticString("Optional user to focus on."),
@@ -145,7 +145,7 @@ export const diagnoseConnectionSpikeTool: ToolDefinition = {
 export const diagnoseLockContentionTool: ToolDefinition = {
   name: "diagnose_lock_contention",
   description:
-    "Diagnose lock contention, long transactions, and DDL stalls. This handler is scaffolded and currently returns a structured placeholder result.",
+    "Diagnose InnoDB lock contention using live lock-wait evidence plus structured heuristic analysis.",
   inputSchema: {
     ...diagnosticBaseInputShape,
     table: diagnosticString("Optional table to focus on."),

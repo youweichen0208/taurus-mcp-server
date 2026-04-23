@@ -84,6 +84,32 @@ function buildRawConfigFromEnv(env: NodeJS.ProcessEnv): Record<string, unknown> 
         "TAURUSDB_MCP_AUDIT_INCLUDE_RAW_SQL",
       ),
     },
+    slowSqlSource: {
+      taurusApi: {
+        enabled: parseBoolean(
+          env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_ENABLED,
+          "TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_ENABLED",
+        ),
+        endpoint: readString(env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_ENDPOINT),
+        projectId: readString(env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_PROJECT_ID),
+        instanceId: readString(env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_INSTANCE_ID),
+        nodeId: readString(env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_NODE_ID),
+        authToken: readString(env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_AUTH_TOKEN),
+        language: readString(env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_LANGUAGE),
+        requestTimeoutMs: parseInteger(
+          env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_TIMEOUT_MS,
+          "TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_TIMEOUT_MS",
+        ),
+        defaultLookbackMinutes: parseInteger(
+          env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_DEFAULT_LOOKBACK_MINUTES,
+          "TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_DEFAULT_LOOKBACK_MINUTES",
+        ),
+        maxRecords: parseInteger(
+          env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_MAX_RECORDS,
+          "TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_MAX_RECORDS",
+        ),
+      },
+    },
   };
 }
 

@@ -46,7 +46,7 @@ MCP 当前已经具备：
 第一阶段只保留三类能力：
 
 1. 通用数据面能力
-   `list_*`、`describe_table`、`execute_readonly_sql`、`execute_sql`、`explain_sql`、`status`、`cancel`
+   `list_*`、`describe_table`、`show_processlist`、`execute_readonly_sql`、`execute_sql`、`explain_sql`
 
 2. 最小安全模型
    AST 分类、tool scope 校验、静态阻断规则、token confirmation、结果裁剪/脱敏
@@ -94,7 +94,7 @@ MCP 当前已经具备：
 - profile / secret / datasource resolution
 - schema introspection
 - guardrail 与 confirmation store
-- query execution / status / cancel
+- query execution
 - TaurusDB capability probe
 - enhanced explain 与 flashback query
 
@@ -288,11 +288,15 @@ MCP 启动流程当前应保持如下简单链路：
 后续优先级建议如下：
 
 1. 场景化诊断 Tool
-   建议优先做 5 个：
+   当前已经完成第一刀：
 
+   - `show_processlist`
    - `diagnose_slow_query`
    - `diagnose_connection_spike`
    - `diagnose_lock_contention`
+
+   下一步继续推进：
+
    - `diagnose_replication_lag`
    - `diagnose_storage_pressure`
 
@@ -305,9 +309,9 @@ MCP 启动流程当前应保持如下简单链路：
 
    验证顺序建议：
 
-   - 先实现并本地验证 `diagnose_slow_query`、`diagnose_lock_contention`
-   - 再实现 `diagnose_connection_spike`、`diagnose_storage_pressure` 的本地半闭环
-   - 最后在云端 TaurusDB 完整验证 `diagnose_replication_lag`，并补齐前两类 Tool 的 CES / TaurusDB 证据
+   - 先在 Taurus slow-log external source 的基础上，继续补齐 DAS / Top SQL 与更强的 wait-event / 云侧运行时关联
+   - 再把 `diagnose_connection_spike` 的 CES 证据、`diagnose_lock_contention` 的 MDL / deadlock 证据补齐
+   - 最后在云端 TaurusDB 完整验证 `diagnose_replication_lag`，并补齐前述 Tool 的云侧联合证据
 
    首批 schema 设计建议：
 

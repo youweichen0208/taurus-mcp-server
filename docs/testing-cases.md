@@ -767,7 +767,7 @@ export TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN='mysql://root:root@127.0.0.1:3306/mysql
   1. 要么 tool 不暴露
   2. 要么返回明确的 `UNSUPPORTED_FEATURE` 或等价错误
 
-## 3.11 K 组：Diagnostics Scaffold
+## 3.11 K 组：Diagnostics
 
 ### TC-L0-015 diagnostics tool 默认不注册
 
@@ -789,9 +789,9 @@ export TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN='mysql://root:root@127.0.0.1:3306/mysql
 - 测试步骤：
   1. 调用任意 diagnostics handler
 - 预期结果：
-  1. 返回结构化 scaffold 结果
-  2. 字段名稳定
-  3. 明确标记当前仍是 scaffold
+  1. `diagnose_connection_spike` / `diagnose_lock_contention` 返回 evidence-backed 结构化结果
+  2. 其余 diagnostics handler 返回结构化 scaffold 结果
+  3. 字段名稳定
 
 ### TC-L0-017 diagnostics 输入校验生效
 
@@ -803,6 +803,35 @@ export TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN='mysql://root:root@127.0.0.1:3306/mysql
   1. 缺少必填字段调用 diagnostics handler
 - 预期结果：
   1. 返回输入校验错误
+
+### TC-L2-006 Taurus slow-log external source 可解析慢 SQL 样本
+
+- 优先级：`P1`
+- 测试层级：`L2`
+- 测试环境：云端 TaurusDB
+- 前置条件：实例已开启慢日志；已配置 Taurus slow-log external source 所需 endpoint / project / instance / node / token
+- 测试步骤：
+  1. 构造一条可稳定进入慢日志的 SQL
+  2. 调用 `diagnose_slow_query`，只传 `sql_hash` 或 `digest_text`
+  3. 观察返回结果中的 `evidence`
+- 预期结果：
+  1. 能从外部 slow-log source 解析出 sample SQL
+  2. 结果状态为 `ok` 或至少不再因缺少原始 SQL 直接 `inconclusive`
+  3. `evidence` 中出现 Taurus slow-log external source 的摘要
+
+### TC-L2-007 Taurus slow-log external source 失败时正确降级
+
+- 优先级：`P1`
+- 测试层级：`L2`
+- 测试环境：云端 TaurusDB
+- 前置条件：故意配置错误 token / project / node，或实例未开启慢日志
+- 测试步骤：
+  1. 调用 `diagnose_slow_query`，只传 `sql_hash` 或 `digest_text`
+  2. 观察返回结果中的 `limitations`
+- 预期结果：
+  1. 不应抛未处理异常
+  2. 若 `performance_schema` 也无法提供样本，应返回可解释的 `inconclusive`
+  3. `limitations` 明确说明 external source 未能提供样本或当前覆盖有限
 
 ## 3.12 L 组：init 命令
 
@@ -967,9 +996,9 @@ export TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN='mysql://root:root@127.0.0.1:3306/mysql
 
 以下用例当前更适合作为增强项、补充项或回归项：
 
-- 长查询取消稳定性
+- diagnostics 在真实多会话场景下的稳定性
 - 大结果集极限行为
-- diagnostics scaffold contract
+- 剩余 diagnostics scaffold contract
 - 多 datasource 覆盖验证
 - `init` 的所有客户端分支
 - 高强度重复调用稳定性
