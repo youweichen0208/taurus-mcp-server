@@ -20,6 +20,7 @@ import {
   listDataSourcesTool,
   listTablesTool,
 } from "./discovery.js";
+import { showProcesslistTool } from "./processlist.js";
 import { pingTool } from "./ping.js";
 import { getKernelInfoTool, listTaurusFeaturesTool } from "./taurus/capability.js";
 import { explainSqlEnhancedTool } from "./taurus/explain.js";
@@ -135,6 +136,7 @@ export const commonToolDefinitions: ToolDefinition[] = [
   listDatabasesTool,
   listTablesTool,
   describeTableTool,
+  showProcesslistTool,
   executeReadonlySqlTool,
   explainSqlTool,
   executeSqlTool,

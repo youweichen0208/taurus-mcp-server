@@ -46,6 +46,7 @@ test("tool registry registers default MCP tools through legacy tool API", async 
       "list_databases",
       "list_tables",
       "describe_table",
+      "show_processlist",
       "execute_readonly_sql",
       "explain_sql",
       "get_kernel_info",

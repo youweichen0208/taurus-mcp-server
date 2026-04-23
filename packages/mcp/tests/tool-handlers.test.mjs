@@ -11,6 +11,7 @@ import {
   describeTableTool,
   listDataSourcesTool,
 } from "../dist/tools/discovery.js";
+import { showProcesslistTool } from "../dist/tools/processlist.js";
 import {
   getKernelInfoTool,
   listTaurusFeaturesTool,
@@ -53,6 +54,21 @@ function createDeps(engineOverrides = {}) {
         table: "orders",
         columns: [],
         indexes: [],
+      }),
+      showProcesslist: async () => ({
+        queryId: "qry_processlist_1",
+        columns: [{ name: "session_id" }, { name: "user" }, { name: "time_seconds" }],
+        rows: [[101, "app_user", 55]],
+        rowCount: 1,
+        originalRowCount: 1,
+        truncated: false,
+        rowTruncated: false,
+        columnTruncated: false,
+        fieldTruncated: false,
+        redactedColumns: [],
+        droppedColumns: [],
+        truncatedColumns: [],
+        durationMs: 18,
       }),
       inspectSql: async () => ({
         action: "allow",
@@ -180,25 +196,37 @@ function createDeps(engineOverrides = {}) {
       }),
       diagnoseSlowQuery: async (input) => ({
         tool: "diagnose_slow_query",
-        status: "inconclusive",
-        severity: "info",
-        summary: `slow query placeholder for ${input.sqlHash ?? "unknown"}`,
+        status: input.sql ? "ok" : "inconclusive",
+        severity: input.sql ? "warning" : "info",
+        summary: input.sql
+          ? "slow query diagnosis collected explain evidence"
+          : `slow query placeholder for ${input.sqlHash ?? "unknown"}`,
         diagnosisWindow: { relative: "15m" },
         rootCauseCandidates: [
           {
-            code: "diagnose_slow_query_pending",
-            title: "pending",
+            code: input.sql
+              ? "slow_query_full_table_scan"
+              : "diagnose_slow_query_pending",
+            title: input.sql ? "full scan" : "pending",
             confidence: "low",
-            rationale: "pending",
+            rationale: input.sql ? "explain evidence" : "pending",
           },
         ],
-        keyFindings: ["pending"],
+        keyFindings: [input.sql ? "explain evidence collected" : "pending"],
         suspiciousEntities: {
-          sqls: [{ sqlHash: input.sqlHash, digestText: input.digestText, reason: "focus" }],
+          sqls: [{
+            sqlHash: input.sqlHash,
+            digestText: input.digestText,
+            reason: input.sql ? "explain-backed" : "focus",
+          }],
         },
-        evidence: [{ source: "diagnostics_scaffold", title: "pending", summary: "pending" }],
-        recommendedActions: ["implement it"],
-        limitations: ["pending"],
+        evidence: [{
+          source: input.sql ? "explain" : "diagnostics_scaffold",
+          title: "pending",
+          summary: input.sql ? "live explain" : "pending",
+        }],
+        recommendedActions: [input.sql ? "review indexes" : "implement it"],
+        limitations: [input.sql ? "runtime correlation pending" : "pending"],
       }),
       diagnoseConnectionSpike: async (input) => ({
         tool: "diagnose_connection_spike",
@@ -314,6 +342,60 @@ test("describe_table validates required database context", async () => {
   assert.equal(result.ok, false);
   assert.equal(result.error.code, ErrorCode.SQL_SYNTAX_ERROR);
   assert.match(result.error.message, /Missing database/);
+});
+
+test("show_processlist passes sanitized filters to engine.showProcesslist", async () => {
+  let capturedInput;
+  const deps = createDeps({
+    showProcesslist: async (input) => {
+      capturedInput = input;
+      return {
+        queryId: "qry_processlist_1",
+        columns: [{ name: "session_id" }, { name: "user" }, { name: "time_seconds" }],
+        rows: [[101, "app_user", 55]],
+        rowCount: 1,
+        originalRowCount: 1,
+        truncated: false,
+        rowTruncated: false,
+        columnTruncated: false,
+        fieldTruncated: false,
+        redactedColumns: [],
+        droppedColumns: [],
+        truncatedColumns: [],
+        durationMs: 18,
+      };
+    },
+  });
+
+  const result = await showProcesslistTool.handler(
+    {
+      user: "app_user",
+      host: "10.0.0.8",
+      min_time_seconds: 30,
+      include_info: true,
+      max_rows: 10,
+      info_max_chars: 512,
+    },
+    deps,
+    context,
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data.datasource, "main");
+  assert.equal(result.data.row_count, 1);
+  assert.equal(result.metadata.duration_ms, 18);
+  assert.deepEqual(capturedInput, {
+    user: "app_user",
+    host: "10.0.0.8",
+    sessionDatabase: undefined,
+    command: undefined,
+    minTimeSeconds: 30,
+    maxRows: 10,
+    includeIdle: false,
+    includeSystem: false,
+    includeInfo: true,
+    infoMaxChars: 512,
+  });
 });
 
 test("execute_readonly_sql returns blocked response when guardrail blocks SQL", async () => {
@@ -572,6 +654,16 @@ test("diagnostic tool handlers return structured diagnostic payloads", async () 
   assert.equal(slowQuery.ok, true);
   assert.equal(slowQuery.data.tool, "diagnose_slow_query");
   assert.equal(slowQuery.data.suspicious_entities.sqls[0].sql_hash, "sql_hash_1");
+
+  const slowQueryWithSql = await diagnoseSlowQueryTool.handler(
+    { sql: "SELECT * FROM orders ORDER BY created_at DESC" },
+    deps,
+    context,
+  );
+  assert.equal(slowQueryWithSql.ok, true);
+  assert.equal(slowQueryWithSql.data.tool, "diagnose_slow_query");
+  assert.equal(slowQueryWithSql.data.status, "ok");
+  assert.equal(slowQueryWithSql.data.evidence[0].source, "explain");
 
   const connectionSpike = await diagnoseConnectionSpikeTool.handler(
     { user: "app_user", client_host: "10.0.0.8", compare_baseline: true },
