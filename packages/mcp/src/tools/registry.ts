@@ -23,6 +23,7 @@ import {
 import { showProcesslistTool } from "./processlist.js";
 import { pingTool } from "./ping.js";
 import { getKernelInfoTool, listTaurusFeaturesTool } from "./taurus/capability.js";
+import { diagnosticToolDefinitions } from "./taurus/diagnostics.js";
 import { explainSqlEnhancedTool } from "./taurus/explain.js";
 import { flashbackQueryTool } from "./taurus/flashback.js";
 import {
@@ -147,10 +148,11 @@ export const capabilityToolDefinitions: ToolDefinition[] = [
   listTaurusFeaturesTool,
 ];
 
-function buildDefaultToolDefinitions(probe?: ToolRegistrationProbe): ToolDefinition[] {
+function buildDefaultToolDefinitions(_config: Config, probe?: ToolRegistrationProbe): ToolDefinition[] {
   const tools: ToolDefinition[] = [
     ...commonToolDefinitions,
     ...capabilityToolDefinitions,
+    ...diagnosticToolDefinitions,
   ];
 
   if (probe?.features) {
@@ -177,7 +179,8 @@ export function registerTools(
   maybeTools?: ToolDefinition[],
 ): void {
   const probe = isToolDefinitionArray(probeOrTools) ? undefined : probeOrTools;
-  const tools = maybeTools ?? (isToolDefinitionArray(probeOrTools) ? probeOrTools : buildDefaultToolDefinitions(probe));
+  const tools = maybeTools
+    ?? (isToolDefinitionArray(probeOrTools) ? probeOrTools : buildDefaultToolDefinitions(config, probe));
 
   for (const tool of tools) {
     if (tool.exposeWhen && !tool.exposeWhen(config)) {

@@ -17,7 +17,7 @@
 - 用 Docker Compose 启一个标准本地 MySQL 测试库
 - 给 MCP 配好本地环境变量
 - 启动本地 MCP server
-- 手工验证 discovery / readonly / explain / mutation / status / cancel 主链路
+- 手工验证 discovery / readonly / explain / mutation confirmation / diagnostics 主链路
 
 ---
 
@@ -132,6 +132,11 @@ env | rg '^TAURUSDB_' | sed 's/=.*$/=<set>/'
 
 - 上面这些变量都能看到
 - 不需要在输出中显示明文密码
+
+说明：
+
+- diagnostics 本地 smoke 依赖 `PROCESS` 和 `SELECT ON performance_schema.*`
+- 仓库里的 [local-mysql-users.sql](/Users/youweichen/projects/taurus-mcp-server/testdata/mysql/local-mysql-users.sql) 已包含这两项授权
 
 ---
 
@@ -388,7 +393,157 @@ LIMIT 5
 - 返回 `guardrail`
 - 返回 `duration_ms`
 
-### 7.4.7 `execute_sql` 第一次调用
+### 7.4.6 `diagnose_slow_query`
+
+SQL：
+
+```sql
+SELECT id, remark, updated_at
+FROM orders
+WHERE remark LIKE '%order%'
+ORDER BY updated_at DESC
+LIMIT 2
+```
+
+目标：
+
+- 验证 explain-based slow-query diagnosis 在本地 MySQL 上已可用
+
+预期结果：
+
+- 返回 `tool=diagnose_slow_query`
+- 返回 `status=ok`
+- `root_cause_candidates` 至少包含：
+  - `slow_query_full_table_scan`
+  - 或 `slow_query_poor_index_usage`
+- `evidence` 中出现 `explain`
+- `recommended_actions` 非空
+
+说明：
+
+- 这条 SQL 在当前样例库上通常会命中 `ALL` + `Using where; Using filesort`
+- 这里验证的是 explain-based 根因识别，不要求它在当前小样例库上真的慢到秒级
+
+### 7.4.7 `find_top_slow_sql`
+
+先执行几次慢查询样例，给 `performance_schema` 留下 digest ranking：
+
+```sql
+SELECT id, remark, updated_at
+FROM orders
+WHERE remark LIKE '%order%'
+ORDER BY updated_at DESC
+LIMIT 2
+```
+
+然后调用 `find_top_slow_sql`：
+
+```json
+{
+  "top_n": 5,
+  "sort_by": "total_latency"
+}
+```
+
+预期结果：
+
+- 返回 `tool=find_top_slow_sql`
+- `top_sqls` 是数组
+- `evidence` 中出现 `statement_digest`
+- 如果有可疑 SQL，返回项里通常包含 `digest_text`、`sample_sql`、`avg_latency_ms`、`total_latency_ms`
+
+### 7.4.8 `diagnose_db_hotspot`
+
+调用参数：
+
+```json
+{
+  "scope": "sql"
+}
+```
+
+预期结果：
+
+- 返回 `tool=diagnose_db_hotspot`
+- 返回 `status=ok` 或在 digest 不足时返回 `inconclusive`
+- `scope=sql`
+- 若前面已执行过慢查询样例，`hotspots` 中至少出现一个 `type=sql`
+- `recommended_next_tools` 通常包含 `diagnose_slow_query`
+
+### 7.4.9 `diagnose_service_latency`
+
+这个 Tool 面向“先说症状，再找嫌疑对象”的场景，建议至少手工测 3 种症状。
+
+#### 场景 A：`latency -> slow_sql`
+
+先执行几次下面这条 SQL，给 `performance_schema` 留下 digest ranking：
+
+```sql
+SELECT id, remark, updated_at
+FROM orders
+WHERE remark LIKE '%order%'
+ORDER BY updated_at DESC
+LIMIT 2
+```
+
+再调用 `diagnose_service_latency`：
+
+```json
+{
+  "symptom": "latency"
+}
+```
+
+预期结果：
+
+- 返回 `tool=diagnose_service_latency`
+- 返回 `status=ok`
+- 返回 `suspected_category=slow_sql`
+- `top_candidates` 里至少有一个 `type=sql`
+- `recommended_next_tools` 包含 `diagnose_slow_query`
+
+#### 场景 B：`connection_growth -> connection_spike`
+
+先构造多空闲连接：
+
+```bash
+for i in $(seq 1 6); do
+  (printf "SELECT CONNECTION_ID();\n"; sleep 30) | mysql -h127.0.0.1 -P3306 -utaurus_ro -ptaurus_ro_password taurus_mcp_test >/tmp/taurus-idle-$i.log 2>&1 &
+done
+```
+
+再调用：
+
+```json
+{
+  "symptom": "connection_growth",
+  "user": "taurus_ro"
+}
+```
+
+预期结果：
+
+- 返回 `suspected_category=connection_spike`
+- `recommended_next_tools` 包含 `diagnose_connection_spike`
+- 一般也会推荐 `show_processlist`
+
+#### 场景 C：`timeout -> lock_contention`
+
+先按下面的锁竞争场景构造 blocker/waiter，再调用：
+
+```json
+{
+  "symptom": "timeout"
+}
+```
+
+预期结果：
+
+- 返回 `suspected_category=lock_contention`
+- `top_candidates` 里至少出现 `session` 或 `table`
+- `recommended_next_tools` 包含 `diagnose_lock_contention`
+
+### 7.4.10 `execute_sql` 第一次调用
 
 SQL：
 
@@ -413,7 +568,7 @@ WHERE id = 1
 - 返回 `confirmation_token`
 - 数据库此时还没实际变更
 
-### 7.4.8 `execute_sql` 第二次调用
+### 7.4.11 `execute_sql` 第二次调用
 
 SQL：
 
@@ -432,6 +587,192 @@ SQL：
 - 返回 mutation 成功
 - `affected_rows` 合理
 - 数据库里对应记录已变更
+
+### 7.4.12 diagnostics 场景化手工构造
+
+如果你想手工验证 diagnostics，而不只看自动化测试，建议按下面 4 组场景做。
+
+#### 场景 A：Slow Query
+
+最小场景直接调用 `diagnose_slow_query` 即可，用上面的 SQL。
+
+如果你想让“慢”的体感更明显，可以先往 `audit_events` 连续插入几百到几千条大 JSON 文本，再改用类似下面这种无索引过滤 + 排序 SQL：
+
+```sql
+SELECT id, payload_json, created_at
+FROM audit_events
+WHERE payload_json LIKE '%paid%'
+ORDER BY created_at DESC
+LIMIT 20
+```
+
+重点看：
+
+- 是否给出全表扫 / filesort / 弱索引候选
+- `evidence` 是否包含 `explain`
+- `recommended_actions` 是否指向索引、排序或查询 shape
+- 如果改用 `diagnose_service_latency` 且 `symptom=latency`，是否先把嫌疑收敛到 slow SQL
+
+#### 场景 B：Connection Spike
+
+开 5 到 10 个只读连接后保持空闲，再调用：
+
+```json
+{
+  "user": "taurus_ro"
+}
+```
+
+构造方式示例：
+
+```bash
+for i in $(seq 1 6); do
+  (printf "SELECT CONNECTION_ID();\n"; sleep 30) | mysql -h127.0.0.1 -P3306 -utaurus_ro -ptaurus_ro_password taurus_mcp_test >/tmp/taurus-idle-$i.log 2>&1 &
+done
+```
+
+重点看：
+
+- `root_cause_candidates` 是否出现 `connection_spike_idle_session_accumulation`
+- `evidence` 是否来自 `processlist`
+- 如果改用 `diagnose_service_latency` 且 `symptom=connection_growth`，是否先把嫌疑收敛到 connection spike
+
+#### 场景 C：Lock Contention
+
+开 3 个会话：
+
+1. 会话 A 开事务并更新 `orders` 某一行但不提交
+2. 会话 B、C 更新同一行并保持阻塞
+3. 在阻塞窗口内调用 `diagnose_lock_contention`
+
+推荐 SQL：
+
+会话 A：
+
+```sql
+BEGIN;
+UPDATE orders SET remark = 'lock-holder' WHERE order_no = 'ORD-1001';
+```
+
+会话 B：
+
+```sql
+BEGIN;
+UPDATE orders SET remark = 'lock-waiter-a' WHERE order_no = 'ORD-1001';
+```
+
+会话 C：
+
+```sql
+BEGIN;
+UPDATE orders SET remark = 'lock-waiter-b' WHERE order_no = 'ORD-1001';
+```
+
+MCP 调用参数：
+
+```json
+{
+  "table": "orders"
+}
+```
+
+重点看：
+
+- `root_cause_candidates` 是否出现 `lock_contention_single_blocker_hotspot`
+- `evidence` 是否来自 `lock_waits`
+- `suspicious_entities.tables` 是否包含 `orders`
+
+验证结束后记得在 3 个会话里执行：
+
+```sql
+ROLLBACK;
+```
+
+#### 场景 D：Storage Pressure / Temporary Disk Spill
+
+这个场景需要 root/bootstrap 权限来设置 session 变量并准备压力表。不要用 `taurus_ro` 执行下面的准备 SQL。
+
+在另一个终端执行：
+
+```bash
+mysql -h127.0.0.1 -P3306 -uroot -proot taurus_mcp_test <<'SQL'
+DROP TABLE IF EXISTS storage_pressure_events;
+
+CREATE TABLE storage_pressure_events (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  category VARCHAR(32) NOT NULL,
+  payload TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+INSERT INTO storage_pressure_events(category, payload, created_at)
+SELECT
+  CONCAT('cat-', MOD(a.n + b.n * 10 + c.n * 100, 20)),
+  RPAD(CONCAT('pressure-payload-', a.n, '-', b.n, '-', c.n), 2048, 'x'),
+  TIMESTAMP('2026-01-01') + INTERVAL (a.n + b.n * 10 + c.n * 100) SECOND
+FROM
+  (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+   UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) a
+CROSS JOIN
+  (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+   UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) b
+CROSS JOIN
+  (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4) c;
+
+SET SESSION internal_tmp_mem_storage_engine = MEMORY;
+SET SESSION tmp_table_size = 1024;
+SET SESSION max_heap_table_size = 1024;
+
+SHOW SESSION STATUS LIKE 'Created_tmp_disk_tables';
+
+SELECT category, payload, COUNT(*) AS event_count
+FROM storage_pressure_events
+GROUP BY category, payload
+ORDER BY payload
+LIMIT 5;
+
+SHOW SESSION STATUS LIKE 'Created_tmp_disk_tables';
+SQL
+```
+
+重点确认：
+
+- 第二次 `Created_tmp_disk_tables` 比第一次大
+- 上面的查询执行成功
+
+然后在 Inspector 调用 `diagnose_storage_pressure`：
+
+```json
+{
+  "scope": "table",
+  "table": "storage_pressure_events",
+  "max_candidates": 5
+}
+```
+
+预期结果：
+
+- 返回 `tool=diagnose_storage_pressure`
+- 返回 `status=ok`
+- `root_cause_candidates` 出现 `storage_pressure_tmp_disk_spill` 或 `storage_pressure_scan_heavy_sql`
+- `evidence` 同时包含 `statement_digest` 和 `table_storage`
+- `suspicious_entities.tables` 包含 `storage_pressure_events`
+
+再用同一 SQL 调 `diagnose_slow_query`：
+
+```json
+{
+  "sql": "SELECT category, payload, COUNT(*) AS event_count FROM storage_pressure_events GROUP BY category, payload ORDER BY payload LIMIT 5",
+  "max_candidates": 10
+}
+```
+
+预期结果：
+
+- 返回 `tool=diagnose_slow_query`
+- 返回 `status=ok`
+- `root_cause_candidates` 出现 `slow_query_tmp_disk_spill` 或 `slow_query_runtime_scan_pressure`
+- `evidence` 中出现 `statement_digest`
 
 ---
 
@@ -499,6 +840,7 @@ claude mcp get huaweicloud-taurusdb-local
 - Claude 是否能正确选到对应 Tool
 - Tool 返回后 Claude 是否能组织出合理结论
 - mutation 场景下是否能处理 confirmation token 过程
+- diagnostics 场景下是否能优先选择 `diagnose_*` tool，而不是退化成普通 `execute_readonly_sql`
 
 ---
 

@@ -52,8 +52,11 @@
   - `explain_sql_enhanced`
   - `flashback_query`
 
-当前已经实现但**不应作为默认暴露功能验收**的 diagnostics 能力：
+当前已经实现并默认暴露的 diagnostics 能力：
 
+- `diagnose_service_latency`
+- `diagnose_db_hotspot`
+- `find_top_slow_sql`
 - `diagnose_slow_query`
 - `diagnose_connection_spike`
 - `diagnose_lock_contention`
@@ -71,7 +74,7 @@
 
 - 当前测试重点是 **MCP 协议适配 + 数据面主链路 + minimal guardrail + token confirmation + TaurusDB 首阶段差异化能力**
 - CLI 不作为本轮主测试对象
-- diagnostics 当前默认仍不暴露；其中 `diagnose_connection_spike` 与 `diagnose_lock_contention` 已有 evidence-backed 第一版，可做定向验证，但不作为首阶段默认 MCP 能力验收项
+- diagnostics 当前默认暴露；本地阶段重点验收 explain / digest / processlist / lock waits / table storage 这类数据面证据链，云侧 CES / DAS / Top SQL / 复制链路仍放到 TaurusDB 联调阶段
 
 ---
 
@@ -162,7 +165,7 @@
 - `tools/list` 是否返回预期工具集合
 - `execute_sql` 是否只在 `enableMutations=true` 时暴露
 - TaurusDB 专属 Tool 是否仅在 probe 成功且 feature 可用时暴露
-- diagnostics Tool 当前是否默认不暴露
+- diagnostics Tool 当前是否默认暴露
 
 ### 5.2 Response Envelope
 
@@ -278,12 +281,18 @@
 当前 opt-in 自动化覆盖：
 
 - 本地 MySQL 下的 discovery / readonly / explain / mutation confirmation 主链路
+- diagnostics tools 默认暴露
+- `find_top_slow_sql` / `diagnose_db_hotspot` / `diagnose_service_latency`
+- `diagnose_slow_query` explain + digest 证据链
+- `diagnose_connection_spike` idle session buildup
+- `diagnose_lock_contention` live blocker chain
+- `diagnose_storage_pressure` temporary disk spill workload
 
 当前自动化未完全覆盖或仍需人工补测：
 
 - 真实 TaurusDB 环境行为
 - 网络与 TLS
-- diagnostics 在真实多会话场景下的稳定性
+- diagnostics 的云侧 CES / DAS / Top SQL / MDL / deadlock history 联合证据
 - 大表/大结果集下的行为
 - 能力探测与 Taurus 内核差异
 
@@ -704,24 +713,26 @@ node packages/mcp/dist/index.js
 
 ### 9.8 H 组：Diagnostics
 
-目标：确认 diagnostics 当前默认不暴露，同时已落地的两条诊断链路行为稳定。
+目标：确认 diagnostics 当前默认暴露，同时已落地的诊断链路行为稳定。
 
 核心用例：
 
 | 编号 | 用例 | 期望结果 | 关键观测点 |
 | --- | --- | --- | --- |
-| H-01 | 默认 tool list | 不出现 diagnostics tool | 当前默认注册行为正确 |
+| H-01 | 默认 tool list | 出现 diagnostics tool | 当前默认注册行为正确 |
 | H-02 | 直接测试 `diagnose_slow_query` handler | 返回 explain-based 结构化结果 | `root_cause_candidates`、`evidence`、`recommended_actions` 稳定 |
-| H-03 | 直接测试 `diagnose_connection_spike` handler | 返回 evidence-backed 结构化结果 | `root_cause_candidates`、`evidence`、`recommended_actions` 稳定 |
-| H-04 | 直接测试 `diagnose_lock_contention` handler | 返回 evidence-backed 结构化结果 | blocker / table / evidence 摘要稳定 |
-| H-05 | 其余 diagnostics handler contract | 返回结构化 scaffold 结果 | 结果字段稳定 |
-| H-06 | 输入缺失 | 返回输入校验错误 | 校验提示清晰 |
+| H-03 | 直接测试 `find_top_slow_sql` / `diagnose_db_hotspot` / `diagnose_service_latency` | 返回 symptom-entry 结构化结果 | `top_sqls`、`hotspots`、`top_candidates`、`recommended_next_tools` 稳定 |
+| H-04 | 直接测试 `diagnose_connection_spike` handler | 返回 evidence-backed 结构化结果 | `root_cause_candidates`、`evidence`、`recommended_actions` 稳定 |
+| H-05 | 直接测试 `diagnose_lock_contention` handler | 返回 evidence-backed 结构化结果 | blocker / table / evidence 摘要稳定 |
+| H-06 | 直接测试 `diagnose_storage_pressure` handler | 返回本地存储压力结构化结果 | `statement_digest`、`table_storage`、tmp disk spill / scan-heavy 候选稳定 |
+| H-07 | `diagnose_replication_lag` scaffold contract | 返回结构化 scaffold 结果 | 结果字段稳定 |
+| H-08 | 输入缺失 | 返回输入校验错误 | 校验提示清晰 |
 
 说明：
 
-- diagnostics 当前默认仍不注册到 MCP tool registry
-- `diagnose_slow_query`、`diagnose_connection_spike` 与 `diagnose_lock_contention` 可做本地 evidence chain 验证
-- 不应把当前版本当成完整“诊断正确率”验收
+- diagnostics 当前默认注册到 MCP tool registry
+- 本地可验证 `diagnose_slow_query`、`diagnose_connection_spike`、`diagnose_lock_contention`、`diagnose_storage_pressure` 的主要数据面 evidence chain
+- 不应把当前版本当成完整云侧“诊断正确率”验收；CES / DAS / Top SQL / 复制链路 / MDL / deadlock history 仍需上云补齐
 
 ### 9.9 I 组：`init` 命令
 
@@ -774,6 +785,7 @@ npm test
 ```bash
 mysql -uroot -p < testdata/mysql/local-mysql-schema.sql
 mysql -uroot -p < testdata/mysql/local-mysql-seed.sql
+mysql -uroot -p < testdata/mysql/local-mysql-users.sql
 ```
 
 然后开启本地 MySQL e2e。
@@ -794,6 +806,13 @@ mysql -uroot -p < testdata/mysql/local-mysql-seed.sql
 - `execute_readonly_sql`
 - `explain_sql`
 - `execute_sql` + confirmation
+- `find_top_slow_sql`
+- `diagnose_slow_query`
+- `diagnose_service_latency`
+- `diagnose_db_hotspot`
+- `diagnose_connection_spike`
+- `diagnose_lock_contention`
+- `diagnose_storage_pressure`
 
 手工关注：
 

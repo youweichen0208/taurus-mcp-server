@@ -57,6 +57,14 @@ test("stdio transport exposes expected tools and keeps logs on stderr", async ()
       "explain_sql",
       "get_kernel_info",
       "list_taurus_features",
+      "diagnose_service_latency",
+      "diagnose_db_hotspot",
+      "find_top_slow_sql",
+      "diagnose_slow_query",
+      "diagnose_connection_spike",
+      "diagnose_lock_contention",
+      "diagnose_replication_lag",
+      "diagnose_storage_pressure",
     ]);
 
     const ping = await client.callTool({

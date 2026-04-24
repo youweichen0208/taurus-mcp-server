@@ -17,6 +17,9 @@ import {
   listTaurusFeaturesTool,
 } from "../dist/tools/taurus/capability.js";
 import {
+  diagnoseDbHotspotTool,
+  diagnoseServiceLatencyTool,
+  findTopSlowSqlTool,
   diagnoseConnectionSpikeTool,
   diagnoseLockContentionTool,
   diagnoseReplicationLagTool,
@@ -227,6 +230,116 @@ function createDeps(engineOverrides = {}) {
         }],
         recommendedActions: [input.sql ? "review indexes" : "implement it"],
         limitations: [input.sql ? "runtime correlation pending" : "pending"],
+      }),
+      diagnoseServiceLatency: async (input) => ({
+        tool: "diagnose_service_latency",
+        status: "ok",
+        summary: "service latency points to slow sql",
+        diagnosisWindow: { relative: "15m" },
+        suspectedCategory: input.symptom === "connection_growth" ? "connection_spike" : "slow_sql",
+        topCandidates: [{
+          type: input.symptom === "connection_growth" ? "session" : "sql",
+          title:
+            input.symptom === "connection_growth"
+              ? "Connection growth around user app_user"
+              : "Top ranked SQL digest: SELECT * FROM orders ORDER BY created_at DESC",
+          confidence: "high",
+          sqlHash: input.symptom === "connection_growth" ? undefined : "sql_hash_1",
+          digestText:
+            input.symptom === "connection_growth"
+              ? undefined
+              : "SELECT * FROM orders ORDER BY created_at DESC",
+          sampleSql:
+            input.symptom === "connection_growth"
+              ? undefined
+              : "SELECT * FROM orders ORDER BY created_at DESC",
+          sessionId: input.symptom === "connection_growth" ? "101" : undefined,
+          rationale: "aggregated symptom routing result",
+        }],
+        evidence: [{ source: "statement_digest", title: "ranking", summary: "ranking" }],
+        recommendedNextTools:
+          input.symptom === "connection_growth"
+            ? ["diagnose_connection_spike", "show_processlist"]
+            : ["diagnose_slow_query"],
+        nextToolInputs:
+          input.symptom === "connection_growth"
+            ? [{
+                tool: "diagnose_connection_spike",
+                input: { user: "app_user", compare_baseline: false },
+                rationale: "inspect connection growth",
+              }]
+            : [{
+                tool: "diagnose_slow_query",
+                input: { sql: "SELECT * FROM orders ORDER BY created_at DESC" },
+                rationale: "analyze top sql",
+              }],
+        limitations: ["first version"],
+      }),
+      diagnoseDbHotspot: async (input) => ({
+        tool: "diagnose_db_hotspot",
+        status: "ok",
+        summary: "database hotspot points to sql",
+        diagnosisWindow: { relative: "15m" },
+        scope: input.scope ?? "all",
+        hotspots: [{
+          type: input.scope === "session" ? "session" : "sql",
+          title:
+            input.scope === "session"
+              ? "Connection hotspot around session 101"
+              : "Top SQL hotspot: SELECT * FROM orders ORDER BY created_at DESC",
+          confidence: "high",
+          sqlHash: input.scope === "session" ? undefined : "sql_hash_1",
+          digestText:
+            input.scope === "session"
+              ? undefined
+              : "SELECT * FROM orders ORDER BY created_at DESC",
+          sampleSql:
+            input.scope === "session"
+              ? undefined
+              : "SELECT * FROM orders ORDER BY created_at DESC",
+          sessionId: input.scope === "session" ? "101" : undefined,
+          rationale: "aggregated hotspot result",
+          evidenceSources: [input.scope === "session" ? "processlist" : "statement_digest"],
+          recommendation: "follow next tool",
+        }],
+        evidence: [{ source: "statement_digest", title: "ranking", summary: "ranking" }],
+        recommendedNextTools:
+          input.scope === "session"
+            ? ["diagnose_connection_spike", "show_processlist"]
+            : ["diagnose_slow_query"],
+        nextToolInputs:
+          input.scope === "session"
+            ? [{
+                tool: "show_processlist",
+                input: { include_idle: true, include_info: true, max_rows: 20 },
+                rationale: "review live sessions",
+              }]
+            : [{
+                tool: "diagnose_slow_query",
+                input: { sql: "SELECT * FROM orders ORDER BY created_at DESC" },
+                rationale: "analyze hotspot sql",
+              }],
+        limitations: ["first version"],
+      }),
+      findTopSlowSql: async () => ({
+        tool: "find_top_slow_sql",
+        status: "ok",
+        summary: "top slow sql found",
+        diagnosisWindow: { relative: "15m" },
+        topSqls: [{
+          sqlHash: "sql_hash_1",
+          digestText: "SELECT * FROM orders ORDER BY created_at DESC",
+          sampleSql: "SELECT * FROM orders ORDER BY created_at DESC",
+          avgLatencyMs: 87.5,
+          totalLatencyMs: 1050,
+          execCount: 12,
+          avgLockTimeMs: 25,
+          avgRowsExamined: 50000,
+          evidenceSources: ["statement_digest"],
+          recommendation: "Run diagnose_slow_query with sql or digest_text to analyze the dominant bottleneck.",
+        }],
+        evidence: [{ source: "statement_digest", title: "ranking", summary: "ranking" }],
+        limitations: ["digest-only first version"],
       }),
       diagnoseConnectionSpike: async (input) => ({
         tool: "diagnose_connection_spike",
@@ -649,6 +762,42 @@ test("diagnose_slow_query validates that at least one SQL identifier is provided
 
 test("diagnostic tool handlers return structured diagnostic payloads", async () => {
   const deps = createDeps();
+
+  const serviceLatency = await diagnoseServiceLatencyTool.handler(
+    { symptom: "latency", user: "app_user" },
+    deps,
+    context,
+  );
+  assert.equal(serviceLatency.ok, true);
+  assert.equal(serviceLatency.data.tool, "diagnose_service_latency");
+  assert.equal(serviceLatency.data.suspected_category, "slow_sql");
+  assert.equal(serviceLatency.data.top_candidates[0].type, "sql");
+  assert.equal(serviceLatency.data.next_tool_inputs[0].tool, "diagnose_slow_query");
+  assert.equal(serviceLatency.data.next_tool_inputs[0].input.sql, "SELECT * FROM orders ORDER BY created_at DESC");
+  assert.equal(serviceLatency.data.recommended_next_tools[0], "diagnose_slow_query");
+
+  const dbHotspot = await diagnoseDbHotspotTool.handler(
+    { scope: "session" },
+    deps,
+    context,
+  );
+  assert.equal(dbHotspot.ok, true);
+  assert.equal(dbHotspot.data.tool, "diagnose_db_hotspot");
+  assert.equal(dbHotspot.data.scope, "session");
+  assert.equal(dbHotspot.data.hotspots[0].type, "session");
+  assert.equal(dbHotspot.data.next_tool_inputs[0].tool, "show_processlist");
+  assert.equal(dbHotspot.data.next_tool_inputs[0].input.include_idle, true);
+  assert.equal(dbHotspot.data.recommended_next_tools.includes("diagnose_connection_spike"), true);
+
+  const topSlowSql = await findTopSlowSqlTool.handler(
+    { top_n: 5, sort_by: "total_latency" },
+    deps,
+    context,
+  );
+  assert.equal(topSlowSql.ok, true);
+  assert.equal(topSlowSql.data.tool, "find_top_slow_sql");
+  assert.equal(topSlowSql.data.top_sqls[0].digest_text, "SELECT * FROM orders ORDER BY created_at DESC");
+  assert.equal(topSlowSql.data.top_sqls[0].evidence_sources[0], "statement_digest");
 
   const slowQuery = await diagnoseSlowQueryTool.handler({ sql_hash: "sql_hash_1" }, deps, context);
   assert.equal(slowQuery.ok, true);

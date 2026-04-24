@@ -1,9 +1,12 @@
 import type {
+  DbHotspotResult,
   DataSourceInfo,
   DatabaseInfo,
   DiagnosticResult,
   EnhancedExplainResult,
   ExplainResult,
+  FindTopSlowSqlResult,
+  ServiceLatencyResult,
   FeatureMatrix,
   GuardrailDecision,
   KernelInfo,
@@ -503,6 +506,116 @@ export function toPublicDiagnosticResult(result: DiagnosticResult) {
       }),
     ),
     recommended_actions: result.recommendedActions,
+    limitations: result.limitations,
+  };
+}
+
+export function toPublicTopSlowSqlResult(result: FindTopSlowSqlResult) {
+  return {
+    tool: result.tool,
+    status: result.status,
+    summary: result.summary,
+    diagnosis_window: {
+      from: result.diagnosisWindow.from,
+      to: result.diagnosisWindow.to,
+      relative: result.diagnosisWindow.relative,
+    },
+    top_sqls: result.topSqls.map((item) => ({
+      sql_hash: item.sqlHash,
+      digest_text: item.digestText,
+      sample_sql: item.sampleSql,
+      avg_latency_ms: item.avgLatencyMs,
+      total_latency_ms: item.totalLatencyMs,
+      exec_count: item.execCount,
+      avg_lock_time_ms: item.avgLockTimeMs,
+      avg_rows_examined: item.avgRowsExamined,
+      evidence_sources: item.evidenceSources,
+      recommendation: item.recommendation,
+    })),
+    evidence: result.evidence.map((item) => ({
+      source: item.source,
+      title: item.title,
+      summary: item.summary,
+      raw_ref: item.rawRef,
+    })),
+    limitations: result.limitations,
+  };
+}
+
+export function toPublicServiceLatencyResult(result: ServiceLatencyResult) {
+  return {
+    tool: result.tool,
+    status: result.status,
+    summary: result.summary,
+    diagnosis_window: {
+      from: result.diagnosisWindow.from,
+      to: result.diagnosisWindow.to,
+      relative: result.diagnosisWindow.relative,
+    },
+    suspected_category: result.suspectedCategory,
+    top_candidates: result.topCandidates.map((item) => ({
+      type: item.type,
+      title: item.title,
+      confidence: item.confidence,
+      sql_hash: item.sqlHash,
+      digest_text: item.digestText,
+      sample_sql: item.sampleSql,
+      session_id: item.sessionId,
+      table: item.table,
+      rationale: item.rationale,
+    })),
+    evidence: result.evidence.map((item) => ({
+      source: item.source,
+      title: item.title,
+      summary: item.summary,
+      raw_ref: item.rawRef,
+    })),
+    recommended_next_tools: result.recommendedNextTools,
+    next_tool_inputs: result.nextToolInputs.map((item) => ({
+      tool: item.tool,
+      input: item.input,
+      rationale: item.rationale,
+    })),
+    limitations: result.limitations,
+  };
+}
+
+export function toPublicDbHotspotResult(result: DbHotspotResult) {
+  return {
+    tool: result.tool,
+    status: result.status,
+    summary: result.summary,
+    diagnosis_window: {
+      from: result.diagnosisWindow.from,
+      to: result.diagnosisWindow.to,
+      relative: result.diagnosisWindow.relative,
+    },
+    scope: result.scope,
+    hotspots: result.hotspots.map((item: DbHotspotResult["hotspots"][number]) => ({
+      type: item.type,
+      title: item.title,
+      confidence: item.confidence,
+      sql_hash: item.sqlHash,
+      digest_text: item.digestText,
+      sample_sql: item.sampleSql,
+      session_id: item.sessionId,
+      table: item.table,
+      rationale: item.rationale,
+      evidence_sources: item.evidenceSources,
+      recommendation: item.recommendation,
+    })),
+    evidence: result.evidence.map((item: DbHotspotResult["evidence"][number]) => ({
+      source: item.source,
+      title: item.title,
+      summary: item.summary,
+      raw_ref: item.rawRef,
+    })),
+    recommended_next_tools: result.recommendedNextTools,
+    next_tool_inputs: result.nextToolInputs.map((item) => ({
+      tool: item.tool,
+      input: item.input,
+      rationale: item.rationale,
+    })),
     limitations: result.limitations,
   };
 }

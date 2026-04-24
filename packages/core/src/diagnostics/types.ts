@@ -1,4 +1,7 @@
 export type DiagnosticToolName =
+  | "diagnose_service_latency"
+  | "diagnose_db_hotspot"
+  | "find_top_slow_sql"
   | "diagnose_slow_query"
   | "diagnose_connection_spike"
   | "diagnose_lock_contention"
@@ -29,6 +32,21 @@ export interface DiagnoseSlowQueryInput extends DiagnosticBaseInput {
   sql?: string;
   sqlHash?: string;
   digestText?: string;
+}
+
+export interface DiagnoseServiceLatencyInput extends DiagnosticBaseInput {
+  user?: string;
+  clientHost?: string;
+  symptom?: "latency" | "timeout" | "cpu" | "connection_growth";
+}
+
+export interface DiagnoseDbHotspotInput extends DiagnosticBaseInput {
+  scope?: "sql" | "table" | "session";
+}
+
+export interface FindTopSlowSqlInput extends DiagnosticBaseInput {
+  topN?: number;
+  sortBy?: "avg_latency" | "total_latency" | "exec_count" | "lock_time";
 }
 
 export interface DiagnoseConnectionSpikeInput extends DiagnosticBaseInput {
@@ -97,6 +115,58 @@ export interface DiagnosticEvidenceItem {
   rawRef?: string;
 }
 
+export interface TopSlowSqlItem {
+  sqlHash?: string;
+  digestText?: string;
+  sampleSql?: string;
+  avgLatencyMs?: number;
+  totalLatencyMs?: number;
+  execCount?: number;
+  avgLockTimeMs?: number;
+  avgRowsExamined?: number;
+  evidenceSources: string[];
+  recommendation?: string;
+}
+
+export interface DiagnosticNextToolInput {
+  tool: DiagnosticToolName | "show_processlist";
+  input: Record<string, unknown>;
+  rationale: string;
+}
+
+export type ServiceLatencySuspectedCategory =
+  | "slow_sql"
+  | "lock_contention"
+  | "connection_spike"
+  | "resource_pressure"
+  | "mixed";
+
+export interface ServiceLatencyCandidate {
+  type: "sql" | "session" | "table";
+  title: string;
+  confidence: DiagnosticConfidence;
+  sqlHash?: string;
+  digestText?: string;
+  sampleSql?: string;
+  sessionId?: string;
+  table?: string;
+  rationale: string;
+}
+
+export interface DbHotspotItem {
+  type: "sql" | "session" | "table";
+  title: string;
+  confidence: DiagnosticConfidence;
+  sqlHash?: string;
+  digestText?: string;
+  sampleSql?: string;
+  sessionId?: string;
+  table?: string;
+  rationale: string;
+  evidenceSources: string[];
+  recommendation?: string;
+}
+
 export interface DiagnosticResult {
   tool: DiagnosticToolName;
   status: DiagnosticStatus;
@@ -108,6 +178,42 @@ export interface DiagnosticResult {
   suspiciousEntities?: DiagnosticSuspiciousEntities;
   evidence: DiagnosticEvidenceItem[];
   recommendedActions: string[];
+  limitations?: string[];
+}
+
+export interface ServiceLatencyResult {
+  tool: "diagnose_service_latency";
+  status: DiagnosticStatus;
+  summary: string;
+  diagnosisWindow: DiagnosisWindow;
+  suspectedCategory: ServiceLatencySuspectedCategory;
+  topCandidates: ServiceLatencyCandidate[];
+  evidence: DiagnosticEvidenceItem[];
+  recommendedNextTools: string[];
+  nextToolInputs: DiagnosticNextToolInput[];
+  limitations?: string[];
+}
+
+export interface DbHotspotResult {
+  tool: "diagnose_db_hotspot";
+  status: DiagnosticStatus;
+  summary: string;
+  diagnosisWindow: DiagnosisWindow;
+  scope: "sql" | "table" | "session" | "all";
+  hotspots: DbHotspotItem[];
+  evidence: DiagnosticEvidenceItem[];
+  recommendedNextTools: string[];
+  nextToolInputs: DiagnosticNextToolInput[];
+  limitations?: string[];
+}
+
+export interface FindTopSlowSqlResult {
+  tool: "find_top_slow_sql";
+  status: DiagnosticStatus;
+  summary: string;
+  diagnosisWindow: DiagnosisWindow;
+  topSqls: TopSlowSqlItem[];
+  evidence: DiagnosticEvidenceItem[];
   limitations?: string[];
 }
 

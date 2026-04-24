@@ -47,6 +47,15 @@ TaurusDB 的传统能力更容易先联想到管控面：
 
 这类问题天然需要 **管控面指标 + TaurusDB 内核状态 + SQL 现场** 一起看，单靠执行 SQL 解决不了。
 
+这里的产品入口不应直接从“分析一条 SQL”开始，而应拆成两层：
+
+1. 症状入口层
+   先回答“当前是哪类对象在拖垮业务或实例”，输出 suspect SQL / session / table
+2. 根因分析层
+   拿到 suspect object 后，再进入 SQL 根因、锁等待链、连接堆积等深入分析
+
+换句话说，客户更关心“到底哪条 SQL 或哪个 blocker 在影响业务”，而不是先主动提供一条 SQL 再请求解释。
+
 ### 1.2 要解决的核心问题
 
 | 问题                     | 现状痛点               | 首版解法                                   |
@@ -158,18 +167,79 @@ TaurusDB 的传统能力更容易先联想到管控面：
 
 | 编号 | 能力 | MCP | CLI | 优先级 |
 | --- | --- | --- | --- | --- |
-| D-01 | `diagnose_slow_query` | 已落第一版（未默认暴露） | 规划 | P1 |
-| D-02 | `diagnose_connection_spike` | 已落第一版（未默认暴露） | 规划 | P1 |
-| D-03 | `diagnose_lock_contention` | 已落第一版（未默认暴露） | 规划 | P1 |
-| D-04 | `diagnose_replication_lag` | 规划 | 规划 | P1 |
-| D-05 | `diagnose_storage_pressure` | 规划 | 规划 | P1 |
+| D-01 | `find_top_slow_sql` | 已落第一版 | 规划 | P1 |
+| D-02 | `diagnose_service_latency` | 已落第一版 | 规划 | P1 |
+| D-03 | `diagnose_db_hotspot` | 已落第一版 | 规划 | P1 |
+| D-04 | `diagnose_slow_query` | 已落第一版 | 规划 | P1 |
+| D-05 | `diagnose_connection_spike` | 已落第一版 | 规划 | P1 |
+| D-06 | `diagnose_lock_contention` | 已落第一版 | 规划 | P1 |
+| D-07 | `diagnose_replication_lag` | 已落 scaffold | 规划 | P1 |
+| D-08 | `diagnose_storage_pressure` | 已落本地第一版 | 规划 | P1 |
+
+建议把这组能力进一步分成两层：
+
+| 层级 | Tool | 作用 |
+| --- | --- | --- |
+| 症状入口层 | `find_top_slow_sql` | 先回答“哪条 SQL 最值得看” |
+| 症状入口层 | `diagnose_service_latency` | 从接口慢、超时、CPU 高、连接增长等症状落到 SQL / 锁 / 连接 / 资源嫌疑 |
+| 症状入口层 | `diagnose_db_hotspot` | 回答“当前谁在拖垮实例”，输出热点 SQL / 表 / 会话 |
+| 根因分析层 | `diagnose_slow_query` | 分析一条已知可疑 SQL 为什么慢 |
+| 根因分析层 | `diagnose_connection_spike` | 分析连接暴涨背后的会话分布和 backlog 模式 |
+| 根因分析层 | `diagnose_lock_contention` | 分析 blocker / waiter 链路与热点表 |
+| 根因分析层 | `diagnose_replication_lag` | 分析复制延迟的根因 |
+| 根因分析层 | `diagnose_storage_pressure` | 分析容量 / IOPS / throughput 压力根因 |
 
 这 5 个能力建议统一满足：
 
 - 默认只读
+- 默认注册
 - 输出根因候选而不是原始指标堆砌
 - 同时消费管控面指标、内核证据、SQL 现场
 - 能给出下一步建议动作
+
+其中症状入口层至少要满足：
+
+- 不要求用户先知道 SQL 文本
+- 可以只提供时间窗口、database、user、client_host、symptom
+- 输出 suspect objects 和推荐下一步 tool
+
+建议的最小契约：
+
+```typescript
+type TopSlowSqlItem = {
+  sql_hash?: string;
+  digest_text?: string;
+  sample_sql?: string;
+  avg_latency_ms?: number;
+  total_latency_ms?: number;
+  exec_count?: number;
+  avg_lock_time_ms?: number;
+  avg_rows_examined?: number;
+  evidence_sources: string[];
+  recommendation?: string;
+};
+
+type ServiceLatencyDiagnosis = {
+  status: "ok" | "inconclusive";
+  suspected_category:
+    | "slow_sql"
+    | "lock_contention"
+    | "connection_spike"
+    | "resource_pressure"
+    | "mixed";
+  top_candidates: Array<{
+    type: "sql" | "session" | "table";
+    title: string;
+    confidence: "low" | "medium" | "high";
+    sql_hash?: string;
+    digest_text?: string;
+    session_id?: string;
+    table?: string;
+    rationale: string;
+  }>;
+  recommended_next_tools: string[];
+};
+```
 
 ### 5.2 Shared Core 能力
 
@@ -190,17 +260,25 @@ TaurusDB 的传统能力更容易先联想到管控面：
 
 | 编号 | 模块 | 责任 |
 | --- | --- | --- |
-| S-11 | Diagnostics Orchestrator | 场景化诊断编排、证据聚合、根因候选输出 |
+| S-11 | Diagnostics Orchestrator | 症状入口层编排、证据聚合、嫌疑对象排序、根因候选输出 |
 | S-12 | Control-plane Adapter | CES / 实例元数据等指标接入 |
-| S-13 | Data-plane Collectors | `processlist`、锁等待、复制状态、慢 SQL 等证据采集 |
+| S-13 | Data-plane Collectors | `processlist`、锁等待、复制状态、慢 SQL / Top SQL / digest ranking 等证据采集 |
 
 当前状态补充：
 
 - `processlist` collector 与 `show_processlist` 已落地
 - `diagnose_slow_query` 已落 explain-based 第一版，并可用 `digest_text` 从 `performance_schema` 解析 sample SQL；当前也会吸收 digest 级 `avg_lock_time_ms`、临时表与 scan/no-index 运行时摘要
 - `diagnose_slow_query` 已接入 TaurusDB slow-log external source 第一版，可通过外部 API 解析 sample SQL 与基础运行时指标
+- `find_top_slow_sql`、`diagnose_service_latency`、`diagnose_db_hotspot` 已落本地第一版，可基于 digest ranking、锁等待和 processlist 做症状入口路由
 - 锁等待 collector 已落地到 `diagnose_lock_contention` 第一版
+- `diagnose_storage_pressure` 已落本地第一版，可基于 digest counters 与 `information_schema.TABLES` 识别 tmp disk spill、scan-heavy SQL 和 table storage footprint
 - 复制状态与 DAS / Top SQL / 全量 SQL 等后续 collector 仍待实现
+
+下一阶段的推荐优先级应改成：
+
+1. 先落 `find_top_slow_sql`
+2. 再落 `diagnose_service_latency`
+3. 最后把 `diagnose_slow_query` 等现有二级分析器串进症状入口层
 
 ### 5.3 前端专属能力
 

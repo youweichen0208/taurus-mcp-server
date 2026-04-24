@@ -1224,13 +1224,21 @@ Guardrail 要把决策落成执行参数：
 - `show_processlist`: 直接返回受限 processlist 视图，用于连接暴涨、锁等待、长查询排查
 - 它不是 `diagnose_connection_spike` 的替代品，而是后者可复用的底层证据入口
 
-| Tool | 场景 | 主要证据源 | 验证级别 |
-| --- | --- | --- | --- |
-| `diagnose_slow_query` | “这条 SQL 为什么慢” | `explain_sql_enhanced`、慢 SQL / Top SQL、表规模、索引、NDP/PQ 机会 | `local-verifiable` |
-| `diagnose_connection_spike` | “为什么连接数突然暴涨” | CES 连接指标、`processlist`、用户/IP 分布、连接参数 | `local-partial` |
-| `diagnose_lock_contention` | “为什么锁住了 / DDL 卡住了” | 锁等待视图、死锁信息、长事务、MDL、阻塞链 | `local-verifiable` |
-| `diagnose_replication_lag` | “为什么主从延迟 / 只读节点落后” | CES 延迟指标、复制状态、长事务、大事务、回放压力 | `cloud-required` |
-| `diagnose_storage_pressure` | “为什么磁盘 / IOPS / 吞吐有压力” | CES 存储指标、临时表、排序落盘、扫描/排序 SQL | `local-partial` |
+建议把诊断线拆成两层：
+
+- 症状入口层：先找 suspect SQL / session / table
+- 根因分析层：再分析 suspect object 为什么会导致问题
+
+| Tool | 层级 | 场景 | 主要证据源 | 验证级别 |
+| --- | --- | --- | --- | --- |
+| `find_top_slow_sql` | 症状入口层 | “哪条 SQL 最值得看” | digest ranking、Top SQL、慢日志样本、外部慢 SQL 源 | `local-partial` |
+| `diagnose_service_latency` | 症状入口层 | “为什么接口慢 / timeout / CPU 高” | Top SQL、`processlist`、锁等待、控制面指标 | `local-partial` |
+| `diagnose_db_hotspot` | 症状入口层 | “当前谁在拖垮实例” | Top SQL、热点表、热点会话、控制面指标 | `local-partial` |
+| `diagnose_slow_query` | 根因分析层 | “这条已知可疑 SQL 为什么慢” | `explain_sql_enhanced`、慢 SQL / Top SQL、表规模、索引、NDP/PQ 机会 | `local-verifiable` |
+| `diagnose_connection_spike` | 根因分析层 | “为什么连接数突然暴涨” | CES 连接指标、`processlist`、用户/IP 分布、连接参数 | `local-partial` |
+| `diagnose_lock_contention` | 根因分析层 | “为什么锁住了 / DDL 卡住了” | 锁等待视图、死锁信息、长事务、MDL、阻塞链 | `local-verifiable` |
+| `diagnose_replication_lag` | 根因分析层 | “为什么主从延迟 / 只读节点落后” | CES 延迟指标、复制状态、长事务、大事务、回放压力 | `cloud-required` |
+| `diagnose_storage_pressure` | 根因分析层 | “为什么磁盘 / IOPS / 吞吐有压力” | CES 存储指标、临时表、排序落盘、扫描/排序 SQL | `local-partial` |
 
 验证级别定义：
 
@@ -1247,6 +1255,8 @@ Guardrail 要把决策落成执行参数：
 
 当前第一版可先按分层落地：
 
+- `find_top_slow_sql`：先基于 digest ranking / Top SQL / Taurus slow-log external source 第一版做 suspect SQL 发现
+- `diagnose_service_latency`：先把 slow SQL / 锁 / 连接三类嫌疑串起来做入口层编排
 - `diagnose_slow_query`：先基于 `EXPLAIN`、`performance_schema` digest / wait history 做本地可验证诊断，再补 Taurus slow-log external source、DAS / Top SQL 与更强的云侧运行时关联
 - `diagnose_connection_spike`：先基于 `processlist` 做本地可验证的 evidence-backed 诊断，再逐步补 CES 指标
 - `diagnose_lock_contention`：先基于 `performance_schema.data_lock_waits` + `INNODB_TRX` 做 InnoDB 锁等待诊断，后续再补 MDL / 死锁历史
@@ -1277,7 +1287,26 @@ type DiagnosticBaseInput = {
 - `include_raw_evidence = false`
 - `max_candidates = 3`
 
-各 Tool 的专属输入建议如下：
+症状入口层建议的输入如下：
+
+```typescript
+type FindTopSlowSqlInput = DiagnosticBaseInput & {
+  top_n?: number;
+  sort_by?: "avg_latency" | "total_latency" | "exec_count" | "lock_time";
+};
+
+type DiagnoseServiceLatencyInput = DiagnosticBaseInput & {
+  user?: string;
+  client_host?: string;
+  symptom?: "latency" | "timeout" | "cpu" | "connection_growth";
+};
+
+type DiagnoseDbHotspotInput = DiagnosticBaseInput & {
+  scope?: "sql" | "table" | "session";
+};
+```
+
+根因分析层各 Tool 的专属输入建议如下：
 
 ```typescript
 type DiagnoseSlowQueryInput = DiagnosticBaseInput & {

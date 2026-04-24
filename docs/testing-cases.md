@@ -217,7 +217,7 @@ export TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN='mysql://root:root@127.0.0.1:3306/mysql
 - 预期结果：
   1. 工具列表中有 `execute_sql`
 
-### TC-L0-010 diagnostics Tool 默认不暴露
+### TC-L0-010 diagnostics Tool 默认暴露
 
 - 优先级：`P1`
 - 测试层级：`L0`
@@ -226,7 +226,8 @@ export TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN='mysql://root:root@127.0.0.1:3306/mysql
 - 测试步骤：
   1. 执行 `tools/list`
 - 预期结果：
-  1. 工具列表中不出现 5 个 diagnostics tool
+  1. 工具列表中出现 diagnostics tools：
+     `diagnose_service_latency`、`diagnose_db_hotspot`、`find_top_slow_sql`、`diagnose_slow_query`、`diagnose_connection_spike`、`diagnose_lock_contention`、`diagnose_replication_lag`、`diagnose_storage_pressure`
 
 ### TC-L0-011 日志只输出到 stderr
 
@@ -769,7 +770,7 @@ export TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN='mysql://root:root@127.0.0.1:3306/mysql
 
 ## 3.11 K 组：Diagnostics
 
-### TC-L0-015 diagnostics tool 默认不注册
+### TC-L0-015 diagnostics tool 默认注册
 
 - 优先级：`P1`
 - 测试层级：`L0`
@@ -778,7 +779,7 @@ export TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN='mysql://root:root@127.0.0.1:3306/mysql
 - 测试步骤：
   1. 执行 `tools/list`
 - 预期结果：
-  1. 默认工具集中不出现 diagnostics tool
+  1. 默认工具集中出现 diagnostics tool
 
 ### TC-L0-016 diagnostics handler contract 稳定
 
@@ -789,8 +790,8 @@ export TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN='mysql://root:root@127.0.0.1:3306/mysql
 - 测试步骤：
   1. 调用任意 diagnostics handler
 - 预期结果：
-  1. `diagnose_connection_spike` / `diagnose_lock_contention` 返回 evidence-backed 结构化结果
-  2. 其余 diagnostics handler 返回结构化 scaffold 结果
+  1. `diagnose_service_latency`、`diagnose_db_hotspot`、`find_top_slow_sql`、`diagnose_slow_query`、`diagnose_connection_spike`、`diagnose_lock_contention`、`diagnose_storage_pressure` 返回结构化结果
+  2. `diagnose_replication_lag` 允许返回结构化 scaffold 结果
   3. 字段名稳定
 
 ### TC-L0-017 diagnostics 输入校验生效
@@ -803,6 +804,157 @@ export TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN='mysql://root:root@127.0.0.1:3306/mysql
   1. 缺少必填字段调用 diagnostics handler
 - 预期结果：
   1. 返回输入校验错误
+
+### TC-L1-003 local MySQL diagnose_slow_query 返回 explain-based 诊断
+
+- 优先级：`P1`
+- 测试层级：`L1`
+- 测试环境：本地 MySQL
+- 前置条件：diagnostics 使用默认配置即可
+- 测试步骤：
+  1. 调用 `diagnose_slow_query`
+  2. 传入无索引过滤 + 排序 SQL，例如 `orders.remark LIKE '%order%' ORDER BY updated_at DESC`
+- 预期结果：
+  1. 返回 `status=ok`
+  2. `root_cause_candidates` 中出现全表扫或弱索引候选
+  3. `evidence` 中出现 `explain`
+
+### TC-L1-043 local MySQL diagnose_service_latency 将 latency 收敛到 slow SQL
+
+- 优先级：`P1`
+- 测试层级：`L1`
+- 测试环境：本地 MySQL
+- 前置条件：先执行数次无索引过滤 + 排序 SQL，确保 digest ranking 中有可疑 SQL
+- 测试步骤：
+  1. 调用 `diagnose_service_latency`
+  2. 传入 `symptom=latency`
+- 预期结果：
+  1. 返回 `status=ok`
+  2. 返回 `suspected_category=slow_sql`
+  3. `top_candidates` 中至少有一个 `type=sql`
+  4. `recommended_next_tools` 包含 `diagnose_slow_query`
+
+### TC-L1-044 local MySQL diagnose_service_latency 将 connection_growth 收敛到 connection spike
+
+- 优先级：`P1`
+- 测试层级：`L1`
+- 测试环境：本地 MySQL
+- 前置条件：先制造多个空闲只读连接
+- 测试步骤：
+  1. 调用 `diagnose_service_latency`
+  2. 传入 `symptom=connection_growth` 和目标 `user`
+- 预期结果：
+  1. 返回 `status=ok`
+  2. 返回 `suspected_category=connection_spike`
+  3. `recommended_next_tools` 包含 `diagnose_connection_spike`
+
+### TC-L1-045 local MySQL diagnose_service_latency 将 timeout 收敛到 lock contention
+
+- 优先级：`P1`
+- 测试层级：`L1`
+- 测试环境：本地 MySQL
+- 前置条件：先制造 blocker/waiter 锁等待链
+- 测试步骤：
+  1. 调用 `diagnose_service_latency`
+  2. 传入 `symptom=timeout`
+- 预期结果：
+  1. 返回 `status=ok`
+  2. 返回 `suspected_category=lock_contention`
+  3. `recommended_next_tools` 包含 `diagnose_lock_contention`
+
+### TC-L1-046 local MySQL diagnose_db_hotspot 返回 SQL 热点
+
+- 优先级：`P1`
+- 测试层级：`L1`
+- 测试环境：本地 MySQL
+- 前置条件：先执行数次无索引过滤 + 排序 SQL，确保 digest ranking 中有热点 SQL
+- 测试步骤：
+  1. 调用 `diagnose_db_hotspot`
+  2. 传入 `scope=sql`
+- 预期结果：
+  1. 返回 `status=ok`
+  2. 返回 `scope=sql`
+  3. `hotspots` 中至少有一个 `type=sql`
+  4. `recommended_next_tools` 包含 `diagnose_slow_query`
+
+### TC-L1-047 local MySQL diagnose_storage_pressure 识别真实 tmp disk spill workload
+
+- 优先级：`P1`
+- 测试层级：`L1`
+- 测试环境：本地 MySQL
+- 前置条件：使用 root/bootstrap 账号创建 `storage_pressure_events` 压力表
+- 测试步骤：
+  1. 将 session 的 `internal_tmp_mem_storage_engine` 设为 `MEMORY`
+  2. 将 `tmp_table_size` / `max_heap_table_size` 设为较小值
+  3. 执行 TEXT 列参与 `GROUP BY` + `ORDER BY` 的查询，确认 `Created_tmp_disk_tables` 增长
+  4. 调用 `diagnose_storage_pressure`，传入 `scope=table` 和 `table=storage_pressure_events`
+  5. 再用同一 SQL 调用 `diagnose_slow_query`
+- 参考准备 SQL：
+
+```sql
+DROP TABLE IF EXISTS storage_pressure_events;
+
+CREATE TABLE storage_pressure_events (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  category VARCHAR(32) NOT NULL,
+  payload TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+INSERT INTO storage_pressure_events(category, payload, created_at)
+SELECT
+  CONCAT('cat-', MOD(a.n + b.n * 10 + c.n * 100, 20)),
+  RPAD(CONCAT('pressure-payload-', a.n, '-', b.n, '-', c.n), 2048, 'x'),
+  TIMESTAMP('2026-01-01') + INTERVAL (a.n + b.n * 10 + c.n * 100) SECOND
+FROM
+  (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+   UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) a
+CROSS JOIN
+  (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+   UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) b
+CROSS JOIN
+  (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4) c;
+
+SET SESSION internal_tmp_mem_storage_engine = MEMORY;
+SET SESSION tmp_table_size = 1024;
+SET SESSION max_heap_table_size = 1024;
+
+SHOW SESSION STATUS LIKE 'Created_tmp_disk_tables';
+
+SELECT category, payload, COUNT(*) AS event_count
+FROM storage_pressure_events
+GROUP BY category, payload
+ORDER BY payload
+LIMIT 5;
+
+SHOW SESSION STATUS LIKE 'Created_tmp_disk_tables';
+```
+
+- 参考 MCP 参数：
+
+```json
+{
+  "scope": "table",
+  "table": "storage_pressure_events",
+  "max_candidates": 5
+}
+```
+
+- `diagnose_slow_query` 参考 SQL：
+
+```sql
+SELECT category, payload, COUNT(*) AS event_count
+FROM storage_pressure_events
+GROUP BY category, payload
+ORDER BY payload
+LIMIT 5
+```
+
+- 预期结果：
+  1. `diagnose_storage_pressure` 返回 `status=ok`
+  2. `root_cause_candidates` 中出现 tmp disk spill 或 scan-heavy SQL 候选
+  3. `evidence` 中包含 `statement_digest` 与 `table_storage`
+  4. `diagnose_slow_query` 能通过 SQL 文本匹配到对应 digest 证据
 
 ### TC-L2-006 Taurus slow-log external source 可解析慢 SQL 样本
 

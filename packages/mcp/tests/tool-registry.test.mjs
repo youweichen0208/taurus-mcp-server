@@ -51,6 +51,14 @@ test("tool registry registers default MCP tools through legacy tool API", async 
       "explain_sql",
       "get_kernel_info",
       "list_taurus_features",
+      "diagnose_service_latency",
+      "diagnose_db_hotspot",
+      "find_top_slow_sql",
+      "diagnose_slow_query",
+      "diagnose_connection_spike",
+      "diagnose_lock_contention",
+      "diagnose_replication_lag",
+      "diagnose_storage_pressure",
     ],
   );
 
@@ -79,6 +87,15 @@ test("tool registry registers execute_sql only when mutations are enabled", () =
     createConfigFromEnv({ TAURUSDB_MCP_ENABLE_MUTATIONS: "true" }),
   );
   assert.equal(enabled.calls.some((call) => call.name === "execute_sql"), true);
+});
+
+test("tool registry registers diagnostics tools by default", () => {
+  const enabled = createLegacyToolServerRecorder();
+  registerTools(enabled.server, { pingResponse: "pong" }, createConfigFromEnv({}));
+  assert.equal(
+    enabled.calls.some((call) => call.name === "diagnose_slow_query"),
+    true,
+  );
 });
 
 test("tool registry registers TaurusDB-specific tools based on startup probe", () => {

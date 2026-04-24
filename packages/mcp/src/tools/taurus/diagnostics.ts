@@ -5,10 +5,13 @@ import {
 } from "../../utils/formatter.js";
 import type {
   DiagnoseConnectionSpikeInput,
+  DiagnoseDbHotspotInput,
   DiagnoseLockContentionInput,
   DiagnoseReplicationLagInput,
+  DiagnoseServiceLatencyInput,
   DiagnoseSlowQueryInput,
   DiagnoseStoragePressureInput,
+  FindTopSlowSqlInput,
 } from "@huaweicloud/taurusdb-core";
 import { formatToolError, ToolInputError } from "../error-handling.js";
 import type { ToolDefinition } from "../registry.js";
@@ -18,8 +21,11 @@ import {
   asOptionalString,
   diagnosticBaseInputShape,
   metadata,
+  toPublicDbHotspotResult,
   resolveContext,
   toPublicDiagnosticResult,
+  toPublicServiceLatencyResult,
+  toPublicTopSlowSqlResult,
 } from "../common.js";
 
 function parseBaseInput(input: Record<string, unknown>) {
@@ -69,9 +75,165 @@ function parseStorageScope(value: unknown): DiagnoseStoragePressureInput["scope"
   throw new ToolInputError("Invalid scope: expected instance, database, or table.");
 }
 
+function parseDbHotspotScope(
+  value: unknown,
+): DiagnoseDbHotspotInput["scope"] {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === "sql" || value === "table" || value === "session") {
+    return value;
+  }
+  throw new ToolInputError("Invalid scope: expected sql, table, or session.");
+}
+
+function parseLatencySymptom(
+  value: unknown,
+): DiagnoseServiceLatencyInput["symptom"] {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    value === "latency"
+    || value === "timeout"
+    || value === "cpu"
+    || value === "connection_growth"
+  ) {
+    return value;
+  }
+  throw new ToolInputError(
+    "Invalid symptom: expected latency, timeout, cpu, or connection_growth.",
+  );
+}
+
+function parseTopSlowSqlSortBy(value: unknown): FindTopSlowSqlInput["sortBy"] {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    value === "avg_latency"
+    || value === "total_latency"
+    || value === "exec_count"
+    || value === "lock_time"
+  ) {
+    return value;
+  }
+  throw new ToolInputError(
+    "Invalid sort_by: expected avg_latency, total_latency, exec_count, or lock_time.",
+  );
+}
+
 function summarizeDiagnostic(toolLabel: string, status: string): string {
   return `${toolLabel} returned ${status}.`;
 }
+
+export const findTopSlowSqlTool: ToolDefinition = {
+  name: "find_top_slow_sql",
+  description:
+    "Find the most suspicious slow SQL statements for the selected datasource, database, and time window.",
+  inputSchema: {
+    ...diagnosticBaseInputShape,
+    top_n: z.number().int().positive().max(20).optional().describe("Maximum number of suspect SQL statements to return."),
+    sort_by: z
+      .enum(["avg_latency", "total_latency", "exec_count", "lock_time"])
+      .optional()
+      .describe("Ranking strategy for slow SQL discovery."),
+  },
+  async handler(input, deps, context): Promise<ToolResponse> {
+    try {
+      const ctx = await resolveContext(input, deps, context, true);
+      const result = await deps.engine.findTopSlowSql(
+        {
+          ...parseBaseInput(input),
+          topN: asOptionalPositiveInteger(input.top_n, "top_n"),
+          sortBy: parseTopSlowSqlSortBy(input.sort_by),
+        },
+        ctx,
+      );
+      return formatSuccess(toPublicTopSlowSqlResult(result), {
+        summary: summarizeDiagnostic("Top slow SQL discovery", result.status),
+        metadata: metadata(context.taskId),
+      });
+    } catch (error) {
+      return formatToolError(error, {
+        action: "find_top_slow_sql",
+        metadata: metadata(context.taskId),
+      });
+    }
+  },
+};
+
+export const diagnoseServiceLatencyTool: ToolDefinition = {
+  name: "diagnose_service_latency",
+  description:
+    "Route a business-latency symptom to the most likely SQL, lock, or connection suspects and suggest the next diagnostic tool.",
+  inputSchema: {
+    ...diagnosticBaseInputShape,
+    user: diagnosticString("Optional user to focus on."),
+    client_host: diagnosticString("Optional client host or IP to focus on."),
+    symptom: z
+      .enum(["latency", "timeout", "cpu", "connection_growth"])
+      .optional()
+      .describe("Primary service symptom to route: latency, timeout, cpu, or connection_growth."),
+  },
+  async handler(input, deps, context): Promise<ToolResponse> {
+    try {
+      const ctx = await resolveContext(input, deps, context, true);
+      const result = await deps.engine.diagnoseServiceLatency(
+        {
+          ...parseBaseInput(input),
+          user: asOptionalString(input.user, "user"),
+          clientHost: asOptionalString(input.client_host, "client_host"),
+          symptom: parseLatencySymptom(input.symptom),
+        },
+        ctx,
+      );
+      return formatSuccess(toPublicServiceLatencyResult(result), {
+        summary: summarizeDiagnostic("Service-latency diagnosis", result.status),
+        metadata: metadata(context.taskId),
+      });
+    } catch (error) {
+      return formatToolError(error, {
+        action: "diagnose_service_latency",
+        metadata: metadata(context.taskId),
+      });
+    }
+  },
+};
+
+export const diagnoseDbHotspotTool: ToolDefinition = {
+  name: "diagnose_db_hotspot",
+  description:
+    "Identify the hottest SQL, table, or session currently dragging down the datasource and recommend the next diagnostic tool.",
+  inputSchema: {
+    ...diagnosticBaseInputShape,
+    scope: z
+      .enum(["sql", "table", "session"])
+      .optional()
+      .describe("Optional hotspot scope: sql, table, or session."),
+  },
+  async handler(input, deps, context): Promise<ToolResponse> {
+    try {
+      const ctx = await resolveContext(input, deps, context, true);
+      const result = await deps.engine.diagnoseDbHotspot(
+        {
+          ...parseBaseInput(input),
+          scope: parseDbHotspotScope(input.scope),
+        },
+        ctx,
+      );
+      return formatSuccess(toPublicDbHotspotResult(result), {
+        summary: summarizeDiagnostic("Database-hotspot diagnosis", result.status),
+        metadata: metadata(context.taskId),
+      });
+    } catch (error) {
+      return formatToolError(error, {
+        action: "diagnose_db_hotspot",
+        metadata: metadata(context.taskId),
+      });
+    }
+  },
+};
 
 export const diagnoseSlowQueryTool: ToolDefinition = {
   name: "diagnose_slow_query",
@@ -207,7 +369,7 @@ export const diagnoseReplicationLagTool: ToolDefinition = {
 export const diagnoseStoragePressureTool: ToolDefinition = {
   name: "diagnose_storage_pressure",
   description:
-    "Diagnose storage, IOPS, and throughput pressure. This handler is scaffolded and currently returns a structured placeholder result.",
+    "Diagnose local storage-pressure signals using statement digest counters and table storage metadata.",
   inputSchema: {
     ...diagnosticBaseInputShape,
     scope: diagnosticEnum("Diagnosis scope: instance, database, or table."),
@@ -236,6 +398,9 @@ export const diagnoseStoragePressureTool: ToolDefinition = {
 };
 
 export const diagnosticToolDefinitions: ToolDefinition[] = [
+  diagnoseServiceLatencyTool,
+  diagnoseDbHotspotTool,
+  findTopSlowSqlTool,
   diagnoseSlowQueryTool,
   diagnoseConnectionSpikeTool,
   diagnoseLockContentionTool,

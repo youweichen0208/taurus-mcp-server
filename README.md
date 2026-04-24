@@ -157,6 +157,8 @@ npx @huaweicloud/taurusdb-mcp init --client vscode
 - 下一阶段引入场景化诊断 Tool
 - 回收站、history/binlog、CLI REPL/AI 属于后续阶段
 
+当前 diagnostics Tool 已直接纳入默认 tool 集合。
+
 ## Notes
 
 - 根目录 `package.json` 现在是 workspace 根配置，不再代表单包 MCP 包

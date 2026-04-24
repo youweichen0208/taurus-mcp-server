@@ -56,7 +56,7 @@
 - schema introspection 是否正确
 - readonly / explain / mutation 执行链路是否正确
 - confirmation token 是否正确
-- query status / cancel 是否正确
+- query metadata、错误映射与 timeout 行为是否正确
 - envelope / error mapping / stderr 边界是否正确
 
 ### 2.2 调试成本低、反馈快
@@ -108,6 +108,13 @@
 | schema introspection | `information_schema` 查询主链路    | TaurusDB 特定元数据差异             |
 | timeout / cancel     | 主逻辑、query tracker、cancel path | 云环境下真实网络延迟和内核中断语义  |
 | 大结果集裁剪         | row/column/field truncation        | 云端真实大表与慢查询行为            |
+| diagnostics          | `processlist`、InnoDB lock waits、部分 digest evidence | CES、MDL、deadlock history、云侧慢 SQL 保留期 |
+
+对 `diagnose_slow_query` 而言，本地阶段最适合先验证 explain-based 信号，而不是强求真实慢到秒级。当前第一版主要看：
+
+- 是否抓到全表扫 / 弱索引 / filesort / 临时结构等 explain 信号
+- 是否能给出稳定的 `root_cause_candidates / evidence / recommended_actions`
+- 若启用了 `performance_schema` digest / wait history，是否能补充运行时摘要
 
 ### 3.3 本地 MySQL 不能替代的能力
 
@@ -214,6 +221,34 @@
 - 超时是否映射为 `QUERY_TIMEOUT`
 - datasource 缺失是否映射为 `DATASOURCE_NOT_FOUND`
 
+### 4.6 F 组：Diagnostics 第一版
+
+目标：确认 diagnostics 已经能在本地 MySQL 上跑通最小 evidence-backed 场景。
+
+覆盖项：
+
+- `diagnose_service_latency`
+- `diagnose_db_hotspot`
+- `diagnose_slow_query`
+- `diagnose_connection_spike`
+- `diagnose_lock_contention`
+- `diagnose_storage_pressure`
+
+重点看：
+
+- 默认会注册 symptom-entry + root-cause diagnostics tools
+- `diagnose_service_latency` 能把：
+  - `latency` 收敛到 slow SQL
+  - `timeout` 收敛到 lock contention
+  - `connection_growth` 收敛到 connection spike
+- `diagnose_db_hotspot` 能按 `scope=sql|table|session` 输出热点对象
+- 非索引友好的 SQL 会被 `diagnose_slow_query` 给出 explain-based 根因候选
+- `diagnose_storage_pressure` 能基于 statement digest 与 table storage metadata 输出本地存储压力证据
+- 真实 MySQL workload 能通过小 `tmp_table_size` / `max_heap_table_size` + TEXT group/order 查询复现 temporary disk table
+- 本地多连接 `Sleep` 会被 `diagnose_connection_spike` 捕获
+- 本地多会话锁等待会被 `diagnose_lock_contention` 捕获
+- 返回结果保持统一 `DiagnosticResult` contract
+
 ---
 
 ## 5. 本地 MySQL 测试环境建议
@@ -226,6 +261,11 @@
 - npm
 - 一套本地 MySQL 8.x
 - 当前仓库已执行 `npm install`
+
+如果要验证 diagnostics，本地测试账号还需要具备：
+
+- `PROCESS`
+- `SELECT ON performance_schema.*`
 
 MySQL 可以来自：
 
@@ -258,6 +298,7 @@ MySQL 可以来自：
 ```bash
 mysql -uroot -p < testdata/mysql/local-mysql-schema.sql
 mysql -uroot -p < testdata/mysql/local-mysql-seed.sql
+mysql -uroot -p < testdata/mysql/local-mysql-users.sql
 ```
 
 ### 5.3 推荐样例字段
@@ -636,7 +677,7 @@ SELECT * FROM orders; DELETE FROM orders WHERE id = 1;
 - schema 探查 5 个 tool 都能正确返回
 - readonly / explain 主链路稳定
 - mutation + confirmation token 主链路稳定
-- query status / cancel 至少有一条稳定用例
+- query metadata、timeout 和常见错误映射至少有一条稳定用例
 - 常见错误码映射正确
 - 日志不污染 stdout 协议流
 - `init` 命令可正确 merge 客户端配置

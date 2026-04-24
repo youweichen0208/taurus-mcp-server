@@ -68,13 +68,25 @@ import {
 } from "./taurus/flashback.js";
 import {
   createPlaceholderDiagnosticResult,
+  type DbHotspotItem,
+  type DbHotspotResult,
+  type DiagnoseDbHotspotInput,
+  type DiagnoseServiceLatencyInput,
+  type FindTopSlowSqlInput,
+  type FindTopSlowSqlResult,
   type DiagnoseConnectionSpikeInput,
   type DiagnoseLockContentionInput,
   type DiagnoseReplicationLagInput,
   type DiagnoseSlowQueryInput,
   type DiagnoseStoragePressureInput,
+  type DiagnosticBaseInput,
   type DiagnosticRootCauseCandidate,
   type DiagnosticResult,
+  type DiagnosticNextToolInput,
+  type DiagnosticSeverity,
+  type ServiceLatencyCandidate,
+  type ServiceLatencyResult,
+  type ServiceLatencySuspectedCategory,
 } from "./diagnostics/types.js";
 import {
   buildResolveSlowSqlInput,
@@ -189,6 +201,7 @@ type StatementDigestRow = {
   querySampleText?: string;
   execCount?: number;
   avgLatencyMs?: number;
+  totalLatencyMs?: number;
   maxLatencyMs?: number;
   avgLockTimeMs?: number;
   avgRowsExamined?: number;
@@ -212,6 +225,17 @@ type PlanTableStats = {
   rowCountEstimate?: number;
   indexCount: number;
   primaryKey?: string[];
+};
+
+type TableStorageRow = {
+  schemaName?: string;
+  tableName?: string;
+  engine?: string;
+  rowCountEstimate?: number;
+  totalMb?: number;
+  dataMb?: number;
+  indexMb?: number;
+  dataFreeMb?: number;
 };
 
 function withDatasourceSummary(prefix: string, datasource: string): string {
@@ -378,6 +402,7 @@ function parseStatementDigestRows(result: QueryResult): StatementDigestRow[] {
           : undefined,
       execCount: parseOptionalInteger(mapped.exec_count),
       avgLatencyMs: parseOptionalNumber(mapped.avg_latency_ms),
+      totalLatencyMs: parseOptionalNumber(mapped.total_latency_ms),
       maxLatencyMs: parseOptionalNumber(mapped.max_latency_ms),
       avgLockTimeMs: parseOptionalNumber(mapped.avg_lock_time_ms),
       avgRowsExamined: parseOptionalNumber(mapped.avg_rows_examined),
@@ -388,6 +413,102 @@ function parseStatementDigestRows(result: QueryResult): StatementDigestRow[] {
       noIndexUsedCount: parseOptionalInteger(mapped.no_index_used_count),
     };
   });
+}
+
+function topSlowSqlOrderBy(
+  sortBy: FindTopSlowSqlInput["sortBy"],
+): string {
+  switch (sortBy) {
+    case "avg_latency":
+      return "AVG_TIMER_WAIT DESC, SUM_TIMER_WAIT DESC, COUNT_STAR DESC";
+    case "exec_count":
+      return "COUNT_STAR DESC, SUM_TIMER_WAIT DESC, AVG_TIMER_WAIT DESC";
+    case "lock_time":
+      return "SUM_LOCK_TIME DESC, SUM_TIMER_WAIT DESC, COUNT_STAR DESC";
+    case "total_latency":
+    default:
+      return "SUM_TIMER_WAIT DESC, AVG_TIMER_WAIT DESC, COUNT_STAR DESC";
+  }
+}
+
+function normalizeSqlForDigestMatch(sql: string): string {
+  const normalized = normalizeSql(sql).replace(/`([^`]+)`/g, "$1");
+  let result = "";
+  let index = 0;
+  let quoteState: "'" | "\"" | "none" = "none";
+
+  while (index < normalized.length) {
+    const char = normalized[index];
+
+    if (quoteState === "none") {
+      if (char === "'" || char === "\"") {
+        quoteState = char;
+        result += "?";
+        index += 1;
+        continue;
+      }
+      if (
+        /[0-9]/.test(char)
+        && (index === 0 || !/[A-Za-z0-9_$]/.test(normalized[index - 1] ?? ""))
+      ) {
+        result += "?";
+        index += 1;
+        while (index < normalized.length && /[A-Za-z0-9_.+-]/.test(normalized[index])) {
+          index += 1;
+        }
+        continue;
+      }
+      result += char;
+      index += 1;
+      continue;
+    }
+
+    if (char === quoteState) {
+      if (normalized[index + 1] === quoteState) {
+        index += 2;
+        continue;
+      }
+      quoteState = "none";
+    }
+    index += 1;
+  }
+
+  return result
+    .replace(/\bNULL\b/gi, "?")
+    .replace(/\b(TRUE|FALSE)\b/gi, "?")
+    .replace(/\s*([=<>!+\-*/%,()])\s*/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+}
+
+function digestMatchScore(sql: string, candidate: StatementDigestRow): number {
+  const normalizedSql = normalizeSql(sql);
+  const normalizedSqlHash = sqlHash(normalizedSql);
+  const sqlShape = normalizeSqlForDigestMatch(sql);
+
+  if (
+    candidate.querySampleText
+    && sqlHash(normalizeSql(candidate.querySampleText)) === normalizedSqlHash
+  ) {
+    return 100;
+  }
+
+  if (
+    candidate.querySampleText
+    && normalizeSqlForDigestMatch(candidate.querySampleText) === sqlShape
+  ) {
+    return 80;
+  }
+
+  if (
+    candidate.digestText
+    && normalizeSqlForDigestMatch(candidate.digestText) === sqlShape
+  ) {
+    return 70;
+  }
+
+  return 0;
 }
 
 function parseStatementWaitEventRows(result: QueryResult): StatementWaitEventRow[] {
@@ -404,6 +525,28 @@ function parseStatementWaitEventRows(result: QueryResult): StatementWaitEventRow
       statementCount: parseOptionalInteger(mapped.statement_count),
       totalWaitMs: parseOptionalNumber(mapped.total_wait_ms),
       avgWaitMs: parseOptionalNumber(mapped.avg_wait_ms),
+    };
+  });
+}
+
+function parseTableStorageRows(result: QueryResult): TableStorageRow[] {
+  const columns = result.columns.map((column) => column.name);
+  return result.rows.map((row) => {
+    const mapped = Object.fromEntries(
+      columns.map((name, index) => [name, row[index]]),
+    );
+
+    return {
+      schemaName:
+        typeof mapped.schema_name === "string" ? mapped.schema_name : undefined,
+      tableName:
+        typeof mapped.table_name === "string" ? mapped.table_name : undefined,
+      engine: typeof mapped.engine === "string" ? mapped.engine : undefined,
+      rowCountEstimate: parseOptionalInteger(mapped.row_count_estimate),
+      totalMb: parseOptionalNumber(mapped.total_mb),
+      dataMb: parseOptionalNumber(mapped.data_mb),
+      indexMb: parseOptionalNumber(mapped.index_mb),
+      dataFreeMb: parseOptionalNumber(mapped.data_free_mb),
     };
   });
 }
@@ -430,6 +573,17 @@ function extractPlanTableNames(plan: ExplainResult["plan"]): string[] {
   return [...new Set(names)];
 }
 
+function extractSqlTableNameHints(sql: string): string[] {
+  const hints = new Set<string>();
+  const pattern = /\b(?:FROM|JOIN|UPDATE|INTO)\s+`?([A-Za-z0-9_$]+)`?(?:\s*\.\s*`?([A-Za-z0-9_$]+)`?)?/gi;
+  let match = pattern.exec(sql);
+  while (match) {
+    hints.add(match[2] ?? match[1]);
+    match = pattern.exec(sql);
+  }
+  return [...hints];
+}
+
 function countBy<T>(
   rows: T[],
   pick: (row: T) => string | undefined,
@@ -445,6 +599,283 @@ function countBy<T>(
   return [...counts.entries()]
     .map(([key, count]) => ({ key, count }))
     .sort((left, right) => right.count - left.count || left.key.localeCompare(right.key));
+}
+
+function confidenceWeight(value: ServiceLatencyCandidate["confidence"]): number {
+  switch (value) {
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    default:
+      return 1;
+  }
+}
+
+function rootCauseBasePriority(code: string): number {
+  switch (code) {
+    case "slow_query_full_table_scan":
+      return 90;
+    case "slow_query_poor_index_usage":
+      return 60;
+    case "slow_query_runtime_scan_pressure":
+      return 70;
+    case "slow_query_tmp_disk_spill":
+      return 65;
+    case "slow_query_wait_event_lock_contention":
+      return 60;
+    case "slow_query_lock_wait_pressure":
+      return 55;
+    case "slow_query_filesort":
+      return 50;
+    case "slow_query_temp_structure":
+      return 45;
+    case "slow_query_wait_event_io_pressure":
+      return 40;
+    case "slow_query_wait_event_sync_contention":
+      return 35;
+    case "slow_query_taurus_feature_gap":
+      return 20;
+    case "slow_query_plan_collected":
+      return 10;
+    default:
+      return 0;
+  }
+}
+
+function rootCauseConfidenceWeight(
+  value: DiagnosticRootCauseCandidate["confidence"],
+): number {
+  switch (value) {
+    case "high":
+      return 30;
+    case "medium":
+      return 15;
+    default:
+      return 0;
+  }
+}
+
+function rootCauseRankScore(candidate: DiagnosticRootCauseCandidate): number {
+  return rootCauseBasePriority(candidate.code) + rootCauseConfidenceWeight(candidate.confidence);
+}
+
+function sortRootCauseCandidates(
+  candidates: DiagnosticRootCauseCandidate[],
+): DiagnosticRootCauseCandidate[] {
+  return [...candidates].sort(
+    (left, right) =>
+      rootCauseRankScore(right) - rootCauseRankScore(left)
+      || rootCauseBasePriority(right.code) - rootCauseBasePriority(left.code)
+      || rootCauseConfidenceWeight(right.confidence) - rootCauseConfidenceWeight(left.confidence)
+      || left.code.localeCompare(right.code),
+  );
+}
+
+function severityFromSlowQueryEvidence(
+  riskSummary: ExplainResult["riskSummary"],
+  candidates: DiagnosticRootCauseCandidate[],
+): DiagnosticSeverity {
+  if (
+    riskSummary.fullTableScanLikely ||
+    riskSummary.usesFilesort ||
+    riskSummary.usesTempStructure
+  ) {
+    return (riskSummary.estimatedRows ?? 0) >= 100_000 ? "high" : "warning";
+  }
+  if (candidates.some((candidate) => candidate.confidence === "high")) {
+    return "warning";
+  }
+  if (candidates.some((candidate) => candidate.confidence === "medium")) {
+    return "warning";
+  }
+  return "info";
+}
+
+function serviceCategoryPriority(
+  value: ServiceLatencySuspectedCategory,
+): number {
+  switch (value) {
+    case "lock_contention":
+      return 5;
+    case "connection_spike":
+      return 4;
+    case "slow_sql":
+      return 3;
+    case "resource_pressure":
+      return 2;
+    case "mixed":
+    default:
+      return 1;
+  }
+}
+
+function hotspotTypePriority(value: DbHotspotItem["type"]): number {
+  switch (value) {
+    case "session":
+      return 3;
+    case "table":
+      return 2;
+    case "sql":
+    default:
+      return 1;
+  }
+}
+
+function buildSlowQueryNextToolInput(
+  source: {
+    sqlHash?: string;
+    digestText?: string;
+    sampleSql?: string;
+  },
+  input: DiagnosticBaseInput,
+  rationale: string,
+): DiagnosticNextToolInput | undefined {
+  const slowQueryInput: Record<string, unknown> = {};
+  if (input.datasource) {
+    slowQueryInput.datasource = input.datasource;
+  }
+  if (input.database) {
+    slowQueryInput.database = input.database;
+  }
+  if (input.timeRange) {
+    slowQueryInput.time_range = input.timeRange;
+  }
+  if (input.evidenceLevel) {
+    slowQueryInput.evidence_level = input.evidenceLevel;
+  }
+  if (input.includeRawEvidence !== undefined) {
+    slowQueryInput.include_raw_evidence = input.includeRawEvidence;
+  }
+  if (input.maxCandidates !== undefined) {
+    slowQueryInput.max_candidates = input.maxCandidates;
+  }
+  if (source.sampleSql) {
+    slowQueryInput.sql = source.sampleSql;
+  } else if (source.digestText) {
+    slowQueryInput.digest_text = source.digestText;
+  } else if (source.sqlHash) {
+    slowQueryInput.sql_hash = source.sqlHash;
+  } else {
+    return undefined;
+  }
+
+  return {
+    tool: "diagnose_slow_query",
+    input: slowQueryInput,
+    rationale,
+  };
+}
+
+function buildBaseNextToolInput(input: DiagnosticBaseInput): Record<string, unknown> {
+  const nextInput: Record<string, unknown> = {};
+  if (input.datasource) {
+    nextInput.datasource = input.datasource;
+  }
+  if (input.database) {
+    nextInput.database = input.database;
+  }
+  if (input.timeRange) {
+    nextInput.time_range = input.timeRange;
+  }
+  if (input.evidenceLevel) {
+    nextInput.evidence_level = input.evidenceLevel;
+  }
+  if (input.includeRawEvidence !== undefined) {
+    nextInput.include_raw_evidence = input.includeRawEvidence;
+  }
+  if (input.maxCandidates !== undefined) {
+    nextInput.max_candidates = input.maxCandidates;
+  }
+  return nextInput;
+}
+
+function buildLockContentionNextToolInput(
+  source: {
+    table?: string;
+    blockerSessionId?: string;
+  },
+  input: DiagnosticBaseInput,
+  rationale: string,
+): DiagnosticNextToolInput {
+  const nextInput = buildBaseNextToolInput(input);
+  if (source.table) {
+    nextInput.table = source.table;
+  }
+  if (source.blockerSessionId) {
+    nextInput.blocker_session_id = source.blockerSessionId;
+  }
+  return {
+    tool: "diagnose_lock_contention",
+    input: nextInput,
+    rationale,
+  };
+}
+
+function buildConnectionSpikeNextToolInput(
+  source: {
+    user?: string;
+    clientHost?: string;
+  },
+  input: DiagnosticBaseInput,
+  rationale: string,
+): DiagnosticNextToolInput {
+  const nextInput = buildBaseNextToolInput(input);
+  if (source.user) {
+    nextInput.user = source.user;
+  }
+  if (source.clientHost) {
+    nextInput.client_host = source.clientHost;
+  }
+  nextInput.compare_baseline = false;
+  return {
+    tool: "diagnose_connection_spike",
+    input: nextInput,
+    rationale,
+  };
+}
+
+function buildShowProcesslistNextToolInput(
+  source: {
+    user?: string;
+    host?: string;
+    command?: string;
+    includeIdle?: boolean;
+    includeInfo?: boolean;
+  },
+  input: DiagnosticBaseInput,
+  rationale: string,
+): DiagnosticNextToolInput {
+  const nextInput = buildBaseNextToolInput(input);
+  if (source.user) {
+    nextInput.user = source.user;
+  }
+  if (source.host) {
+    nextInput.host = source.host;
+  }
+  if (source.command) {
+    nextInput.command = source.command;
+  }
+  nextInput.include_idle = source.includeIdle ?? true;
+  nextInput.include_info = source.includeInfo ?? true;
+  nextInput.max_rows = 20;
+  return {
+    tool: "show_processlist",
+    input: nextInput,
+    rationale,
+  };
+}
+
+function dedupeNextToolInputs(
+  inputs: DiagnosticNextToolInput[],
+): DiagnosticNextToolInput[] {
+  return inputs.filter((item, index, allItems) => {
+    const key = `${item.tool}:${JSON.stringify(item.input)}`;
+    return allItems.findIndex((candidate) => {
+      const candidateKey = `${candidate.tool}:${JSON.stringify(candidate.input)}`;
+      return candidateKey === key;
+    }) === index;
+  });
 }
 
 function evidenceRowLimit(level: DiagnoseConnectionSpikeInput["evidenceLevel"]): number {
@@ -871,6 +1302,7 @@ export class TaurusDBEngine {
         QUERY_SAMPLE_TEXT AS query_sample_text,
         COUNT_STAR AS exec_count,
         ROUND(AVG_TIMER_WAIT / 1000000000, 3) AS avg_latency_ms,
+        ROUND(SUM_TIMER_WAIT / 1000000000, 3) AS total_latency_ms,
         ROUND(MAX_TIMER_WAIT / 1000000000, 3) AS max_latency_ms,
         ROUND(SUM_LOCK_TIME / 1000000000 / NULLIF(COUNT_STAR, 0), 3) AS avg_lock_time_ms,
         ROUND(SUM_ROWS_EXAMINED / NULLIF(COUNT_STAR, 0), 3) AS avg_rows_examined,
@@ -887,11 +1319,207 @@ export class TaurusDBEngine {
 
     const result = await this.executor.executeReadonly(sql, ctx, {
       maxRows: 1,
-      maxColumns: 14,
+      maxColumns: 15,
       maxFieldChars: 2048,
       timeoutMs: ctx.limits.timeoutMs,
     });
     return parseStatementDigestRows(result)[0];
+  }
+
+  async findStatementDigestSampleForSql(
+    sql: string,
+    ctx: SessionContext,
+  ): Promise<StatementDigestRow | undefined> {
+    const candidates = await this.findTopStatementDigests(
+      {
+        database: ctx.database,
+        topN: 20,
+        sortBy: "total_latency",
+      },
+      ctx,
+    );
+
+    const ranked = candidates
+      .map((candidate) => ({
+        candidate,
+        score: digestMatchScore(sql, candidate),
+      }))
+      .filter((item) => item.score > 0)
+      .sort(
+        (left, right) =>
+          right.score - left.score
+          || (right.candidate.totalLatencyMs ?? 0) - (left.candidate.totalLatencyMs ?? 0)
+          || (right.candidate.execCount ?? 0) - (left.candidate.execCount ?? 0),
+      );
+    if (ranked[0]?.candidate) {
+      return ranked[0].candidate;
+    }
+
+    const hintCandidates = await this.findStatementDigestCandidatesForSqlHints(sql, ctx).catch(
+      () => [] as StatementDigestRow[],
+    );
+    return hintCandidates
+      .map((candidate) => ({
+        candidate,
+        score: digestMatchScore(sql, candidate),
+      }))
+      .filter((item) => item.score > 0)
+      .sort(
+        (left, right) =>
+          right.score - left.score
+          || (right.candidate.totalLatencyMs ?? 0) - (left.candidate.totalLatencyMs ?? 0)
+          || (right.candidate.execCount ?? 0) - (left.candidate.execCount ?? 0),
+      )[0]?.candidate;
+  }
+
+  async findStatementDigestCandidatesForSqlHints(
+    sqlText: string,
+    ctx: SessionContext,
+  ): Promise<StatementDigestRow[]> {
+    const tableHints = extractSqlTableNameHints(sqlText).slice(0, 3);
+    if (tableHints.length === 0) {
+      return [];
+    }
+
+    const whereClauses = ["DIGEST_TEXT IS NOT NULL", "DIGEST_TEXT <> 'NULL'"];
+    if (ctx.database) {
+      whereClauses.push(`SCHEMA_NAME = ${quoteLiteral(ctx.database)}`);
+    }
+    const tableClauses = tableHints.map((table) => {
+      const tableLike = quoteLiteral(`%${escapeLikePrefix(table)}%`);
+      return `(DIGEST_TEXT LIKE ${tableLike} ESCAPE '\\\\' OR QUERY_SAMPLE_TEXT LIKE ${tableLike} ESCAPE '\\\\')`;
+    });
+    whereClauses.push(`(${tableClauses.join(" OR ")})`);
+
+    const sql = `
+      SELECT
+        SCHEMA_NAME AS schema_name,
+        DIGEST AS digest,
+        DIGEST_TEXT AS digest_text,
+        QUERY_SAMPLE_TEXT AS query_sample_text,
+        COUNT_STAR AS exec_count,
+        ROUND(AVG_TIMER_WAIT / 1000000000, 3) AS avg_latency_ms,
+        ROUND(SUM_TIMER_WAIT / 1000000000, 3) AS total_latency_ms,
+        ROUND(MAX_TIMER_WAIT / 1000000000, 3) AS max_latency_ms,
+        ROUND(SUM_LOCK_TIME / 1000000000 / NULLIF(COUNT_STAR, 0), 3) AS avg_lock_time_ms,
+        ROUND(SUM_ROWS_EXAMINED / NULLIF(COUNT_STAR, 0), 3) AS avg_rows_examined,
+        ROUND(SUM_SORT_ROWS / NULLIF(COUNT_STAR, 0), 3) AS avg_sort_rows,
+        ROUND(SUM_CREATED_TMP_TABLES / NULLIF(COUNT_STAR, 0), 3) AS avg_tmp_tables,
+        ROUND(SUM_CREATED_TMP_DISK_TABLES / NULLIF(COUNT_STAR, 0), 3) AS avg_tmp_disk_tables,
+        SUM_SELECT_SCAN AS select_scan_count,
+        SUM_NO_INDEX_USED AS no_index_used_count
+      FROM performance_schema.events_statements_summary_by_digest
+      WHERE ${whereClauses.join(" AND ")}
+      ORDER BY SUM_TIMER_WAIT DESC, AVG_TIMER_WAIT DESC, COUNT_STAR DESC
+      LIMIT 50
+    `.trim();
+
+    const result = await this.executor.executeReadonly(sql, ctx, {
+      maxRows: 50,
+      maxColumns: 15,
+      maxFieldChars: 4096,
+      timeoutMs: ctx.limits.timeoutMs,
+    });
+    return parseStatementDigestRows(result);
+  }
+
+  async findTopStatementDigests(
+    input: FindTopSlowSqlInput,
+    ctx: SessionContext,
+  ): Promise<StatementDigestRow[]> {
+    const maxRows = clampInteger(input.topN, 5, 1, 20);
+    const whereClauses = ["DIGEST_TEXT IS NOT NULL", "DIGEST_TEXT <> 'NULL'"];
+    if (ctx.database) {
+      whereClauses.push(`SCHEMA_NAME = ${quoteLiteral(ctx.database)}`);
+    }
+
+    const sql = `
+      SELECT
+        SCHEMA_NAME AS schema_name,
+        DIGEST AS digest,
+        DIGEST_TEXT AS digest_text,
+        QUERY_SAMPLE_TEXT AS query_sample_text,
+        COUNT_STAR AS exec_count,
+        ROUND(AVG_TIMER_WAIT / 1000000000, 3) AS avg_latency_ms,
+        ROUND(SUM_TIMER_WAIT / 1000000000, 3) AS total_latency_ms,
+        ROUND(MAX_TIMER_WAIT / 1000000000, 3) AS max_latency_ms,
+        ROUND(SUM_LOCK_TIME / 1000000000 / NULLIF(COUNT_STAR, 0), 3) AS avg_lock_time_ms,
+        ROUND(SUM_ROWS_EXAMINED / NULLIF(COUNT_STAR, 0), 3) AS avg_rows_examined,
+        ROUND(SUM_SORT_ROWS / NULLIF(COUNT_STAR, 0), 3) AS avg_sort_rows,
+        ROUND(SUM_CREATED_TMP_TABLES / NULLIF(COUNT_STAR, 0), 3) AS avg_tmp_tables,
+        ROUND(SUM_CREATED_TMP_DISK_TABLES / NULLIF(COUNT_STAR, 0), 3) AS avg_tmp_disk_tables,
+        SUM_SELECT_SCAN AS select_scan_count,
+        SUM_NO_INDEX_USED AS no_index_used_count
+      FROM performance_schema.events_statements_summary_by_digest
+      WHERE ${whereClauses.join(" AND ")}
+      ORDER BY ${topSlowSqlOrderBy(input.sortBy)}
+      LIMIT ${maxRows}
+    `.trim();
+
+    const result = await this.executor.executeReadonly(sql, ctx, {
+      maxRows,
+      maxColumns: 15,
+      maxFieldChars: 4096,
+      timeoutMs: ctx.limits.timeoutMs,
+    });
+    return parseStatementDigestRows(result);
+  }
+
+  async findStorageStatementDigests(
+    input: DiagnoseStoragePressureInput,
+    ctx: SessionContext,
+  ): Promise<StatementDigestRow[]> {
+    const maxRows = Math.min(clampInteger(input.maxCandidates, 5, 1, 10) * 2, 20);
+    const whereClauses = ["DIGEST_TEXT IS NOT NULL", "DIGEST_TEXT <> 'NULL'"];
+    const focusedTable = input.table?.includes(".")
+      ? input.table.split(".").slice(1).join(".")
+      : input.table;
+
+    if (ctx.database) {
+      whereClauses.push(`SCHEMA_NAME = ${quoteLiteral(ctx.database)}`);
+    }
+    if (focusedTable) {
+      const tableLike = quoteLiteral(`%${escapeLikePrefix(focusedTable)}%`);
+      whereClauses.push(
+        `(DIGEST_TEXT LIKE ${tableLike} ESCAPE '\\\\' OR QUERY_SAMPLE_TEXT LIKE ${tableLike} ESCAPE '\\\\')`,
+      );
+    }
+
+    const sql = `
+      SELECT
+        SCHEMA_NAME AS schema_name,
+        DIGEST AS digest,
+        DIGEST_TEXT AS digest_text,
+        QUERY_SAMPLE_TEXT AS query_sample_text,
+        COUNT_STAR AS exec_count,
+        ROUND(AVG_TIMER_WAIT / 1000000000, 3) AS avg_latency_ms,
+        ROUND(SUM_TIMER_WAIT / 1000000000, 3) AS total_latency_ms,
+        ROUND(MAX_TIMER_WAIT / 1000000000, 3) AS max_latency_ms,
+        ROUND(SUM_LOCK_TIME / 1000000000 / NULLIF(COUNT_STAR, 0), 3) AS avg_lock_time_ms,
+        ROUND(SUM_ROWS_EXAMINED / NULLIF(COUNT_STAR, 0), 3) AS avg_rows_examined,
+        ROUND(SUM_SORT_ROWS / NULLIF(COUNT_STAR, 0), 3) AS avg_sort_rows,
+        ROUND(SUM_CREATED_TMP_TABLES / NULLIF(COUNT_STAR, 0), 3) AS avg_tmp_tables,
+        ROUND(SUM_CREATED_TMP_DISK_TABLES / NULLIF(COUNT_STAR, 0), 3) AS avg_tmp_disk_tables,
+        SUM_SELECT_SCAN AS select_scan_count,
+        SUM_NO_INDEX_USED AS no_index_used_count
+      FROM performance_schema.events_statements_summary_by_digest
+      WHERE ${whereClauses.join(" AND ")}
+      ORDER BY
+        SUM_CREATED_TMP_DISK_TABLES DESC,
+        SUM_ROWS_EXAMINED DESC,
+        SUM_SORT_ROWS DESC,
+        SUM_TIMER_WAIT DESC,
+        COUNT_STAR DESC
+      LIMIT ${maxRows}
+    `.trim();
+
+    const result = await this.executor.executeReadonly(sql, ctx, {
+      maxRows,
+      maxColumns: 15,
+      maxFieldChars: 4096,
+      timeoutMs: ctx.limits.timeoutMs,
+    });
+    return parseStatementDigestRows(result);
   }
 
   async findStatementWaitEvents(
@@ -934,18 +1562,74 @@ export class TaurusDBEngine {
     }
   }
 
+  async findTableStorageStats(
+    input: DiagnoseStoragePressureInput,
+    ctx: SessionContext,
+  ): Promise<TableStorageRow[]> {
+    const maxRows = clampInteger(input.maxCandidates, 5, 1, 10);
+    const whereClauses = [
+      "TABLE_TYPE = 'BASE TABLE'",
+      "TABLE_SCHEMA NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')",
+    ];
+    const focusedTable = input.table?.includes(".")
+      ? {
+          schema: input.table.split(".")[0],
+          table: input.table.split(".").slice(1).join("."),
+        }
+      : {
+          schema: ctx.database,
+          table: input.table,
+        };
+
+    if (focusedTable.schema) {
+      whereClauses.push(`TABLE_SCHEMA = ${quoteLiteral(focusedTable.schema)}`);
+    } else if (ctx.database && input.scope !== "instance") {
+      whereClauses.push(`TABLE_SCHEMA = ${quoteLiteral(ctx.database)}`);
+    }
+    if (focusedTable.table) {
+      whereClauses.push(`TABLE_NAME = ${quoteLiteral(focusedTable.table)}`);
+    }
+
+    const sql = `
+      SELECT
+        TABLE_SCHEMA AS schema_name,
+        TABLE_NAME AS table_name,
+        ENGINE AS engine,
+        TABLE_ROWS AS row_count_estimate,
+        ROUND((DATA_LENGTH + INDEX_LENGTH) / 1024 / 1024, 3) AS total_mb,
+        ROUND(DATA_LENGTH / 1024 / 1024, 3) AS data_mb,
+        ROUND(INDEX_LENGTH / 1024 / 1024, 3) AS index_mb,
+        ROUND(DATA_FREE / 1024 / 1024, 3) AS data_free_mb
+      FROM information_schema.TABLES
+      WHERE ${whereClauses.join(" AND ")}
+      ORDER BY (DATA_LENGTH + INDEX_LENGTH) DESC, TABLE_ROWS DESC, TABLE_SCHEMA ASC, TABLE_NAME ASC
+      LIMIT ${maxRows}
+    `.trim();
+
+    const result = await this.executor.executeReadonly(sql, ctx, {
+      maxRows,
+      maxColumns: 8,
+      maxFieldChars: 512,
+      timeoutMs: ctx.limits.timeoutMs,
+    });
+    return parseTableStorageRows(result);
+  }
+
   async diagnoseSlowQuery(
     input: DiagnoseSlowQueryInput,
     ctx: SessionContext,
   ): Promise<DiagnosticResult> {
+    const sqlMatchedDigestSample =
+      input.sql ? await this.findStatementDigestSampleForSql(input.sql, ctx) : undefined;
     const externalSlowSqlSample =
       !input.sql && this.slowSqlSource
         ? await this.slowSqlSource.resolve(buildResolveSlowSqlInput(input), ctx)
         : undefined;
     const digestSample =
-      !input.sql && input.digestText
+      sqlMatchedDigestSample
+      ?? (!input.sql && input.digestText
         ? await this.findStatementDigestSample(input.digestText, ctx)
-        : undefined;
+        : undefined);
     const waitEventRows =
       input.digestText || digestSample?.digestText
         ? await this.findStatementWaitEvents(
@@ -967,9 +1651,11 @@ export class TaurusDBEngine {
         ? [
             {
               sqlHash: input.sqlHash ?? derivedSqlHash,
-              digestText: input.digestText,
+              digestText: input.digestText ?? digestSample?.digestText,
               reason: input.sql
-                ? "SQL text was provided and analyzed with EXPLAIN evidence."
+                ? digestSample?.digestText
+                  ? "SQL text was provided, matched to performance_schema digest summaries, and analyzed with EXPLAIN plus runtime evidence."
+                  : "SQL text was provided and analyzed with EXPLAIN evidence."
                 : externalSlowSqlSample?.sql
                   ? "A SQL sample was resolved from the TaurusDB slow-log source and analyzed with EXPLAIN evidence."
                 : digestSample?.querySampleText
@@ -1184,14 +1870,11 @@ export class TaurusDBEngine {
     }
 
     const maxCandidates = clampInteger(input.maxCandidates, 3, 1, 10);
-    const severity =
-      riskSummary.fullTableScanLikely ||
-      riskSummary.usesFilesort ||
-      riskSummary.usesTempStructure
-        ? (riskSummary.estimatedRows ?? 0) >= 100_000
-          ? "high"
-          : "warning"
-        : "info";
+    const sortedRootCauseCandidates = sortRootCauseCandidates(rootCauseCandidates);
+    const severity = severityFromSlowQueryEvidence(
+      riskSummary,
+      sortedRootCauseCandidates,
+    );
 
     const keyFindings = [
       riskSummary.estimatedRows !== undefined
@@ -1316,7 +1999,7 @@ export class TaurusDBEngine {
         to: input.timeRange?.to,
         relative: input.timeRange?.relative,
       },
-      rootCauseCandidates: rootCauseCandidates.slice(0, maxCandidates),
+      rootCauseCandidates: sortedRootCauseCandidates.slice(0, maxCandidates),
       keyFindings,
       suspiciousEntities: suspiciousSql ? { sqls: suspiciousSql } : undefined,
       evidence: [
@@ -1368,6 +2051,690 @@ export class TaurusDBEngine {
         "Runtime wait-event correlation currently depends on performance_schema statement and wait history being enabled and retaining matching samples.",
       ],
     };
+  }
+
+  async diagnoseServiceLatency(
+    input: DiagnoseServiceLatencyInput,
+    ctx: SessionContext,
+  ): Promise<ServiceLatencyResult> {
+    const maxCandidates = clampInteger(input.maxCandidates, 5, 1, 10);
+    const topSlowSql = await this.findTopSlowSql(
+      {
+        ...input,
+        topN: Math.min(maxCandidates, 5),
+        sortBy:
+          input.symptom === "latency" || input.symptom === "timeout"
+            ? "avg_latency"
+            : "total_latency",
+      },
+      ctx,
+    );
+    const lockContention =
+      input.symptom === "connection_growth"
+        ? undefined
+        : await this.diagnoseLockContention(
+            {
+              ...input,
+              maxCandidates: Math.min(maxCandidates, 3),
+            },
+            ctx,
+          );
+    const connectionSpike = await this.diagnoseConnectionSpike(
+      {
+        ...input,
+        user: input.user,
+        clientHost: input.clientHost,
+        compareBaseline: false,
+        maxCandidates: Math.min(maxCandidates, 3),
+      },
+      ctx,
+    );
+
+    const topCandidates: ServiceLatencyCandidate[] = [];
+    const evidence: ServiceLatencyResult["evidence"] = [];
+    const recommendedNextTools = new Set<string>();
+    const nextToolInputs: DiagnosticNextToolInput[] = [];
+    const limitations = new Set<string>();
+    const categoryScores = new Map<ServiceLatencySuspectedCategory, number>();
+
+    const scoreCategory = (
+      category: ServiceLatencySuspectedCategory,
+      score: number,
+    ) => {
+      categoryScores.set(category, Math.max(categoryScores.get(category) ?? 0, score));
+    };
+
+    if (topSlowSql.status === "ok" && topSlowSql.topSqls.length > 0) {
+      const leadSql = topSlowSql.topSqls[0];
+      const sqlConfidence: ServiceLatencyCandidate["confidence"] =
+        (leadSql.totalLatencyMs ?? 0) >= 1000 || (leadSql.avgLatencyMs ?? 0) >= 100
+          ? "high"
+          : (leadSql.totalLatencyMs ?? 0) > 0 || (leadSql.avgLatencyMs ?? 0) > 0
+            ? "medium"
+            : "low";
+
+      topCandidates.push({
+        type: "sql",
+        title: leadSql.digestText
+          ? `Top ranked SQL digest: ${leadSql.digestText}`
+          : "Top ranked SQL digest",
+        confidence: sqlConfidence,
+        sqlHash: leadSql.sqlHash,
+        digestText: leadSql.digestText,
+        sampleSql: leadSql.sampleSql,
+        rationale:
+          `Ranked near the top of statement digest summaries${leadSql.avgLatencyMs !== undefined ? `; avg_latency_ms=${leadSql.avgLatencyMs}` : ""}${leadSql.totalLatencyMs !== undefined ? `, total_latency_ms=${leadSql.totalLatencyMs}` : ""}${leadSql.execCount !== undefined ? `, exec_count=${leadSql.execCount}` : ""}${leadSql.avgRowsExamined !== undefined ? `, avg_rows_examined=${leadSql.avgRowsExamined}` : ""}.`,
+      });
+      const slowQueryInput = buildSlowQueryNextToolInput(
+        leadSql,
+        input,
+        "Analyze the top-ranked SQL candidate from the service-latency symptom route.",
+      );
+      if (slowQueryInput) {
+        nextToolInputs.push(slowQueryInput);
+      }
+      evidence.push(...topSlowSql.evidence.slice(0, 1));
+      recommendedNextTools.add("diagnose_slow_query");
+      if ((leadSql.avgLockTimeMs ?? 0) >= 10) {
+        recommendedNextTools.add("diagnose_lock_contention");
+      }
+
+      scoreCategory(
+        "slow_sql",
+        input.symptom === "cpu"
+          ? 4
+          : input.symptom === "latency" || input.symptom === "timeout"
+            ? 3
+            : 2,
+      );
+    }
+    for (const limitation of topSlowSql.limitations ?? []) {
+      limitations.add(limitation);
+    }
+
+    if (lockContention) {
+      for (const limitation of lockContention.limitations ?? []) {
+        limitations.add(limitation);
+      }
+      if (lockContention.status === "ok") {
+        const leadBlocker = lockContention.suspiciousEntities?.sessions?.[0];
+        const leadTable = lockContention.suspiciousEntities?.tables?.[0];
+        const leadRootCause = lockContention.rootCauseCandidates[0];
+
+        if (leadBlocker) {
+          topCandidates.push({
+            type: "session",
+            title: leadBlocker.sessionId
+              ? `Blocking session ${leadBlocker.sessionId}`
+              : "Blocking session hotspot",
+            confidence: leadRootCause?.confidence ?? "medium",
+            sessionId: leadBlocker.sessionId,
+            rationale: leadBlocker.reason,
+          });
+        }
+        if (leadTable) {
+          topCandidates.push({
+            type: "table",
+            title: `Hot locked table ${leadTable.table}`,
+            confidence:
+              lockContention.rootCauseCandidates.some(
+                (candidate) => candidate.code === "lock_contention_hot_table",
+              )
+                ? "high"
+                : leadRootCause?.confidence ?? "medium",
+            table: leadTable.table,
+            rationale: leadTable.reason,
+          });
+        }
+
+        evidence.push(...lockContention.evidence.slice(0, 2));
+        recommendedNextTools.add("diagnose_lock_contention");
+        recommendedNextTools.add("show_processlist");
+        nextToolInputs.push(
+          buildLockContentionNextToolInput(
+            {
+              table: leadTable?.table,
+              blockerSessionId: leadBlocker?.sessionId,
+            },
+            input,
+            "Inspect the lock-wait candidate identified by the service-latency symptom route.",
+          ),
+          buildShowProcesslistNextToolInput(
+            {
+              command: "Query",
+              includeIdle: false,
+              includeInfo: true,
+            },
+            input,
+            "Review live running sessions around the lock-contention signal.",
+          ),
+        );
+
+        const lockScoreBase =
+          input.symptom === "timeout"
+            ? 5
+            : input.symptom === "latency"
+              ? 4
+              : 2;
+        scoreCategory(
+          "lock_contention",
+          lockContention.rootCauseCandidates.some(
+            (candidate) => candidate.code === "lock_contention_single_blocker_hotspot",
+          )
+            ? lockScoreBase + 1
+            : lockScoreBase,
+        );
+      }
+    }
+
+    for (const limitation of connectionSpike.limitations ?? []) {
+      limitations.add(limitation);
+    }
+    if (connectionSpike.status === "ok") {
+      const focusUser = connectionSpike.suspiciousEntities?.users?.[0];
+      const focusSession = connectionSpike.suspiciousEntities?.sessions?.[0];
+      const leadRootCause = connectionSpike.rootCauseCandidates[0];
+      topCandidates.push({
+        type: "session",
+        title: focusUser?.user
+          ? `Connection growth around user ${focusUser.user}`
+          : focusSession?.sessionId
+            ? `Connection growth around session ${focusSession.sessionId}`
+            : "Connection growth hotspot",
+        confidence: leadRootCause?.confidence ?? "medium",
+        sessionId: focusSession?.sessionId,
+        rationale:
+          focusUser?.reason
+          ?? focusSession?.reason
+          ?? "A live processlist snapshot suggests connection growth around a focused user or long-running sessions.",
+      });
+      evidence.push(...connectionSpike.evidence.slice(0, 2));
+      recommendedNextTools.add("diagnose_connection_spike");
+      recommendedNextTools.add("show_processlist");
+      nextToolInputs.push(
+        buildConnectionSpikeNextToolInput(
+          {
+            user: focusUser?.user ?? input.user,
+            clientHost: focusUser?.clientHost ?? input.clientHost,
+          },
+          input,
+          "Inspect the connection-growth candidate identified by the service-latency symptom route.",
+        ),
+        buildShowProcesslistNextToolInput(
+          {
+            user: focusUser?.user ?? input.user,
+            host: focusUser?.clientHost ?? input.clientHost,
+            includeIdle: true,
+            includeInfo: true,
+          },
+          input,
+          "Review live sessions for idle buildup or long-running queries around the connection signal.",
+        ),
+      );
+
+      const connectionScoreBase =
+        input.symptom === "connection_growth"
+          ? 5
+          : input.symptom === "latency" || input.symptom === "timeout"
+            ? 2
+            : 1;
+      scoreCategory(
+        "connection_spike",
+        connectionSpike.rootCauseCandidates.some(
+          (candidate) => candidate.code === "connection_spike_idle_session_accumulation",
+        )
+          ? connectionScoreBase + 1
+          : connectionScoreBase,
+      );
+    }
+
+    const scoredCategories = [...categoryScores.entries()]
+      .filter(([, score]) => score > 0)
+      .sort(
+        (left, right) =>
+          right[1] - left[1]
+          || serviceCategoryPriority(right[0]) - serviceCategoryPriority(left[0]),
+      );
+
+    const fallbackCategory: ServiceLatencySuspectedCategory =
+      input.symptom === "cpu"
+        ? "resource_pressure"
+        : input.symptom === "connection_growth"
+          ? "connection_spike"
+          : input.symptom === "timeout"
+            ? "lock_contention"
+            : "slow_sql";
+
+    const suspectedCategory =
+      scoredCategories.length === 0
+        ? fallbackCategory
+        : scoredCategories.length > 1 && scoredCategories[0][1] === scoredCategories[1][1]
+          ? "mixed"
+          : scoredCategories[0][0];
+
+    if (suspectedCategory === "resource_pressure") {
+      recommendedNextTools.add("diagnose_storage_pressure");
+      limitations.add(
+        "Resource-pressure routing is heuristic only in the current version; no CPU, IOPS, or instance-metric collector is connected yet.",
+      );
+    }
+
+    const sortedCandidates = [...topCandidates]
+      .sort(
+        (left, right) =>
+          confidenceWeight(right.confidence) - confidenceWeight(left.confidence)
+          || left.title.localeCompare(right.title),
+      )
+      .slice(0, maxCandidates);
+
+    const summary =
+      sortedCandidates.length > 0
+        ? suspectedCategory === "mixed"
+          ? "Service-latency diagnosis found mixed SQL, lock, or connection signals"
+          : `Service-latency diagnosis points to ${suspectedCategory.replace(/_/g, " ")} as the dominant suspect`
+        : "Service-latency diagnosis did not isolate a dominant suspect from current SQL, lock, or connection evidence";
+
+    return {
+      tool: "diagnose_service_latency",
+      status: sortedCandidates.length > 0 ? "ok" : "inconclusive",
+      summary: withDatasourceSummary(summary, ctx.datasource),
+      diagnosisWindow: {
+        from: input.timeRange?.from,
+        to: input.timeRange?.to,
+        relative: input.timeRange?.relative,
+      },
+      suspectedCategory,
+      topCandidates: sortedCandidates,
+      evidence: evidence.slice(0, 5),
+      recommendedNextTools: [...recommendedNextTools],
+      nextToolInputs: dedupeNextToolInputs(nextToolInputs).slice(0, maxCandidates),
+      limitations: [...limitations].slice(0, 5),
+    };
+  }
+
+  async diagnoseDbHotspot(
+    input: DiagnoseDbHotspotInput,
+    ctx: SessionContext,
+  ): Promise<DbHotspotResult> {
+    const maxCandidates = clampInteger(input.maxCandidates, 5, 1, 10);
+    const scope = input.scope ?? "all";
+    const hotspots: DbHotspotResult["hotspots"] = [];
+    const evidence: DbHotspotResult["evidence"] = [];
+    const recommendedNextTools = new Set<string>();
+    const nextToolInputs: DiagnosticNextToolInput[] = [];
+    const limitations = new Set<string>();
+
+    if (scope === "all" || scope === "sql") {
+      const topSlowSql = await this.findTopSlowSql(
+        {
+          ...input,
+          topN: Math.min(maxCandidates, 5),
+          sortBy: "total_latency",
+        },
+        ctx,
+      );
+      for (const limitation of topSlowSql.limitations ?? []) {
+        limitations.add(limitation);
+      }
+      if (topSlowSql.status === "ok") {
+        for (const sql of topSlowSql.topSqls.slice(0, Math.min(maxCandidates, 3))) {
+          hotspots.push({
+            type: "sql",
+            title: sql.digestText
+              ? `Top SQL hotspot: ${sql.digestText}`
+              : "Top SQL hotspot",
+            confidence:
+              (sql.totalLatencyMs ?? 0) >= 1000 || (sql.avgLatencyMs ?? 0) >= 100
+                ? "high"
+                : (sql.totalLatencyMs ?? 0) > 0 || (sql.avgLatencyMs ?? 0) > 0
+                  ? "medium"
+                  : "low",
+            sqlHash: sql.sqlHash,
+            digestText: sql.digestText,
+            sampleSql: sql.sampleSql,
+            rationale:
+              `Ranked in digest summaries${sql.totalLatencyMs !== undefined ? `; total_latency_ms=${sql.totalLatencyMs}` : ""}${sql.avgLatencyMs !== undefined ? `, avg_latency_ms=${sql.avgLatencyMs}` : ""}${sql.execCount !== undefined ? `, exec_count=${sql.execCount}` : ""}${sql.avgRowsExamined !== undefined ? `, avg_rows_examined=${sql.avgRowsExamined}` : ""}.`,
+            evidenceSources: sql.evidenceSources,
+            recommendation:
+              sql.recommendation
+              ?? "Use diagnose_slow_query to inspect the SQL hotspot in more detail.",
+          });
+          const slowQueryInput = buildSlowQueryNextToolInput(
+            sql,
+            input,
+            "Analyze this SQL hotspot from database-hotspot aggregation.",
+          );
+          if (slowQueryInput) {
+            nextToolInputs.push(slowQueryInput);
+          }
+        }
+        evidence.push(...topSlowSql.evidence.slice(0, 1));
+        recommendedNextTools.add("find_top_slow_sql");
+        recommendedNextTools.add("diagnose_slow_query");
+      }
+    }
+
+    if (scope === "all" || scope === "table" || scope === "session") {
+      const lockContention = await this.diagnoseLockContention(
+        {
+          ...input,
+          maxCandidates: Math.min(maxCandidates, 3),
+        },
+        ctx,
+      );
+      for (const limitation of lockContention.limitations ?? []) {
+        limitations.add(limitation);
+      }
+      if (lockContention.status === "ok") {
+        if (scope === "all" || scope === "session") {
+          for (const session of lockContention.suspiciousEntities?.sessions?.slice(0, 2) ?? []) {
+            hotspots.push({
+              type: "session",
+              title: session.sessionId
+                ? `Blocking session hotspot ${session.sessionId}`
+                : "Blocking session hotspot",
+              confidence:
+                lockContention.rootCauseCandidates.some(
+                  (candidate) => candidate.code === "lock_contention_single_blocker_hotspot",
+                )
+                  ? "high"
+                  : "medium",
+              sessionId: session.sessionId,
+              rationale: session.reason,
+              evidenceSources: ["lock_waits"],
+              recommendation:
+                "Use diagnose_lock_contention and show_processlist to inspect blocker SQL and transaction age.",
+            });
+            nextToolInputs.push(
+              buildLockContentionNextToolInput(
+                { blockerSessionId: session.sessionId },
+                input,
+                "Inspect this blocking-session hotspot with lock-wait context.",
+              ),
+              buildShowProcesslistNextToolInput(
+                {
+                  command: "Query",
+                  includeIdle: false,
+                  includeInfo: true,
+                },
+                input,
+                "Review live running sessions around this blocking-session hotspot.",
+              ),
+            );
+          }
+        }
+        if (scope === "all" || scope === "table") {
+          for (const table of lockContention.suspiciousEntities?.tables?.slice(0, 2) ?? []) {
+            hotspots.push({
+              type: "table",
+              title: `Locked table hotspot ${table.table}`,
+              confidence:
+                lockContention.rootCauseCandidates.some(
+                  (candidate) => candidate.code === "lock_contention_hot_table",
+                )
+                  ? "high"
+                  : "medium",
+              table: table.table,
+              rationale: table.reason,
+              evidenceSources: ["lock_waits"],
+              recommendation:
+                "Use diagnose_lock_contention to inspect wait chains and reduce lock hold time on this table.",
+            });
+            nextToolInputs.push(
+              buildLockContentionNextToolInput(
+                { table: table.table },
+                input,
+                "Inspect this locked-table hotspot with lock-wait context.",
+              ),
+            );
+          }
+        }
+        evidence.push(...lockContention.evidence.slice(0, 2));
+        recommendedNextTools.add("diagnose_lock_contention");
+        recommendedNextTools.add("show_processlist");
+      }
+    }
+
+    if (scope === "all" || scope === "session") {
+      const connectionSpike = await this.diagnoseConnectionSpike(
+        {
+          ...input,
+          compareBaseline: false,
+          maxCandidates: Math.min(maxCandidates, 3),
+        },
+        ctx,
+      );
+      for (const limitation of connectionSpike.limitations ?? []) {
+        limitations.add(limitation);
+      }
+      if (connectionSpike.status === "ok") {
+        const focusUser = connectionSpike.suspiciousEntities?.users?.[0];
+        const focusSession = connectionSpike.suspiciousEntities?.sessions?.[0];
+        hotspots.push({
+          type: "session",
+          title: focusUser?.user
+            ? `Connection hotspot around user ${focusUser.user}`
+            : focusSession?.sessionId
+              ? `Connection hotspot around session ${focusSession.sessionId}`
+              : "Connection hotspot",
+          confidence:
+            connectionSpike.rootCauseCandidates.some(
+              (candidate) => candidate.code === "connection_spike_idle_session_accumulation",
+            )
+              ? "high"
+              : "medium",
+          sessionId: focusSession?.sessionId,
+          rationale:
+            focusUser?.reason
+            ?? focusSession?.reason
+            ?? "A live processlist snapshot suggests a session-level hotspot around connection growth.",
+          evidenceSources: ["processlist"],
+          recommendation:
+            "Use diagnose_connection_spike and show_processlist to inspect idle buildup and long-running sessions.",
+        });
+        nextToolInputs.push(
+          buildConnectionSpikeNextToolInput(
+            {
+              user: focusUser?.user,
+              clientHost: focusUser?.clientHost,
+            },
+            input,
+            "Inspect this connection hotspot with connection-growth diagnostics.",
+          ),
+          buildShowProcesslistNextToolInput(
+            {
+              user: focusUser?.user,
+              host: focusUser?.clientHost,
+              includeIdle: true,
+              includeInfo: true,
+            },
+            input,
+            "Review live sessions for this connection hotspot.",
+          ),
+        );
+        evidence.push(...connectionSpike.evidence.slice(0, 2));
+        recommendedNextTools.add("diagnose_connection_spike");
+        recommendedNextTools.add("show_processlist");
+      }
+    }
+
+    const dedupedHotspots = hotspots
+      .filter((item, index, allItems) => {
+        const key = `${item.type}:${item.sqlHash ?? ""}:${item.digestText ?? ""}:${item.sessionId ?? ""}:${item.table ?? ""}:${item.title}`;
+        return allItems.findIndex((candidate) => {
+          const candidateKey = `${candidate.type}:${candidate.sqlHash ?? ""}:${candidate.digestText ?? ""}:${candidate.sessionId ?? ""}:${candidate.table ?? ""}:${candidate.title}`;
+          return candidateKey === key;
+        }) === index;
+      })
+      .sort(
+        (left, right) =>
+          confidenceWeight(right.confidence) - confidenceWeight(left.confidence)
+          || hotspotTypePriority(right.type) - hotspotTypePriority(left.type)
+          || left.title.localeCompare(right.title),
+      )
+      .slice(0, maxCandidates);
+
+    if (scope === "table") {
+      limitations.add(
+        "Table hotspots currently rely on lock-wait evidence only; no table-level IO, scan, or storage metric collector is connected yet.",
+      );
+    }
+    if (scope === "session") {
+      limitations.add(
+        "Session hotspots currently rely on processlist and lock-wait snapshots only; no CPU or per-session resource metric collector is connected yet.",
+      );
+    }
+
+    return {
+      tool: "diagnose_db_hotspot",
+      status: dedupedHotspots.length > 0 ? "ok" : "inconclusive",
+      summary: withDatasourceSummary(
+        dedupedHotspots.length > 0
+          ? `Database hotspot diagnosis collected ${dedupedHotspots.length} hotspot candidates`
+          : "Database hotspot diagnosis did not isolate a hotspot from current SQL, lock, or processlist evidence",
+        ctx.datasource,
+      ),
+      diagnosisWindow: {
+        from: input.timeRange?.from,
+        to: input.timeRange?.to,
+        relative: input.timeRange?.relative,
+      },
+      scope,
+      hotspots: dedupedHotspots,
+      evidence: evidence.slice(0, 5),
+      recommendedNextTools: [...recommendedNextTools],
+      nextToolInputs: dedupeNextToolInputs(nextToolInputs).slice(0, maxCandidates),
+      limitations: [...limitations].slice(0, 5),
+    };
+  }
+
+  async findTopSlowSql(
+    input: FindTopSlowSqlInput,
+    ctx: SessionContext,
+  ): Promise<FindTopSlowSqlResult> {
+    try {
+      const digestRows = await this.findTopStatementDigests(input, ctx);
+
+      if (digestRows.length === 0) {
+        return {
+          tool: "find_top_slow_sql",
+          status: "inconclusive",
+          summary: withDatasourceSummary(
+            "No statement digest ranking evidence was available for top slow SQL discovery",
+            ctx.datasource,
+          ),
+          diagnosisWindow: {
+            from: input.timeRange?.from,
+            to: input.timeRange?.to,
+            relative: input.timeRange?.relative,
+          },
+          topSqls: [],
+          evidence: [
+            {
+              source: "statement_digest",
+              title: "Statement digest ranking",
+              summary:
+                "No matching rows were returned from performance_schema.events_statements_summary_by_digest.",
+            },
+          ],
+          limitations: [
+            "This discovery currently depends on performance_schema digest summaries being enabled and populated.",
+            "The selected time_range is not yet enforced against cumulative digest counters; current ranking reflects retained digest summaries.",
+          ],
+        };
+      }
+
+      const topSqls = digestRows.map((row) => {
+        const evidenceSources = ["statement_digest"];
+        const recommendationParts = [];
+        if (row.querySampleText || row.digestText) {
+          recommendationParts.push(
+            "Run diagnose_slow_query with sql or digest_text to analyze the dominant bottleneck.",
+          );
+        }
+        if ((row.avgLockTimeMs ?? 0) >= 10) {
+          recommendationParts.push(
+            "Correlate with diagnose_lock_contention if lock time remains elevated.",
+          );
+        }
+        if ((row.execCount ?? 0) >= 20 && (row.avgLatencyMs ?? 0) < 50) {
+          recommendationParts.push(
+            "Review high-frequency workload shape before focusing only on single-query latency.",
+          );
+        }
+
+        return {
+          sqlHash: row.querySampleText ? sqlHash(normalizeSql(row.querySampleText)) : undefined,
+          digestText: row.digestText,
+          sampleSql: row.querySampleText,
+          avgLatencyMs: row.avgLatencyMs,
+          totalLatencyMs: row.totalLatencyMs,
+          execCount: row.execCount,
+          avgLockTimeMs: row.avgLockTimeMs,
+          avgRowsExamined: row.avgRowsExamined,
+          evidenceSources,
+          recommendation:
+            recommendationParts.length > 0
+              ? recommendationParts.join(" ")
+              : "Review this digest with diagnose_slow_query if it aligns with the reported symptom window.",
+        };
+      });
+
+      return {
+        tool: "find_top_slow_sql",
+        status: "ok",
+        summary: withDatasourceSummary(
+          `Top slow SQL discovery collected ${topSqls.length} suspect statements`,
+          ctx.datasource,
+        ),
+        diagnosisWindow: {
+          from: input.timeRange?.from,
+          to: input.timeRange?.to,
+          relative: input.timeRange?.relative,
+        },
+        topSqls,
+        evidence: [
+          {
+            source: "statement_digest",
+            title: "Statement digest ranking",
+            summary:
+              `Collected ${topSqls.length} ranked rows from performance_schema.events_statements_summary_by_digest ordered by ${input.sortBy ?? "total_latency"}.`,
+          },
+        ],
+        limitations: [
+          "The selected time_range is not yet enforced against cumulative digest counters; current ranking reflects retained digest summaries.",
+          "This discovery currently ranks digest summaries only and does not yet merge DAS, Top SQL, or external Taurus slow-log rankings.",
+        ],
+      };
+    } catch (error) {
+      return {
+        tool: "find_top_slow_sql",
+        status: "inconclusive",
+        summary: withDatasourceSummary(
+          "Top slow SQL discovery could not collect digest ranking evidence",
+          ctx.datasource,
+        ),
+        diagnosisWindow: {
+          from: input.timeRange?.from,
+          to: input.timeRange?.to,
+          relative: input.timeRange?.relative,
+        },
+        topSqls: [],
+        evidence: [
+          {
+            source: "statement_digest",
+            title: "Statement digest ranking unavailable",
+            summary:
+              error instanceof Error
+                ? error.message
+                : "Digest ranking query failed unexpectedly.",
+          },
+        ],
+        limitations: [
+          "This discovery currently depends on performance_schema digest summaries being accessible from the selected datasource.",
+        ],
+      };
+    }
   }
 
   async diagnoseConnectionSpike(
@@ -1917,35 +3284,221 @@ export class TaurusDBEngine {
     input: DiagnoseStoragePressureInput,
     ctx: SessionContext,
   ): Promise<DiagnosticResult> {
-    const suspiciousTables =
-      input.table
-        ? [
-            {
-              table: input.table,
-              reason: "Provided as the storage-pressure focus for future SQL and table-level correlation.",
-            },
-          ]
-        : undefined;
+    const maxCandidates = clampInteger(input.maxCandidates, 5, 1, 10);
+    const [digestRows, tableRows] = await Promise.all([
+      this.findStorageStatementDigests(input, ctx).catch(() => [] as StatementDigestRow[]),
+      this.findTableStorageStats(input, ctx).catch(() => [] as TableStorageRow[]),
+    ]);
 
-    return createPlaceholderDiagnosticResult("diagnose_storage_pressure", input, {
-      summary: withDatasourceSummary("Storage-pressure diagnosis is scaffolded but not implemented", ctx.datasource),
-      candidateTitle: "Storage evidence not collected",
-      candidateRationale:
-        "This tool needs CES storage metrics, temporary-table counters, and SQL-level scan evidence, but those collectors are not wired yet.",
-      keyFindings: [
-        `Scope requested: ${input.scope ?? "instance"}.`,
-        suspiciousTables ? `Table focus provided: ${input.table}.` : "No table focus was provided.",
-      ],
-      suspiciousEntities: suspiciousTables ? { tables: suspiciousTables } : undefined,
-      recommendedActions: [
-        "Inspect temporary-table, filesort, and disk metrics manually until this diagnostic is implemented.",
-        "Add CES storage metrics and SQL evidence collectors before enabling this tool in production.",
-      ],
-      limitations: [
-        "No CES storage metrics are connected yet.",
-        "No SQL-to-storage-pressure correlation is performed yet.",
-      ],
+    const focusedTableName = input.table?.includes(".")
+      ? input.table.split(".").slice(1).join(".")
+      : input.table;
+    const relevantDigests = digestRows.filter((row) => {
+      if (!focusedTableName) {
+        return true;
+      }
+      const target = focusedTableName.toUpperCase();
+      return (
+        row.digestText?.toUpperCase().includes(target) ||
+        row.querySampleText?.toUpperCase().includes(target)
+      );
     });
+    const tmpDiskDigests = relevantDigests.filter((row) => (row.avgTmpDiskTables ?? 0) > 0);
+    const tmpTableDigests = relevantDigests.filter((row) => (row.avgTmpTables ?? 0) > 0);
+    const scanDigests = relevantDigests.filter(
+      (row) =>
+        (row.noIndexUsedCount ?? 0) > 0 ||
+        (row.selectScanCount ?? 0) > 0 ||
+        (row.avgRowsExamined ?? 0) >= 10_000,
+    );
+    const sortDigests = relevantDigests.filter((row) => (row.avgSortRows ?? 0) >= 1_000);
+    const largeTables = tableRows.filter(
+      (row) =>
+        (row.totalMb ?? 0) >= 1024 ||
+        (row.rowCountEstimate ?? 0) >= 1_000_000 ||
+        (row.dataFreeMb ?? 0) >= 1024,
+    );
+
+    const rootCauseCandidates: DiagnosticRootCauseCandidate[] = [];
+    if (tmpDiskDigests.length > 0) {
+      const lead = tmpDiskDigests[0];
+      rootCauseCandidates.push({
+        code: "storage_pressure_tmp_disk_spill",
+        title: "SQL workload is spilling temporary tables to disk",
+        confidence: (lead.avgTmpDiskTables ?? 0) >= 1 ? "high" : "medium",
+        rationale:
+          `Digest summaries show temporary disk table usage${lead.digestText ? ` for ${lead.digestText}` : ""}${lead.avgTmpDiskTables !== undefined ? `; avg_tmp_disk_tables=${lead.avgTmpDiskTables}` : ""}.`,
+      });
+    }
+    if (scanDigests.length > 0) {
+      const lead = scanDigests[0];
+      rootCauseCandidates.push({
+        code: "storage_pressure_scan_heavy_sql",
+        title: "Scan-heavy SQL is driving storage pressure",
+        confidence:
+          (lead.noIndexUsedCount ?? 0) > 0 || (lead.avgRowsExamined ?? 0) >= 100_000
+            ? "high"
+            : "medium",
+        rationale:
+          `Digest summaries show scan-heavy execution${lead.digestText ? ` for ${lead.digestText}` : ""}${lead.avgRowsExamined !== undefined ? `; avg_rows_examined=${lead.avgRowsExamined}` : ""}${lead.noIndexUsedCount !== undefined ? `, no_index_used_count=${lead.noIndexUsedCount}` : ""}${lead.selectScanCount !== undefined ? `, select_scan_count=${lead.selectScanCount}` : ""}.`,
+      });
+    }
+    if (sortDigests.length > 0 || tmpTableDigests.length > 0) {
+      const lead = sortDigests[0] ?? tmpTableDigests[0];
+      rootCauseCandidates.push({
+        code: "storage_pressure_sort_or_tmp_table_workload",
+        title: "Sort or temporary-table workload is increasing storage work",
+        confidence:
+          (lead.avgSortRows ?? 0) >= 10_000 || (lead.avgTmpTables ?? 0) >= 1
+            ? "medium"
+            : "low",
+        rationale:
+          `Digest summaries show sort or temporary-table work${lead.digestText ? ` for ${lead.digestText}` : ""}${lead.avgSortRows !== undefined ? `; avg_sort_rows=${lead.avgSortRows}` : ""}${lead.avgTmpTables !== undefined ? `, avg_tmp_tables=${lead.avgTmpTables}` : ""}.`,
+      });
+    }
+    if (largeTables.length > 0) {
+      const lead = largeTables[0];
+      const qualifiedTable = [lead.schemaName, lead.tableName].filter(Boolean).join(".");
+      rootCauseCandidates.push({
+        code: "storage_pressure_large_or_fragmented_table",
+        title: "Large or fragmented table may amplify storage work",
+        confidence: "medium",
+        rationale:
+          `${qualifiedTable || "A table"} is among the largest local tables${lead.totalMb !== undefined ? `; total_mb=${lead.totalMb}` : ""}${lead.rowCountEstimate !== undefined ? `, row_count_estimate=${lead.rowCountEstimate}` : ""}${lead.dataFreeMb !== undefined ? `, data_free_mb=${lead.dataFreeMb}` : ""}.`,
+      });
+    }
+    if (rootCauseCandidates.length === 0) {
+      rootCauseCandidates.push({
+        code: "storage_pressure_snapshot_collected",
+        title: "Storage evidence was collected but no dominant pressure signal stood out",
+        confidence: "low",
+        rationale:
+          "Local table size and statement digest summaries were collected, but temporary disk spill, scan pressure, and large-table thresholds were not crossed.",
+      });
+    }
+
+    const leadDigest = relevantDigests[0];
+    const suspiciousSqls = relevantDigests
+      .filter(
+        (row) =>
+          (row.avgTmpDiskTables ?? 0) > 0 ||
+          (row.avgTmpTables ?? 0) > 0 ||
+          (row.avgSortRows ?? 0) >= 1_000 ||
+          (row.noIndexUsedCount ?? 0) > 0 ||
+          (row.selectScanCount ?? 0) > 0 ||
+          (row.avgRowsExamined ?? 0) >= 10_000,
+      )
+      .slice(0, maxCandidates)
+      .map((row) => ({
+        sqlHash: row.querySampleText ? sqlHash(normalizeSql(row.querySampleText)) : undefined,
+        digestText: row.digestText,
+        reason:
+          `Statement digest shows storage-relevant work${row.avgTmpDiskTables !== undefined ? `; avg_tmp_disk_tables=${row.avgTmpDiskTables}` : ""}${row.avgTmpTables !== undefined ? `, avg_tmp_tables=${row.avgTmpTables}` : ""}${row.avgSortRows !== undefined ? `, avg_sort_rows=${row.avgSortRows}` : ""}${row.avgRowsExamined !== undefined ? `, avg_rows_examined=${row.avgRowsExamined}` : ""}.`,
+      }));
+    const suspiciousTables = tableRows.slice(0, maxCandidates).map((row) => {
+      const qualifiedTable = [row.schemaName, row.tableName].filter(Boolean).join(".");
+      return {
+        table: qualifiedTable || row.tableName || input.table || "unknown",
+        reason:
+          input.table
+            ? "Provided as the storage-pressure focus and matched against local table-size metadata."
+            : `Top local table by storage footprint${row.totalMb !== undefined ? `; total_mb=${row.totalMb}` : ""}${row.rowCountEstimate !== undefined ? `, row_count_estimate=${row.rowCountEstimate}` : ""}.`,
+      };
+    });
+
+    const keyFindings = [
+      `Scope requested: ${input.scope ?? "instance"}.`,
+      input.table ? `Table focus provided: ${input.table}.` : "No table focus was provided.",
+      relevantDigests.length > 0
+        ? `Collected ${relevantDigests.length} statement digest rows for storage-pressure correlation.`
+        : "No statement digest rows were available for storage-pressure correlation.",
+      tableRows.length > 0
+        ? `Collected ${tableRows.length} table-size rows from information_schema.TABLES.`
+        : "No table-size rows were available from information_schema.TABLES.",
+    ];
+    if (tmpDiskDigests.length > 0) {
+      keyFindings.push(`${tmpDiskDigests.length} digest rows show temporary disk table usage.`);
+    }
+    if (scanDigests.length > 0) {
+      keyFindings.push(`${scanDigests.length} digest rows show scan-heavy execution.`);
+    }
+    if (leadDigest?.digestText) {
+      keyFindings.push(`Lead storage-relevant digest: ${leadDigest.digestText}.`);
+    }
+
+    const recommendedActions = [
+      "Use diagnose_slow_query on the lead storage-relevant SQL digest to inspect plan shape and runtime counters.",
+      "Review predicates, indexes, ORDER BY, and GROUP BY clauses for digests with scan, filesort, or temporary-table signals.",
+    ];
+    if (tmpDiskDigests.length > 0) {
+      recommendedActions.push(
+        "Reduce temporary disk tables by supporting grouping/sorting with indexes or reducing intermediate row width.",
+      );
+    }
+    if (largeTables.length > 0) {
+      recommendedActions.push(
+        "Review the largest table footprints and purge/archive strategy before tuning only individual SQL statements.",
+      );
+    }
+
+    const severity: DiagnosticSeverity =
+      tmpDiskDigests.length > 0 || scanDigests.some((row) => (row.avgRowsExamined ?? 0) >= 100_000)
+        ? "warning"
+        : rootCauseCandidates[0]?.code === "storage_pressure_snapshot_collected"
+          ? "info"
+          : "warning";
+
+    return {
+      tool: "diagnose_storage_pressure",
+      status:
+        relevantDigests.length > 0 || tableRows.length > 0
+          ? "ok"
+          : "inconclusive",
+      severity,
+      summary: withDatasourceSummary(
+        rootCauseCandidates[0]?.code === "storage_pressure_snapshot_collected"
+          ? "Storage-pressure diagnosis collected local evidence without isolating a dominant pressure signal"
+          : "Storage-pressure diagnosis collected local SQL and table metadata evidence",
+        ctx.datasource,
+      ),
+      diagnosisWindow: {
+        from: input.timeRange?.from,
+        to: input.timeRange?.to,
+        relative: input.timeRange?.relative,
+      },
+      rootCauseCandidates: rootCauseCandidates.slice(0, maxCandidates),
+      keyFindings,
+      suspiciousEntities:
+        suspiciousSqls.length > 0 || suspiciousTables.length > 0
+          ? {
+              sqls: suspiciousSqls.length > 0 ? suspiciousSqls : undefined,
+              tables: suspiciousTables.length > 0 ? suspiciousTables : undefined,
+            }
+          : undefined,
+      evidence: [
+        {
+          source: "statement_digest",
+          title: "Statement digest storage counters",
+          summary:
+            relevantDigests.length > 0
+              ? `Collected ${relevantDigests.length} digest rows; tmp_disk=${tmpDiskDigests.length}, scan_heavy=${scanDigests.length}, sort_or_tmp=${Math.max(sortDigests.length, tmpTableDigests.length)}.`
+              : "No matching rows were returned from performance_schema.events_statements_summary_by_digest.",
+        },
+        {
+          source: "table_storage",
+          title: "Table storage footprint",
+          summary:
+            tableRows.length > 0
+              ? `Collected ${tableRows.length} rows from information_schema.TABLES; largest=${[tableRows[0]?.schemaName, tableRows[0]?.tableName].filter(Boolean).join(".") || "n/a"}${tableRows[0]?.totalMb !== undefined ? ` (${tableRows[0].totalMb} MB)` : ""}.`
+              : "No matching table-size rows were returned from information_schema.TABLES.",
+        },
+      ],
+      recommendedActions: [...new Set(recommendedActions)],
+      limitations: [
+        "No CES, OS-level IOPS, throughput, or disk-usage time-series metrics are connected yet.",
+        "Statement digest counters are cumulative within performance_schema retention and are not yet filtered by the requested time_range.",
+      ],
+    };
   }
 
   async explain(sql: string, ctx: SessionContext): Promise<ExplainResult> {

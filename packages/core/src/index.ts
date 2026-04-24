@@ -103,14 +103,24 @@ export {
   TaurusApiSlowSqlSource,
 } from "./diagnostics/slow-sql-source.js";
 export type {
+  DbHotspotItem,
+  DbHotspotResult,
   DiagnosticBaseInput,
   DiagnosticConfidence,
   DiagnosticEvidenceItem,
   DiagnosticEvidenceLevel,
+  DiagnosticNextToolInput,
+  DiagnoseDbHotspotInput,
+  DiagnoseServiceLatencyInput,
+  FindTopSlowSqlInput,
+  FindTopSlowSqlResult,
   DiagnosticResult,
   DiagnosticRootCauseCandidate,
   DiagnosticSeverity,
   DiagnosticStatus,
+  ServiceLatencyCandidate,
+  ServiceLatencyResult,
+  ServiceLatencySuspectedCategory,
   DiagnosticSuspiciousEntities,
   DiagnosticToolName,
   DiagnosisWindow,
@@ -120,6 +130,7 @@ export type {
   DiagnoseSlowQueryInput,
   DiagnoseStoragePressureInput,
   PlaceholderDiagnosticOptions,
+  TopSlowSqlItem,
 } from "./diagnostics/types.js";
 export type {
   ExternalSlowSqlSample,
