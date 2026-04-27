@@ -102,6 +102,10 @@ export {
   createSlowSqlSource,
   TaurusApiSlowSqlSource,
 } from "./diagnostics/slow-sql-source.js";
+export {
+  CesMetricsSource,
+  createMetricsSource,
+} from "./diagnostics/metrics-source.js";
 export type {
   DbHotspotItem,
   DbHotspotResult,
@@ -137,3 +141,10 @@ export type {
   ResolveSlowSqlInput,
   SlowSqlSource,
 } from "./diagnostics/slow-sql-source.js";
+export type {
+  MetricAlias,
+  MetricPoint,
+  MetricSummary,
+  MetricsSource,
+  QueryMetricsInput,
+} from "./diagnostics/metrics-source.js";

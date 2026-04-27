@@ -13,11 +13,13 @@ import {
   type CapabilityProbe,
 } from "./capability/probe.js";
 import { UnsupportedFeatureError } from "./capability/types.js";
-import type { CapabilitySnapshot, FeatureMatrix, KernelInfo } from "./capability/types.js";
+import type {
+  CapabilitySnapshot,
+  FeatureMatrix,
+  KernelInfo,
+} from "./capability/types.js";
 import { getConfig, type Config } from "./config/index.js";
-import {
-  createDatasourceResolver,
-} from "./context/datasource-resolver.js";
+import { createDatasourceResolver } from "./context/datasource-resolver.js";
 import type {
   DatasourceResolveInput,
   DatasourceResolver,
@@ -94,6 +96,12 @@ import {
   type ExternalSlowSqlSample,
   type SlowSqlSource,
 } from "./diagnostics/slow-sql-source.js";
+import {
+  createMetricsSource,
+  type MetricAlias,
+  type MetricSummary,
+  type MetricsSource,
+} from "./diagnostics/metrics-source.js";
 import { normalizeSql, sqlHash } from "./utils/hash.js";
 
 export interface DataSourceInfo {
@@ -118,7 +126,12 @@ export type IssueConfirmationInput = {
 
 export type ConfirmationOutcome =
   | { status: "confirmed" }
-  | { status: "token_issued"; token: string; issuedAt: number; expiresAt: number };
+  | {
+      status: "token_issued";
+      token: string;
+      issuedAt: number;
+      expiresAt: number;
+    };
 
 export interface EnhancedExplainResult {
   standardPlan: ExplainResult;
@@ -238,6 +251,17 @@ type TableStorageRow = {
   dataFreeMb?: number;
 };
 
+type ReplicationStatusRow = {
+  channelName?: string;
+  replicaIoRunning?: string;
+  replicaSqlRunning?: string;
+  secondsBehindSource?: number;
+  retrievedGtidSet?: string;
+  executedGtidSet?: string;
+  lastIoError?: string;
+  lastSqlError?: string;
+};
+
 function withDatasourceSummary(prefix: string, datasource: string): string {
   return `${prefix} on datasource ${datasource}.`;
 }
@@ -288,7 +312,9 @@ function parseProcesslistRows(result: QueryResult): ProcesslistRow[] {
             : undefined,
       state: typeof mapped.state === "string" ? mapped.state : undefined,
       infoPreview:
-        typeof mapped.info_preview === "string" ? mapped.info_preview : undefined,
+        typeof mapped.info_preview === "string"
+          ? mapped.info_preview
+          : undefined,
     };
   });
 }
@@ -314,7 +340,9 @@ function parseLockWaitRows(result: QueryResult): LockWaitRow[] {
           ? undefined
           : String(mapped.waiting_session_id),
       waitingUser:
-        typeof mapped.waiting_user === "string" ? mapped.waiting_user : undefined,
+        typeof mapped.waiting_user === "string"
+          ? mapped.waiting_user
+          : undefined,
       waitingState:
         typeof mapped.waiting_state === "string"
           ? mapped.waiting_state
@@ -344,11 +372,17 @@ function parseLockWaitRows(result: QueryResult): LockWaitRow[] {
         mapped.blocking_trx_age_seconds,
       ),
       lockedSchema:
-        typeof mapped.locked_schema === "string" ? mapped.locked_schema : undefined,
+        typeof mapped.locked_schema === "string"
+          ? mapped.locked_schema
+          : undefined,
       lockedTable:
-        typeof mapped.locked_table === "string" ? mapped.locked_table : undefined,
+        typeof mapped.locked_table === "string"
+          ? mapped.locked_table
+          : undefined,
       lockedIndex:
-        typeof mapped.locked_index === "string" ? mapped.locked_index : undefined,
+        typeof mapped.locked_index === "string"
+          ? mapped.locked_index
+          : undefined,
       waitingLockType:
         typeof mapped.waiting_lock_type === "string"
           ? mapped.waiting_lock_type
@@ -366,7 +400,9 @@ function parseLockWaitRows(result: QueryResult): LockWaitRow[] {
           ? mapped.blocking_lock_mode
           : undefined,
       waitingQuery:
-        typeof mapped.waiting_query === "string" ? mapped.waiting_query : undefined,
+        typeof mapped.waiting_query === "string"
+          ? mapped.waiting_query
+          : undefined,
       blockingQuery:
         typeof mapped.blocking_query === "string"
           ? mapped.blocking_query
@@ -415,9 +451,7 @@ function parseStatementDigestRows(result: QueryResult): StatementDigestRow[] {
   });
 }
 
-function topSlowSqlOrderBy(
-  sortBy: FindTopSlowSqlInput["sortBy"],
-): string {
+function topSlowSqlOrderBy(sortBy: FindTopSlowSqlInput["sortBy"]): string {
   switch (sortBy) {
     case "avg_latency":
       return "AVG_TIMER_WAIT DESC, SUM_TIMER_WAIT DESC, COUNT_STAR DESC";
@@ -435,25 +469,28 @@ function normalizeSqlForDigestMatch(sql: string): string {
   const normalized = normalizeSql(sql).replace(/`([^`]+)`/g, "$1");
   let result = "";
   let index = 0;
-  let quoteState: "'" | "\"" | "none" = "none";
+  let quoteState: "'" | '"' | "none" = "none";
 
   while (index < normalized.length) {
     const char = normalized[index];
 
     if (quoteState === "none") {
-      if (char === "'" || char === "\"") {
+      if (char === "'" || char === '"') {
         quoteState = char;
         result += "?";
         index += 1;
         continue;
       }
       if (
-        /[0-9]/.test(char)
-        && (index === 0 || !/[A-Za-z0-9_$]/.test(normalized[index - 1] ?? ""))
+        /[0-9]/.test(char) &&
+        (index === 0 || !/[A-Za-z0-9_$]/.test(normalized[index - 1] ?? ""))
       ) {
         result += "?";
         index += 1;
-        while (index < normalized.length && /[A-Za-z0-9_.+-]/.test(normalized[index])) {
+        while (
+          index < normalized.length &&
+          /[A-Za-z0-9_.+-]/.test(normalized[index])
+        ) {
           index += 1;
         }
         continue;
@@ -488,22 +525,22 @@ function digestMatchScore(sql: string, candidate: StatementDigestRow): number {
   const sqlShape = normalizeSqlForDigestMatch(sql);
 
   if (
-    candidate.querySampleText
-    && sqlHash(normalizeSql(candidate.querySampleText)) === normalizedSqlHash
+    candidate.querySampleText &&
+    sqlHash(normalizeSql(candidate.querySampleText)) === normalizedSqlHash
   ) {
     return 100;
   }
 
   if (
-    candidate.querySampleText
-    && normalizeSqlForDigestMatch(candidate.querySampleText) === sqlShape
+    candidate.querySampleText &&
+    normalizeSqlForDigestMatch(candidate.querySampleText) === sqlShape
   ) {
     return 80;
   }
 
   if (
-    candidate.digestText
-    && normalizeSqlForDigestMatch(candidate.digestText) === sqlShape
+    candidate.digestText &&
+    normalizeSqlForDigestMatch(candidate.digestText) === sqlShape
   ) {
     return 70;
   }
@@ -511,7 +548,9 @@ function digestMatchScore(sql: string, candidate: StatementDigestRow): number {
   return 0;
 }
 
-function parseStatementWaitEventRows(result: QueryResult): StatementWaitEventRow[] {
+function parseStatementWaitEventRows(
+  result: QueryResult,
+): StatementWaitEventRow[] {
   const columns = result.columns.map((column) => column.name);
   return result.rows.map((row) => {
     const mapped = Object.fromEntries(
@@ -551,6 +590,70 @@ function parseTableStorageRows(result: QueryResult): TableStorageRow[] {
   });
 }
 
+function parseReplicationStatusRows(
+  result: QueryResult,
+): ReplicationStatusRow[] {
+  const columns = result.columns.map((column) => column.name);
+  return result.rows
+    .map((row) => {
+      const mapped = Object.fromEntries(
+        columns.map((name, index) => [name, row[index]]),
+      );
+
+      const parsed = {
+        channelName:
+          typeof mapped.Channel_Name === "string"
+            ? mapped.Channel_Name
+            : typeof mapped.channel_name === "string"
+              ? mapped.channel_name
+              : undefined,
+        replicaIoRunning:
+          typeof mapped.Replica_IO_Running === "string"
+            ? mapped.Replica_IO_Running
+            : typeof mapped.Slave_IO_Running === "string"
+              ? mapped.Slave_IO_Running
+              : undefined,
+        replicaSqlRunning:
+          typeof mapped.Replica_SQL_Running === "string"
+            ? mapped.Replica_SQL_Running
+            : typeof mapped.Slave_SQL_Running === "string"
+              ? mapped.Slave_SQL_Running
+              : undefined,
+        secondsBehindSource:
+          parseOptionalNumber(mapped.Seconds_Behind_Source) ??
+          parseOptionalNumber(mapped.Seconds_Behind_Master),
+        retrievedGtidSet:
+          typeof mapped.Retrieved_Gtid_Set === "string"
+            ? mapped.Retrieved_Gtid_Set
+            : undefined,
+        executedGtidSet:
+          typeof mapped.Executed_Gtid_Set === "string"
+            ? mapped.Executed_Gtid_Set
+            : undefined,
+        lastIoError:
+          typeof mapped.Last_IO_Error === "string" &&
+          mapped.Last_IO_Error.length > 0
+            ? mapped.Last_IO_Error
+            : undefined,
+        lastSqlError:
+          typeof mapped.Last_SQL_Error === "string" &&
+          mapped.Last_SQL_Error.length > 0
+            ? mapped.Last_SQL_Error
+            : undefined,
+      };
+      return parsed;
+    })
+    .filter(
+      (row) =>
+        row.channelName !== undefined ||
+        row.replicaIoRunning !== undefined ||
+        row.replicaSqlRunning !== undefined ||
+        row.secondsBehindSource !== undefined ||
+        row.lastIoError !== undefined ||
+        row.lastSqlError !== undefined,
+    );
+}
+
 function extractPlanTableNames(plan: ExplainResult["plan"]): string[] {
   const names = plan
     .map((row) => {
@@ -575,7 +678,8 @@ function extractPlanTableNames(plan: ExplainResult["plan"]): string[] {
 
 function extractSqlTableNameHints(sql: string): string[] {
   const hints = new Set<string>();
-  const pattern = /\b(?:FROM|JOIN|UPDATE|INTO)\s+`?([A-Za-z0-9_$]+)`?(?:\s*\.\s*`?([A-Za-z0-9_$]+)`?)?/gi;
+  const pattern =
+    /\b(?:FROM|JOIN|UPDATE|INTO)\s+`?([A-Za-z0-9_$]+)`?(?:\s*\.\s*`?([A-Za-z0-9_$]+)`?)?/gi;
   let match = pattern.exec(sql);
   while (match) {
     hints.add(match[2] ?? match[1]);
@@ -598,10 +702,61 @@ function countBy<T>(
   }
   return [...counts.entries()]
     .map(([key, count]) => ({ key, count }))
-    .sort((left, right) => right.count - left.count || left.key.localeCompare(right.key));
+    .sort(
+      (left, right) =>
+        right.count - left.count || left.key.localeCompare(right.key),
+    );
 }
 
-function confidenceWeight(value: ServiceLatencyCandidate["confidence"]): number {
+function pickMetric(
+  metrics: MetricSummary[],
+  alias: MetricAlias,
+): MetricSummary | undefined {
+  return metrics.find((metric) => metric.alias === alias);
+}
+
+function metricSummaryText(metric: MetricSummary): string {
+  const parts = [
+    `metric=${metric.metricName}`,
+    `points=${metric.points.length}`,
+    metric.latest !== undefined
+      ? `latest=${roundMetric(metric.latest)}`
+      : undefined,
+    metric.max !== undefined ? `max=${roundMetric(metric.max)}` : undefined,
+    metric.avg !== undefined ? `avg=${roundMetric(metric.avg)}` : undefined,
+  ].filter((part): part is string => part !== undefined);
+  return parts.join(", ");
+}
+
+function roundMetric(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+async function queryMetricsSafely(
+  source: MetricsSource | undefined,
+  aliases: MetricAlias[],
+  input: DiagnosticBaseInput,
+  ctx: SessionContext,
+): Promise<MetricSummary[]> {
+  if (!source) {
+    return [];
+  }
+  try {
+    return await source.query({ aliases, timeRange: input.timeRange }, ctx);
+  } catch {
+    return [];
+  }
+}
+
+function metricsSourceLimitation(source: MetricsSource | undefined): string[] {
+  return source
+    ? []
+    : ["No CES or control-plane metrics source is configured yet."];
+}
+
+function confidenceWeight(
+  value: ServiceLatencyCandidate["confidence"],
+): number {
   switch (value) {
     case "high":
       return 3;
@@ -657,7 +812,10 @@ function rootCauseConfidenceWeight(
 }
 
 function rootCauseRankScore(candidate: DiagnosticRootCauseCandidate): number {
-  return rootCauseBasePriority(candidate.code) + rootCauseConfidenceWeight(candidate.confidence);
+  return (
+    rootCauseBasePriority(candidate.code) +
+    rootCauseConfidenceWeight(candidate.confidence)
+  );
 }
 
 function sortRootCauseCandidates(
@@ -665,10 +823,11 @@ function sortRootCauseCandidates(
 ): DiagnosticRootCauseCandidate[] {
   return [...candidates].sort(
     (left, right) =>
-      rootCauseRankScore(right) - rootCauseRankScore(left)
-      || rootCauseBasePriority(right.code) - rootCauseBasePriority(left.code)
-      || rootCauseConfidenceWeight(right.confidence) - rootCauseConfidenceWeight(left.confidence)
-      || left.code.localeCompare(right.code),
+      rootCauseRankScore(right) - rootCauseRankScore(left) ||
+      rootCauseBasePriority(right.code) - rootCauseBasePriority(left.code) ||
+      rootCauseConfidenceWeight(right.confidence) -
+        rootCauseConfidenceWeight(left.confidence) ||
+      left.code.localeCompare(right.code),
   );
 }
 
@@ -767,7 +926,9 @@ function buildSlowQueryNextToolInput(
   };
 }
 
-function buildBaseNextToolInput(input: DiagnosticBaseInput): Record<string, unknown> {
+function buildBaseNextToolInput(
+  input: DiagnosticBaseInput,
+): Record<string, unknown> {
   const nextInput: Record<string, unknown> = {};
   if (input.datasource) {
     nextInput.datasource = input.datasource;
@@ -871,14 +1032,18 @@ function dedupeNextToolInputs(
 ): DiagnosticNextToolInput[] {
   return inputs.filter((item, index, allItems) => {
     const key = `${item.tool}:${JSON.stringify(item.input)}`;
-    return allItems.findIndex((candidate) => {
-      const candidateKey = `${candidate.tool}:${JSON.stringify(candidate.input)}`;
-      return candidateKey === key;
-    }) === index;
+    return (
+      allItems.findIndex((candidate) => {
+        const candidateKey = `${candidate.tool}:${JSON.stringify(candidate.input)}`;
+        return candidateKey === key;
+      }) === index
+    );
   });
 }
 
-function evidenceRowLimit(level: DiagnoseConnectionSpikeInput["evidenceLevel"]): number {
+function evidenceRowLimit(
+  level: DiagnoseConnectionSpikeInput["evidenceLevel"],
+): number {
   switch (level) {
     case "full":
       return 100;
@@ -914,6 +1079,7 @@ export interface TaurusDBEngineDeps {
   confirmationStore: ConfirmationStore;
   capabilityProbe: CapabilityProbe;
   slowSqlSource?: SlowSqlSource;
+  metricsSource?: MetricsSource;
 }
 
 export interface TaurusDBEngineCreateOptions {
@@ -928,9 +1094,13 @@ export interface TaurusDBEngineCreateOptions {
   confirmationStore?: ConfirmationStore;
   capabilityProbe?: CapabilityProbe;
   slowSqlSource?: SlowSqlSource;
+  metricsSource?: MetricsSource;
 }
 
-function toDataSourceInfo(profile: DataSourceProfile, defaultDatasource: string | undefined): DataSourceInfo {
+function toDataSourceInfo(
+  profile: DataSourceProfile,
+  defaultDatasource: string | undefined,
+): DataSourceInfo {
   return {
     name: profile.name,
     engine: profile.engine,
@@ -943,12 +1113,18 @@ function toDataSourceInfo(profile: DataSourceProfile, defaultDatasource: string 
   };
 }
 
-function resolveConfirmationSql(input: IssueConfirmationInput): { normalized: string; hash: string } {
-  const normalized = input.normalizedSql ?? (input.sql ? normalizeSql(input.sql) : undefined);
+function resolveConfirmationSql(input: IssueConfirmationInput): {
+  normalized: string;
+  hash: string;
+} {
+  const normalized =
+    input.normalizedSql ?? (input.sql ? normalizeSql(input.sql) : undefined);
   const hash = input.sqlHash ?? (normalized ? sqlHash(normalized) : undefined);
 
   if (!normalized || !hash) {
-    throw new Error("Issue confirmation requires sql, normalizedSql, or sqlHash context.");
+    throw new Error(
+      "Issue confirmation requires sql, normalizedSql, or sqlHash context.",
+    );
   }
 
   return { normalized, hash };
@@ -963,7 +1139,10 @@ function explainExtras(plan: ExplainResult["plan"]): string[] {
       const extra = (row.Extra ?? row.extra) as unknown;
       return typeof extra === "string" ? extra : undefined;
     })
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+    .filter(
+      (value): value is string =>
+        typeof value === "string" && value.trim().length > 0,
+    );
 }
 
 function hasSqlPattern(sql: string, pattern: RegExp): boolean {
@@ -980,21 +1159,35 @@ function buildEnhancedExplainSuggestions(
   if (!features.parallel_query.available) {
     suggestions.push("parallel_query is unavailable on this instance.");
   } else if (features.parallel_query.enabled === false) {
-    suggestions.push("parallel_query is available but disabled. Consider SET GLOBAL force_parallel_execute=ON.");
+    suggestions.push(
+      "parallel_query is available but disabled. Consider SET GLOBAL force_parallel_execute=ON.",
+    );
   }
 
   if (!features.flashback_query.available) {
-    suggestions.push("flashback_query is unavailable; high-risk mutations have weaker recovery options.");
+    suggestions.push(
+      "flashback_query is unavailable; high-risk mutations have weaker recovery options.",
+    );
   }
 
-  if (features.offset_pushdown.available && features.offset_pushdown.enabled !== false) {
+  if (
+    features.offset_pushdown.available &&
+    features.offset_pushdown.enabled !== false
+  ) {
     if (hasSqlPattern(sql, /\boffset\s+\d+/i)) {
-      suggestions.push("OFFSET detected. TaurusDB offset_pushdown may help reduce coordinator overhead.");
+      suggestions.push(
+        "OFFSET detected. TaurusDB offset_pushdown may help reduce coordinator overhead.",
+      );
     }
   }
 
-  if (explainResult.riskSummary.fullTableScanLikely && features.ndp_pushdown.available) {
-    suggestions.push("Full table scan is likely. Review whether NDP pushdown can reduce scanned rows.");
+  if (
+    explainResult.riskSummary.fullTableScanLikely &&
+    features.ndp_pushdown.available
+  ) {
+    suggestions.push(
+      "Full table scan is likely. Review whether NDP pushdown can reduce scanned rows.",
+    );
   }
 
   return [...new Set(suggestions)];
@@ -1012,6 +1205,7 @@ export class TaurusDBEngine {
   readonly confirmationStore: ConfirmationStore;
   readonly capabilityProbe: CapabilityProbe;
   readonly slowSqlSource?: SlowSqlSource;
+  readonly metricsSource?: MetricsSource;
 
   constructor(deps: TaurusDBEngineDeps) {
     this.config = deps.config;
@@ -1025,11 +1219,15 @@ export class TaurusDBEngine {
     this.confirmationStore = deps.confirmationStore;
     this.capabilityProbe = deps.capabilityProbe;
     this.slowSqlSource = deps.slowSqlSource;
+    this.metricsSource = deps.metricsSource;
   }
 
-  static async create(options: TaurusDBEngineCreateOptions = {}): Promise<TaurusDBEngine> {
+  static async create(
+    options: TaurusDBEngineCreateOptions = {},
+  ): Promise<TaurusDBEngine> {
     const config = options.config ?? getConfig();
-    const profileLoader = options.profileLoader ?? createSqlProfileLoader({ config });
+    const profileLoader =
+      options.profileLoader ?? createSqlProfileLoader({ config });
     const secretResolver = options.secretResolver ?? createSecretResolver();
     const datasourceResolver =
       options.datasourceResolver ??
@@ -1059,16 +1257,16 @@ export class TaurusDBEngine {
       createSqlExecutor({
         connectionPool,
       });
-    const guardrail =
-      options.guardrail ??
-      createGuardrail();
-    const confirmationStore = options.confirmationStore ?? createConfirmationStore();
+    const guardrail = options.guardrail ?? createGuardrail();
+    const confirmationStore =
+      options.confirmationStore ?? createConfirmationStore();
     const capabilityProbe =
       options.capabilityProbe ??
       createCapabilityProbe({
         connectionPool,
       });
     const slowSqlSource = options.slowSqlSource ?? createSlowSqlSource(config);
+    const metricsSource = options.metricsSource ?? createMetricsSource(config);
 
     return new TaurusDBEngine({
       config,
@@ -1082,6 +1280,7 @@ export class TaurusDBEngine {
       confirmationStore,
       capabilityProbe,
       slowSqlSource,
+      metricsSource,
     });
   }
 
@@ -1100,7 +1299,10 @@ export class TaurusDBEngine {
     return this.profileLoader.getDefault();
   }
 
-  async resolveContext(input: DatasourceResolveInput, taskId: string): Promise<SessionContext> {
+  async resolveContext(
+    input: DatasourceResolveInput,
+    taskId: string,
+  ): Promise<SessionContext> {
     return this.datasourceResolver.resolve(input, taskId);
   }
 
@@ -1108,11 +1310,18 @@ export class TaurusDBEngine {
     return this.schemaIntrospector.listDatabases(ctx);
   }
 
-  async listTables(ctx: SessionContext, database: string): Promise<TableInfo[]> {
+  async listTables(
+    ctx: SessionContext,
+    database: string,
+  ): Promise<TableInfo[]> {
     return this.schemaIntrospector.listTables(ctx, database);
   }
 
-  async describeTable(ctx: SessionContext, database: string, table: string): Promise<TableSchema> {
+  async describeTable(
+    ctx: SessionContext,
+    database: string,
+    table: string,
+  ): Promise<TableSchema> {
     return this.schemaIntrospector.describeTable(ctx, database, table);
   }
 
@@ -1120,21 +1329,15 @@ export class TaurusDBEngine {
     return this.guardrail.inspect(input);
   }
 
-  async probeCapabilities(
-    ctx: SessionContext,
-  ): Promise<CapabilitySnapshot> {
+  async probeCapabilities(ctx: SessionContext): Promise<CapabilitySnapshot> {
     return this.capabilityProbe.probe(ctx);
   }
 
-  async getKernelInfo(
-    ctx: SessionContext,
-  ): Promise<KernelInfo> {
+  async getKernelInfo(ctx: SessionContext): Promise<KernelInfo> {
     return this.capabilityProbe.getKernelInfo(ctx);
   }
 
-  async listFeatures(
-    ctx: SessionContext,
-  ): Promise<FeatureMatrix> {
+  async listFeatures(ctx: SessionContext): Promise<FeatureMatrix> {
     return this.capabilityProbe.listFeatures(ctx);
   }
 
@@ -1347,17 +1550,19 @@ export class TaurusDBEngine {
       .filter((item) => item.score > 0)
       .sort(
         (left, right) =>
-          right.score - left.score
-          || (right.candidate.totalLatencyMs ?? 0) - (left.candidate.totalLatencyMs ?? 0)
-          || (right.candidate.execCount ?? 0) - (left.candidate.execCount ?? 0),
+          right.score - left.score ||
+          (right.candidate.totalLatencyMs ?? 0) -
+            (left.candidate.totalLatencyMs ?? 0) ||
+          (right.candidate.execCount ?? 0) - (left.candidate.execCount ?? 0),
       );
     if (ranked[0]?.candidate) {
       return ranked[0].candidate;
     }
 
-    const hintCandidates = await this.findStatementDigestCandidatesForSqlHints(sql, ctx).catch(
-      () => [] as StatementDigestRow[],
-    );
+    const hintCandidates = await this.findStatementDigestCandidatesForSqlHints(
+      sql,
+      ctx,
+    ).catch(() => [] as StatementDigestRow[]);
     return hintCandidates
       .map((candidate) => ({
         candidate,
@@ -1366,9 +1571,10 @@ export class TaurusDBEngine {
       .filter((item) => item.score > 0)
       .sort(
         (left, right) =>
-          right.score - left.score
-          || (right.candidate.totalLatencyMs ?? 0) - (left.candidate.totalLatencyMs ?? 0)
-          || (right.candidate.execCount ?? 0) - (left.candidate.execCount ?? 0),
+          right.score - left.score ||
+          (right.candidate.totalLatencyMs ?? 0) -
+            (left.candidate.totalLatencyMs ?? 0) ||
+          (right.candidate.execCount ?? 0) - (left.candidate.execCount ?? 0),
       )[0]?.candidate;
   }
 
@@ -1469,7 +1675,10 @@ export class TaurusDBEngine {
     input: DiagnoseStoragePressureInput,
     ctx: SessionContext,
   ): Promise<StatementDigestRow[]> {
-    const maxRows = Math.min(clampInteger(input.maxCandidates, 5, 1, 10) * 2, 20);
+    const maxRows = Math.min(
+      clampInteger(input.maxCandidates, 5, 1, 10) * 2,
+      20,
+    );
     const whereClauses = ["DIGEST_TEXT IS NOT NULL", "DIGEST_TEXT <> 'NULL'"];
     const focusedTable = input.table?.includes(".")
       ? input.table.split(".").slice(1).join(".")
@@ -1619,15 +1828,16 @@ export class TaurusDBEngine {
     input: DiagnoseSlowQueryInput,
     ctx: SessionContext,
   ): Promise<DiagnosticResult> {
-    const sqlMatchedDigestSample =
-      input.sql ? await this.findStatementDigestSampleForSql(input.sql, ctx) : undefined;
+    const sqlMatchedDigestSample = input.sql
+      ? await this.findStatementDigestSampleForSql(input.sql, ctx)
+      : undefined;
     const externalSlowSqlSample =
       !input.sql && this.slowSqlSource
         ? await this.slowSqlSource.resolve(buildResolveSlowSqlInput(input), ctx)
         : undefined;
     const digestSample =
-      sqlMatchedDigestSample
-      ?? (!input.sql && input.digestText
+      sqlMatchedDigestSample ??
+      (!input.sql && input.digestText
         ? await this.findStatementDigestSample(input.digestText, ctx)
         : undefined);
     const waitEventRows =
@@ -1638,10 +1848,10 @@ export class TaurusDBEngine {
           )
         : [];
     const effectiveSql =
-      input.sql ??
-      externalSlowSqlSample?.sql ??
-      digestSample?.querySampleText;
-    const derivedSqlHash = effectiveSql ? sqlHash(normalizeSql(effectiveSql)) : undefined;
+      input.sql ?? externalSlowSqlSample?.sql ?? digestSample?.querySampleText;
+    const derivedSqlHash = effectiveSql
+      ? sqlHash(normalizeSql(effectiveSql))
+      : undefined;
     const runtimeLockTimeMs =
       digestSample?.avgLockTimeMs ?? externalSlowSqlSample?.avgLockTimeMs;
     const runtimeRowsExamined =
@@ -1658,9 +1868,9 @@ export class TaurusDBEngine {
                   : "SQL text was provided and analyzed with EXPLAIN evidence."
                 : externalSlowSqlSample?.sql
                   ? "A SQL sample was resolved from the TaurusDB slow-log source and analyzed with EXPLAIN evidence."
-                : digestSample?.querySampleText
-                  ? "A statement sample was resolved from performance_schema digest summaries and analyzed with EXPLAIN evidence."
-                  : "Only an SQL identifier was provided, so live EXPLAIN evidence could not be collected yet.",
+                  : digestSample?.querySampleText
+                    ? "A statement sample was resolved from performance_schema digest summaries and analyzed with EXPLAIN evidence."
+                    : "Only an SQL identifier was provided, so live EXPLAIN evidence could not be collected yet.",
             },
           ]
         : undefined;
@@ -1730,19 +1940,25 @@ export class TaurusDBEngine {
     const rootCauseCandidates: DiagnosticRootCauseCandidate[] = [];
     const planTables: Array<PlanTableStats | undefined> = ctx.database
       ? await Promise.all(
-          extractPlanTableNames(standardPlan.plan).slice(0, 3).map(async (table) => {
-            try {
-              const schema = await this.describeTable(ctx, ctx.database!, table);
-              return {
-                table: `${ctx.database}.${table}`,
-                rowCountEstimate: schema.rowCountEstimate,
-                indexCount: schema.indexes.length,
-                primaryKey: schema.primaryKey,
-              } as PlanTableStats;
-            } catch {
-              return undefined;
-            }
-          }),
+          extractPlanTableNames(standardPlan.plan)
+            .slice(0, 3)
+            .map(async (table) => {
+              try {
+                const schema = await this.describeTable(
+                  ctx,
+                  ctx.database!,
+                  table,
+                );
+                return {
+                  table: `${ctx.database}.${table}`,
+                  rowCountEstimate: schema.rowCountEstimate,
+                  indexCount: schema.indexes.length,
+                  primaryKey: schema.primaryKey,
+                } as PlanTableStats;
+              } catch {
+                return undefined;
+              }
+            }),
         )
       : [];
     const resolvedPlanTables = planTables.filter(
@@ -1755,8 +1971,7 @@ export class TaurusDBEngine {
         title: "Full table scan is the dominant slowdown signal",
         confidence:
           (riskSummary.estimatedRows ?? 0) >= 100_000 ? "high" : "medium",
-        rationale:
-          `EXPLAIN indicates a likely full table scan${riskSummary.estimatedRows !== undefined ? ` across about ${riskSummary.estimatedRows} rows` : ""}.`,
+        rationale: `EXPLAIN indicates a likely full table scan${riskSummary.estimatedRows !== undefined ? ` across about ${riskSummary.estimatedRows} rows` : ""}.`,
       });
     }
     if (riskSummary.usesFilesort) {
@@ -1806,9 +2021,9 @@ export class TaurusDBEngine {
       rootCauseCandidates.push({
         code: "slow_query_tmp_disk_spill",
         title: "Temporary tables are spilling to disk",
-        confidence: (digestSample?.avgTmpDiskTables ?? 0) >= 1 ? "medium" : "low",
-        rationale:
-          `Digest summaries show about ${digestSample?.avgTmpDiskTables} temporary disk tables per execution, which suggests spill-heavy grouping or sorting.`,
+        confidence:
+          (digestSample?.avgTmpDiskTables ?? 0) >= 1 ? "medium" : "low",
+        rationale: `Digest summaries show about ${digestSample?.avgTmpDiskTables} temporary disk tables per execution, which suggests spill-heavy grouping or sorting.`,
       });
     }
     if ((runtimeLockTimeMs ?? 0) >= 10) {
@@ -1816,8 +2031,7 @@ export class TaurusDBEngine {
         code: "slow_query_lock_wait_pressure",
         title: "Lock wait time is a material part of the statement latency",
         confidence: (runtimeLockTimeMs ?? 0) >= 100 ? "high" : "medium",
-        rationale:
-          `${digestSample?.avgLockTimeMs !== undefined ? "Digest summaries" : "External slow-log samples"} show about ${runtimeLockTimeMs} ms of lock time per execution, which suggests blocking or lock-wait pressure on the statement path.`,
+        rationale: `${digestSample?.avgLockTimeMs !== undefined ? "Digest summaries" : "External slow-log samples"} show about ${runtimeLockTimeMs} ms of lock time per execution, which suggests blocking or lock-wait pressure on the statement path.`,
       });
     }
     const topWaitEvent = waitEventRows[0];
@@ -1826,24 +2040,21 @@ export class TaurusDBEngine {
         code: "slow_query_wait_event_lock_contention",
         title: "Runtime wait events point to lock contention",
         confidence: (topWaitEvent.totalWaitMs ?? 0) >= 100 ? "high" : "medium",
-        rationale:
-          `Statement history shows ${topWaitEvent.eventName} as the dominant nested wait event${topWaitEvent.totalWaitMs !== undefined ? ` with about ${topWaitEvent.totalWaitMs} ms total wait time` : ""}.`,
+        rationale: `Statement history shows ${topWaitEvent.eventName} as the dominant nested wait event${topWaitEvent.totalWaitMs !== undefined ? ` with about ${topWaitEvent.totalWaitMs} ms total wait time` : ""}.`,
       });
     } else if (topWaitEvent?.eventName?.startsWith("wait/io/")) {
       rootCauseCandidates.push({
         code: "slow_query_wait_event_io_pressure",
         title: "Runtime wait events point to I/O-bound execution",
         confidence: (topWaitEvent.totalWaitMs ?? 0) >= 100 ? "medium" : "low",
-        rationale:
-          `Statement history shows ${topWaitEvent.eventName} as the dominant nested wait event, which usually indicates file or handler I/O pressure.`,
+        rationale: `Statement history shows ${topWaitEvent.eventName} as the dominant nested wait event, which usually indicates file or handler I/O pressure.`,
       });
     } else if (topWaitEvent?.eventName?.startsWith("wait/synch/")) {
       rootCauseCandidates.push({
         code: "slow_query_wait_event_sync_contention",
         title: "Runtime wait events point to synchronization contention",
         confidence: (topWaitEvent.totalWaitMs ?? 0) >= 100 ? "medium" : "low",
-        rationale:
-          `Statement history shows ${topWaitEvent.eventName} as the dominant nested wait event, which suggests mutex or rwlock contention in the execution path.`,
+        rationale: `Statement history shows ${topWaitEvent.eventName} as the dominant nested wait event, which suggests mutex or rwlock contention in the execution path.`,
       });
     }
     if (
@@ -1855,14 +2066,14 @@ export class TaurusDBEngine {
         title: "Runtime summaries show scan-heavy executions",
         confidence:
           (digestSample?.noIndexUsedCount ?? 0) > 0 ? "medium" : "low",
-        rationale:
-          `Digest summaries recorded${(digestSample?.selectScanCount ?? 0) > 0 ? ` ${digestSample?.selectScanCount} scan-driven executions` : ""}${(digestSample?.selectScanCount ?? 0) > 0 && (digestSample?.noIndexUsedCount ?? 0) > 0 ? " and" : ""}${(digestSample?.noIndexUsedCount ?? 0) > 0 ? ` ${digestSample?.noIndexUsedCount} executions without index usage` : ""}.`,
+        rationale: `Digest summaries recorded${(digestSample?.selectScanCount ?? 0) > 0 ? ` ${digestSample?.selectScanCount} scan-driven executions` : ""}${(digestSample?.selectScanCount ?? 0) > 0 && (digestSample?.noIndexUsedCount ?? 0) > 0 ? " and" : ""}${(digestSample?.noIndexUsedCount ?? 0) > 0 ? ` ${digestSample?.noIndexUsedCount} executions without index usage` : ""}.`,
       });
     }
     if (rootCauseCandidates.length === 0) {
       rootCauseCandidates.push({
         code: "slow_query_plan_collected",
-        title: "Plan evidence was collected but no single dominant cause stood out",
+        title:
+          "Plan evidence was collected but no single dominant cause stood out",
         confidence: "low",
         rationale:
           "Live EXPLAIN evidence was collected, but the current heuristics did not isolate a single dominant full-scan, sort, or temporary-structure bottleneck.",
@@ -1870,7 +2081,8 @@ export class TaurusDBEngine {
     }
 
     const maxCandidates = clampInteger(input.maxCandidates, 3, 1, 10);
-    const sortedRootCauseCandidates = sortRootCauseCandidates(rootCauseCandidates);
+    const sortedRootCauseCandidates =
+      sortRootCauseCandidates(rootCauseCandidates);
     const severity = severityFromSlowQueryEvidence(
       riskSummary,
       sortedRootCauseCandidates,
@@ -1889,8 +2101,9 @@ export class TaurusDBEngine {
     ];
     if (resolvedPlanTables.length > 0) {
       keyFindings.push(
-        ...resolvedPlanTables.map((tableStats) =>
-          `${tableStats.table} has${tableStats.rowCountEstimate !== undefined ? ` row estimate ${tableStats.rowCountEstimate}` : " unknown row estimate"} and ${tableStats.indexCount} indexes.`,
+        ...resolvedPlanTables.map(
+          (tableStats) =>
+            `${tableStats.table} has${tableStats.rowCountEstimate !== undefined ? ` row estimate ${tableStats.rowCountEstimate}` : " unknown row estimate"} and ${tableStats.indexCount} indexes.`,
         ),
       );
     }
@@ -1910,7 +2123,7 @@ export class TaurusDBEngine {
         (digestSample.avgTmpDiskTables ?? 0) > 0
       ) {
         keyFindings.push(
-          `Digest summaries show temporary table usage${digestSample.avgTmpTables !== undefined ? ` (avg_tmp_tables=${digestSample.avgTmpTables}` : ""}${digestSample.avgTmpDiskTables !== undefined ? `${digestSample.avgTmpTables !== undefined ? ", " : " ("}avg_tmp_disk_tables=${digestSample.avgTmpDiskTables}` : ""}${(digestSample.avgTmpTables !== undefined || digestSample.avgTmpDiskTables !== undefined) ? ")" : ""}.`,
+          `Digest summaries show temporary table usage${digestSample.avgTmpTables !== undefined ? ` (avg_tmp_tables=${digestSample.avgTmpTables}` : ""}${digestSample.avgTmpDiskTables !== undefined ? `${digestSample.avgTmpTables !== undefined ? ", " : " ("}avg_tmp_disk_tables=${digestSample.avgTmpDiskTables}` : ""}${digestSample.avgTmpTables !== undefined || digestSample.avgTmpDiskTables !== undefined ? ")" : ""}.`,
         );
       }
     }
@@ -2024,7 +2237,10 @@ export class TaurusDBEngine {
           : []),
         ...waitEventRows.map((row, index) => ({
           source: "statement_wait_history",
-          title: index === 0 ? "Dominant nested wait event" : `Nested wait event ${index + 1}`,
+          title:
+            index === 0
+              ? "Dominant nested wait event"
+              : `Nested wait event ${index + 1}`,
           summary: `${row.eventName ?? "unknown_event"}${row.totalWaitMs !== undefined ? ` total_wait_ms=${row.totalWaitMs}` : ""}${row.avgWaitMs !== undefined ? `, avg_wait_ms=${row.avgWaitMs}` : ""}${row.sampleCount !== undefined ? `, sample_count=${row.sampleCount}` : ""}${row.statementCount !== undefined ? `, statement_count=${row.statementCount}` : ""}.`,
         })),
         {
@@ -2058,37 +2274,61 @@ export class TaurusDBEngine {
     ctx: SessionContext,
   ): Promise<ServiceLatencyResult> {
     const maxCandidates = clampInteger(input.maxCandidates, 5, 1, 10);
-    const topSlowSql = await this.findTopSlowSql(
-      {
-        ...input,
-        topN: Math.min(maxCandidates, 5),
-        sortBy:
-          input.symptom === "latency" || input.symptom === "timeout"
-            ? "avg_latency"
-            : "total_latency",
-      },
-      ctx,
-    );
-    const lockContention =
-      input.symptom === "connection_growth"
-        ? undefined
-        : await this.diagnoseLockContention(
-            {
-              ...input,
-              maxCandidates: Math.min(maxCandidates, 3),
-            },
-            ctx,
-          );
-    const connectionSpike = await this.diagnoseConnectionSpike(
-      {
-        ...input,
-        user: input.user,
-        clientHost: input.clientHost,
-        compareBaseline: false,
-        maxCandidates: Math.min(maxCandidates, 3),
-      },
-      ctx,
-    );
+    const [topSlowSql, lockContention, connectionSpike, metrics] =
+      await Promise.all([
+        this.findTopSlowSql(
+          {
+            ...input,
+            topN: Math.min(maxCandidates, 5),
+            sortBy:
+              input.symptom === "latency" || input.symptom === "timeout"
+                ? "avg_latency"
+                : "total_latency",
+          },
+          ctx,
+        ),
+        input.symptom === "connection_growth"
+          ? Promise.resolve(undefined)
+          : this.diagnoseLockContention(
+              {
+                ...input,
+                maxCandidates: Math.min(maxCandidates, 3),
+              },
+              ctx,
+            ),
+        this.diagnoseConnectionSpike(
+          {
+            ...input,
+            user: input.user,
+            clientHost: input.clientHost,
+            compareBaseline: false,
+            maxCandidates: Math.min(maxCandidates, 3),
+          },
+          ctx,
+        ),
+        queryMetricsSafely(
+          this.metricsSource,
+          [
+            "cpu_util",
+            "mem_util",
+            "connection_usage",
+            "qps",
+            "slow_queries",
+            "storage_write_delay",
+            "storage_read_delay",
+            "replication_delay",
+          ],
+          input,
+          ctx,
+        ),
+      ]);
+    const cpuMetric = pickMetric(metrics, "cpu_util");
+    const memMetric = pickMetric(metrics, "mem_util");
+    const connectionUsageMetric = pickMetric(metrics, "connection_usage");
+    const slowQueriesMetric = pickMetric(metrics, "slow_queries");
+    const writeDelayMetric = pickMetric(metrics, "storage_write_delay");
+    const readDelayMetric = pickMetric(metrics, "storage_read_delay");
+    const replicationDelayMetric = pickMetric(metrics, "replication_delay");
 
     const topCandidates: ServiceLatencyCandidate[] = [];
     const evidence: ServiceLatencyResult["evidence"] = [];
@@ -2101,13 +2341,17 @@ export class TaurusDBEngine {
       category: ServiceLatencySuspectedCategory,
       score: number,
     ) => {
-      categoryScores.set(category, Math.max(categoryScores.get(category) ?? 0, score));
+      categoryScores.set(
+        category,
+        Math.max(categoryScores.get(category) ?? 0, score),
+      );
     };
 
     if (topSlowSql.status === "ok" && topSlowSql.topSqls.length > 0) {
       const leadSql = topSlowSql.topSqls[0];
       const sqlConfidence: ServiceLatencyCandidate["confidence"] =
-        (leadSql.totalLatencyMs ?? 0) >= 1000 || (leadSql.avgLatencyMs ?? 0) >= 100
+        (leadSql.totalLatencyMs ?? 0) >= 1000 ||
+        (leadSql.avgLatencyMs ?? 0) >= 100
           ? "high"
           : (leadSql.totalLatencyMs ?? 0) > 0 || (leadSql.avgLatencyMs ?? 0) > 0
             ? "medium"
@@ -2122,8 +2366,7 @@ export class TaurusDBEngine {
         sqlHash: leadSql.sqlHash,
         digestText: leadSql.digestText,
         sampleSql: leadSql.sampleSql,
-        rationale:
-          `Ranked near the top of statement digest summaries${leadSql.avgLatencyMs !== undefined ? `; avg_latency_ms=${leadSql.avgLatencyMs}` : ""}${leadSql.totalLatencyMs !== undefined ? `, total_latency_ms=${leadSql.totalLatencyMs}` : ""}${leadSql.execCount !== undefined ? `, exec_count=${leadSql.execCount}` : ""}${leadSql.avgRowsExamined !== undefined ? `, avg_rows_examined=${leadSql.avgRowsExamined}` : ""}.`,
+        rationale: `Ranked near the top of statement digest summaries${leadSql.avgLatencyMs !== undefined ? `; avg_latency_ms=${leadSql.avgLatencyMs}` : ""}${leadSql.totalLatencyMs !== undefined ? `, total_latency_ms=${leadSql.totalLatencyMs}` : ""}${leadSql.execCount !== undefined ? `, exec_count=${leadSql.execCount}` : ""}${leadSql.avgRowsExamined !== undefined ? `, avg_rows_examined=${leadSql.avgRowsExamined}` : ""}.`,
       });
       const slowQueryInput = buildSlowQueryNextToolInput(
         leadSql,
@@ -2176,12 +2419,11 @@ export class TaurusDBEngine {
           topCandidates.push({
             type: "table",
             title: `Hot locked table ${leadTable.table}`,
-            confidence:
-              lockContention.rootCauseCandidates.some(
-                (candidate) => candidate.code === "lock_contention_hot_table",
-              )
-                ? "high"
-                : leadRootCause?.confidence ?? "medium",
+            confidence: lockContention.rootCauseCandidates.some(
+              (candidate) => candidate.code === "lock_contention_hot_table",
+            )
+              ? "high"
+              : (leadRootCause?.confidence ?? "medium"),
             table: leadTable.table,
             rationale: leadTable.reason,
           });
@@ -2211,15 +2453,12 @@ export class TaurusDBEngine {
         );
 
         const lockScoreBase =
-          input.symptom === "timeout"
-            ? 5
-            : input.symptom === "latency"
-              ? 4
-              : 2;
+          input.symptom === "timeout" ? 5 : input.symptom === "latency" ? 4 : 2;
         scoreCategory(
           "lock_contention",
           lockContention.rootCauseCandidates.some(
-            (candidate) => candidate.code === "lock_contention_single_blocker_hotspot",
+            (candidate) =>
+              candidate.code === "lock_contention_single_blocker_hotspot",
           )
             ? lockScoreBase + 1
             : lockScoreBase,
@@ -2244,9 +2483,9 @@ export class TaurusDBEngine {
         confidence: leadRootCause?.confidence ?? "medium",
         sessionId: focusSession?.sessionId,
         rationale:
-          focusUser?.reason
-          ?? focusSession?.reason
-          ?? "A live processlist snapshot suggests connection growth around a focused user or long-running sessions.",
+          focusUser?.reason ??
+          focusSession?.reason ??
+          "A live processlist snapshot suggests connection growth around a focused user or long-running sessions.",
       });
       evidence.push(...connectionSpike.evidence.slice(0, 2));
       recommendedNextTools.add("diagnose_connection_spike");
@@ -2281,19 +2520,70 @@ export class TaurusDBEngine {
       scoreCategory(
         "connection_spike",
         connectionSpike.rootCauseCandidates.some(
-          (candidate) => candidate.code === "connection_spike_idle_session_accumulation",
+          (candidate) =>
+            candidate.code === "connection_spike_idle_session_accumulation",
         )
           ? connectionScoreBase + 1
           : connectionScoreBase,
       );
     }
 
+    if (metrics.length > 0) {
+      evidence.push(
+        ...metrics.slice(0, 4).map((metric) => ({
+          source: "ces_metrics",
+          title: `CES ${metric.alias}`,
+          summary: metricSummaryText(metric),
+        })),
+      );
+      if ((cpuMetric?.max ?? 0) >= 80 || (memMetric?.max ?? 0) >= 90) {
+        topCandidates.push({
+          type: "session",
+          title: "Instance resource pressure from CES metrics",
+          confidence:
+            (cpuMetric?.max ?? 0) >= 90 || (memMetric?.max ?? 0) >= 95
+              ? "high"
+              : "medium",
+          rationale: `Cloud Eye metrics show instance resource pressure${cpuMetric?.max !== undefined ? `; max_cpu=${roundMetric(cpuMetric.max)}` : ""}${memMetric?.max !== undefined ? `, max_mem=${roundMetric(memMetric.max)}` : ""}.`,
+        });
+        recommendedNextTools.add("diagnose_storage_pressure");
+        scoreCategory("resource_pressure", input.symptom === "cpu" ? 6 : 3);
+      }
+      if (
+        (writeDelayMetric?.max ?? 0) >= 50 ||
+        (readDelayMetric?.max ?? 0) >= 50
+      ) {
+        recommendedNextTools.add("diagnose_storage_pressure");
+        scoreCategory("resource_pressure", 4);
+      }
+      if ((connectionUsageMetric?.max ?? 0) >= 80) {
+        recommendedNextTools.add("diagnose_connection_spike");
+        scoreCategory(
+          "connection_spike",
+          input.symptom === "connection_growth" ? 6 : 3,
+        );
+      }
+      if ((slowQueriesMetric?.max ?? 0) > 0) {
+        recommendedNextTools.add("find_top_slow_sql");
+        recommendedNextTools.add("diagnose_slow_query");
+        scoreCategory("slow_sql", input.symptom === "latency" ? 4 : 2);
+      }
+      if ((replicationDelayMetric?.max ?? 0) >= 60) {
+        recommendedNextTools.add("diagnose_replication_lag");
+        scoreCategory("resource_pressure", 3);
+      }
+    } else {
+      for (const limitation of metricsSourceLimitation(this.metricsSource)) {
+        limitations.add(limitation);
+      }
+    }
+
     const scoredCategories = [...categoryScores.entries()]
       .filter(([, score]) => score > 0)
       .sort(
         (left, right) =>
-          right[1] - left[1]
-          || serviceCategoryPriority(right[0]) - serviceCategoryPriority(left[0]),
+          right[1] - left[1] ||
+          serviceCategoryPriority(right[0]) - serviceCategoryPriority(left[0]),
       );
 
     const fallbackCategory: ServiceLatencySuspectedCategory =
@@ -2308,22 +2598,26 @@ export class TaurusDBEngine {
     const suspectedCategory =
       scoredCategories.length === 0
         ? fallbackCategory
-        : scoredCategories.length > 1 && scoredCategories[0][1] === scoredCategories[1][1]
+        : scoredCategories.length > 1 &&
+            scoredCategories[0][1] === scoredCategories[1][1]
           ? "mixed"
           : scoredCategories[0][0];
 
     if (suspectedCategory === "resource_pressure") {
       recommendedNextTools.add("diagnose_storage_pressure");
-      limitations.add(
-        "Resource-pressure routing is heuristic only in the current version; no CPU, IOPS, or instance-metric collector is connected yet.",
-      );
+      if (!this.metricsSource) {
+        limitations.add(
+          "Resource-pressure routing is heuristic because no CPU, IOPS, or instance-metric collector is configured yet.",
+        );
+      }
     }
 
     const sortedCandidates = [...topCandidates]
       .sort(
         (left, right) =>
-          confidenceWeight(right.confidence) - confidenceWeight(left.confidence)
-          || left.title.localeCompare(right.title),
+          confidenceWeight(right.confidence) -
+            confidenceWeight(left.confidence) ||
+          left.title.localeCompare(right.title),
       )
       .slice(0, maxCandidates);
 
@@ -2347,7 +2641,10 @@ export class TaurusDBEngine {
       topCandidates: sortedCandidates,
       evidence: evidence.slice(0, 5),
       recommendedNextTools: [...recommendedNextTools],
-      nextToolInputs: dedupeNextToolInputs(nextToolInputs).slice(0, maxCandidates),
+      nextToolInputs: dedupeNextToolInputs(nextToolInputs).slice(
+        0,
+        maxCandidates,
+      ),
       limitations: [...limitations].slice(0, 5),
     };
   }
@@ -2377,14 +2674,18 @@ export class TaurusDBEngine {
         limitations.add(limitation);
       }
       if (topSlowSql.status === "ok") {
-        for (const sql of topSlowSql.topSqls.slice(0, Math.min(maxCandidates, 3))) {
+        for (const sql of topSlowSql.topSqls.slice(
+          0,
+          Math.min(maxCandidates, 3),
+        )) {
           hotspots.push({
             type: "sql",
             title: sql.digestText
               ? `Top SQL hotspot: ${sql.digestText}`
               : "Top SQL hotspot",
             confidence:
-              (sql.totalLatencyMs ?? 0) >= 1000 || (sql.avgLatencyMs ?? 0) >= 100
+              (sql.totalLatencyMs ?? 0) >= 1000 ||
+              (sql.avgLatencyMs ?? 0) >= 100
                 ? "high"
                 : (sql.totalLatencyMs ?? 0) > 0 || (sql.avgLatencyMs ?? 0) > 0
                   ? "medium"
@@ -2392,12 +2693,11 @@ export class TaurusDBEngine {
             sqlHash: sql.sqlHash,
             digestText: sql.digestText,
             sampleSql: sql.sampleSql,
-            rationale:
-              `Ranked in digest summaries${sql.totalLatencyMs !== undefined ? `; total_latency_ms=${sql.totalLatencyMs}` : ""}${sql.avgLatencyMs !== undefined ? `, avg_latency_ms=${sql.avgLatencyMs}` : ""}${sql.execCount !== undefined ? `, exec_count=${sql.execCount}` : ""}${sql.avgRowsExamined !== undefined ? `, avg_rows_examined=${sql.avgRowsExamined}` : ""}.`,
+            rationale: `Ranked in digest summaries${sql.totalLatencyMs !== undefined ? `; total_latency_ms=${sql.totalLatencyMs}` : ""}${sql.avgLatencyMs !== undefined ? `, avg_latency_ms=${sql.avgLatencyMs}` : ""}${sql.execCount !== undefined ? `, exec_count=${sql.execCount}` : ""}${sql.avgRowsExamined !== undefined ? `, avg_rows_examined=${sql.avgRowsExamined}` : ""}.`,
             evidenceSources: sql.evidenceSources,
             recommendation:
-              sql.recommendation
-              ?? "Use diagnose_slow_query to inspect the SQL hotspot in more detail.",
+              sql.recommendation ??
+              "Use diagnose_slow_query to inspect the SQL hotspot in more detail.",
           });
           const slowQueryInput = buildSlowQueryNextToolInput(
             sql,
@@ -2427,18 +2727,21 @@ export class TaurusDBEngine {
       }
       if (lockContention.status === "ok") {
         if (scope === "all" || scope === "session") {
-          for (const session of lockContention.suspiciousEntities?.sessions?.slice(0, 2) ?? []) {
+          for (const session of lockContention.suspiciousEntities?.sessions?.slice(
+            0,
+            2,
+          ) ?? []) {
             hotspots.push({
               type: "session",
               title: session.sessionId
                 ? `Blocking session hotspot ${session.sessionId}`
                 : "Blocking session hotspot",
-              confidence:
-                lockContention.rootCauseCandidates.some(
-                  (candidate) => candidate.code === "lock_contention_single_blocker_hotspot",
-                )
-                  ? "high"
-                  : "medium",
+              confidence: lockContention.rootCauseCandidates.some(
+                (candidate) =>
+                  candidate.code === "lock_contention_single_blocker_hotspot",
+              )
+                ? "high"
+                : "medium",
               sessionId: session.sessionId,
               rationale: session.reason,
               evidenceSources: ["lock_waits"],
@@ -2464,16 +2767,18 @@ export class TaurusDBEngine {
           }
         }
         if (scope === "all" || scope === "table") {
-          for (const table of lockContention.suspiciousEntities?.tables?.slice(0, 2) ?? []) {
+          for (const table of lockContention.suspiciousEntities?.tables?.slice(
+            0,
+            2,
+          ) ?? []) {
             hotspots.push({
               type: "table",
               title: `Locked table hotspot ${table.table}`,
-              confidence:
-                lockContention.rootCauseCandidates.some(
-                  (candidate) => candidate.code === "lock_contention_hot_table",
-                )
-                  ? "high"
-                  : "medium",
+              confidence: lockContention.rootCauseCandidates.some(
+                (candidate) => candidate.code === "lock_contention_hot_table",
+              )
+                ? "high"
+                : "medium",
               table: table.table,
               rationale: table.reason,
               evidenceSources: ["lock_waits"],
@@ -2517,17 +2822,17 @@ export class TaurusDBEngine {
             : focusSession?.sessionId
               ? `Connection hotspot around session ${focusSession.sessionId}`
               : "Connection hotspot",
-          confidence:
-            connectionSpike.rootCauseCandidates.some(
-              (candidate) => candidate.code === "connection_spike_idle_session_accumulation",
-            )
-              ? "high"
-              : "medium",
+          confidence: connectionSpike.rootCauseCandidates.some(
+            (candidate) =>
+              candidate.code === "connection_spike_idle_session_accumulation",
+          )
+            ? "high"
+            : "medium",
           sessionId: focusSession?.sessionId,
           rationale:
-            focusUser?.reason
-            ?? focusSession?.reason
-            ?? "A live processlist snapshot suggests a session-level hotspot around connection growth.",
+            focusUser?.reason ??
+            focusSession?.reason ??
+            "A live processlist snapshot suggests a session-level hotspot around connection growth.",
           evidenceSources: ["processlist"],
           recommendation:
             "Use diagnose_connection_spike and show_processlist to inspect idle buildup and long-running sessions.",
@@ -2561,16 +2866,19 @@ export class TaurusDBEngine {
     const dedupedHotspots = hotspots
       .filter((item, index, allItems) => {
         const key = `${item.type}:${item.sqlHash ?? ""}:${item.digestText ?? ""}:${item.sessionId ?? ""}:${item.table ?? ""}:${item.title}`;
-        return allItems.findIndex((candidate) => {
-          const candidateKey = `${candidate.type}:${candidate.sqlHash ?? ""}:${candidate.digestText ?? ""}:${candidate.sessionId ?? ""}:${candidate.table ?? ""}:${candidate.title}`;
-          return candidateKey === key;
-        }) === index;
+        return (
+          allItems.findIndex((candidate) => {
+            const candidateKey = `${candidate.type}:${candidate.sqlHash ?? ""}:${candidate.digestText ?? ""}:${candidate.sessionId ?? ""}:${candidate.table ?? ""}:${candidate.title}`;
+            return candidateKey === key;
+          }) === index
+        );
       })
       .sort(
         (left, right) =>
-          confidenceWeight(right.confidence) - confidenceWeight(left.confidence)
-          || hotspotTypePriority(right.type) - hotspotTypePriority(left.type)
-          || left.title.localeCompare(right.title),
+          confidenceWeight(right.confidence) -
+            confidenceWeight(left.confidence) ||
+          hotspotTypePriority(right.type) - hotspotTypePriority(left.type) ||
+          left.title.localeCompare(right.title),
       )
       .slice(0, maxCandidates);
 
@@ -2603,7 +2911,10 @@ export class TaurusDBEngine {
       hotspots: dedupedHotspots,
       evidence: evidence.slice(0, 5),
       recommendedNextTools: [...recommendedNextTools],
-      nextToolInputs: dedupeNextToolInputs(nextToolInputs).slice(0, maxCandidates),
+      nextToolInputs: dedupeNextToolInputs(nextToolInputs).slice(
+        0,
+        maxCandidates,
+      ),
       limitations: [...limitations].slice(0, 5),
     };
   }
@@ -2664,7 +2975,9 @@ export class TaurusDBEngine {
         }
 
         return {
-          sqlHash: row.querySampleText ? sqlHash(normalizeSql(row.querySampleText)) : undefined,
+          sqlHash: row.querySampleText
+            ? sqlHash(normalizeSql(row.querySampleText))
+            : undefined,
           digestText: row.digestText,
           sampleSql: row.querySampleText,
           avgLatencyMs: row.avgLatencyMs,
@@ -2697,8 +3010,7 @@ export class TaurusDBEngine {
           {
             source: "statement_digest",
             title: "Statement digest ranking",
-            summary:
-              `Collected ${topSqls.length} ranked rows from performance_schema.events_statements_summary_by_digest ordered by ${input.sortBy ?? "total_latency"}.`,
+            summary: `Collected ${topSqls.length} ranked rows from performance_schema.events_statements_summary_by_digest ordered by ${input.sortBy ?? "total_latency"}.`,
           },
         ],
         limitations: [
@@ -2741,20 +3053,112 @@ export class TaurusDBEngine {
     input: DiagnoseConnectionSpikeInput,
     ctx: SessionContext,
   ): Promise<DiagnosticResult> {
-    const processlist = await this.showProcesslist(
-      {
-        user: input.user,
-        host: input.clientHost,
-        includeIdle: true,
-        includeSystem: false,
-        includeInfo: false,
-        maxRows: evidenceRowLimit(input.evidenceLevel),
-      },
-      ctx,
-    );
+    const [processlist, metrics] = await Promise.all([
+      this.showProcesslist(
+        {
+          user: input.user,
+          host: input.clientHost,
+          includeIdle: true,
+          includeSystem: false,
+          includeInfo: false,
+          maxRows: evidenceRowLimit(input.evidenceLevel),
+        },
+        ctx,
+      ),
+      queryMetricsSafely(
+        this.metricsSource,
+        [
+          "connection_count",
+          "active_connection_count",
+          "connection_usage",
+          "qps",
+        ],
+        input,
+        ctx,
+      ),
+    ]);
     const rows = parseProcesslistRows(processlist);
+    const connectionCountMetric = pickMetric(metrics, "connection_count");
+    const activeConnectionMetric = pickMetric(
+      metrics,
+      "active_connection_count",
+    );
+    const connectionUsageMetric = pickMetric(metrics, "connection_usage");
+    const qpsMetric = pickMetric(metrics, "qps");
+    const metricEvidence = metrics.map((metric) => ({
+      source: "ces_metrics",
+      title: `CES ${metric.alias}`,
+      summary: metricSummaryText(metric),
+    }));
 
     if (rows.length === 0) {
+      const metricOnlySpike =
+        (connectionUsageMetric?.max ?? 0) >= 80 ||
+        (connectionCountMetric?.max ?? 0) >= 100 ||
+        (activeConnectionMetric?.max ?? 0) >= 50;
+      if (metricOnlySpike) {
+        return {
+          tool: "diagnose_connection_spike",
+          status: "ok",
+          severity:
+            (connectionUsageMetric?.max ?? 0) >= 90 ? "high" : "warning",
+          summary: withDatasourceSummary(
+            "Connection-spike diagnosis found CES connection pressure but no matching live sessions",
+            ctx.datasource,
+          ),
+          diagnosisWindow: {
+            from: input.timeRange?.from,
+            to: input.timeRange?.to,
+            relative: input.timeRange?.relative,
+          },
+          rootCauseCandidates: [
+            {
+              code: "connection_spike_ces_connection_pressure",
+              title: "Control-plane metrics show connection pressure",
+              confidence:
+                (connectionUsageMetric?.max ?? 0) >= 90 ? "high" : "medium",
+              rationale: `CES connection metrics crossed the current thresholds${connectionUsageMetric?.max !== undefined ? `; max_connection_usage=${roundMetric(connectionUsageMetric.max)}` : ""}${connectionCountMetric?.max !== undefined ? `, max_connection_count=${roundMetric(connectionCountMetric.max)}` : ""}${activeConnectionMetric?.max !== undefined ? `, max_active_connections=${roundMetric(activeConnectionMetric.max)}` : ""}.`,
+            },
+          ],
+          keyFindings: [
+            "No matching processlist rows were available in the current snapshot.",
+            connectionUsageMetric
+              ? `CES connection usage: ${metricSummaryText(connectionUsageMetric)}.`
+              : "CES connection usage metric was not returned.",
+            connectionCountMetric
+              ? `CES connection count: ${metricSummaryText(connectionCountMetric)}.`
+              : "CES connection count metric was not returned.",
+          ],
+          suspiciousEntities: input.user
+            ? {
+                users: [
+                  {
+                    user: input.user,
+                    clientHost: input.clientHost,
+                    reason:
+                      "Provided as the diagnosis focus; CES showed connection pressure but the live snapshot did not contain matching sessions.",
+                  },
+                ],
+              }
+            : undefined,
+          evidence: [
+            {
+              source: "processlist",
+              title: "Current processlist snapshot",
+              summary:
+                "No matching sessions were returned from information_schema.PROCESSLIST.",
+            },
+            ...metricEvidence,
+          ],
+          recommendedActions: [
+            "Re-run show_processlist during the spike window with include_idle=true and include_info=true.",
+            "Correlate CES connection pressure with application deploys, retry storms, and pool-size settings.",
+          ],
+          limitations: [
+            "Live processlist evidence was not available for the observed CES spike window.",
+          ],
+        };
+      }
       return {
         tool: "diagnose_connection_spike",
         status: "inconclusive",
@@ -2804,6 +3208,7 @@ export class TaurusDBEngine {
             summary:
               "No matching sessions were returned from information_schema.PROCESSLIST.",
           },
+          ...metricEvidence,
         ],
         recommendedActions: [
           "Re-run the diagnostic during the spike window to capture live sessions.",
@@ -2811,14 +3216,16 @@ export class TaurusDBEngine {
         ],
         limitations: [
           "This diagnostic currently uses a point-in-time processlist snapshot only.",
-          "No CES or control-plane baseline metrics are connected yet.",
+          ...metricsSourceLimitation(this.metricsSource),
         ],
       };
     }
 
     const sleepSessions = rows.filter((row) => row.command === "Sleep");
     const activeSessions = rows.filter((row) => row.command !== "Sleep");
-    const longRunningSessions = rows.filter((row) => (row.timeSeconds ?? 0) >= 60);
+    const longRunningSessions = rows.filter(
+      (row) => (row.timeSeconds ?? 0) >= 60,
+    );
     const userCounts = countBy(rows, (row) => row.user);
     const hostCounts = countBy(rows, (row) => row.host);
     const topUser = userCounts[0];
@@ -2833,8 +3240,7 @@ export class TaurusDBEngine {
         code: "connection_spike_idle_session_accumulation",
         title: "Idle session accumulation",
         confidence: rows.length >= 10 ? "high" : "medium",
-        rationale:
-          `${sleepSessions.length} of ${rows.length} matching sessions are idle (Sleep), which usually points to pooling saturation or clients holding connections open.`,
+        rationale: `${sleepSessions.length} of ${rows.length} matching sessions are idle (Sleep), which usually points to pooling saturation or clients holding connections open.`,
       });
     }
     if (activeSessions.length >= Math.max(3, Math.ceil(rows.length * 0.4))) {
@@ -2842,8 +3248,7 @@ export class TaurusDBEngine {
         code: "connection_spike_active_query_backlog",
         title: "Active query backlog",
         confidence: activeSessions.length >= 8 ? "high" : "medium",
-        rationale:
-          `${activeSessions.length} matching sessions are active, suggesting requests may be piling up behind slow or blocked work.`,
+        rationale: `${activeSessions.length} matching sessions are active, suggesting requests may be piling up behind slow or blocked work.`,
       });
     }
     if (topUser && topUser.count >= Math.max(3, Math.ceil(rows.length * 0.5))) {
@@ -2851,8 +3256,7 @@ export class TaurusDBEngine {
         code: "connection_spike_single_user_hotspot",
         title: "Single-user hotspot",
         confidence: topUser.count >= 8 ? "high" : "medium",
-        rationale:
-          `User ${topUser.key} accounts for ${topUser.count} of ${rows.length} matching sessions, which suggests a concentrated source of connection growth.`,
+        rationale: `User ${topUser.key} accounts for ${topUser.count} of ${rows.length} matching sessions, which suggests a concentrated source of connection growth.`,
       });
     }
     if (longRunningSessions.length > 0) {
@@ -2860,8 +3264,18 @@ export class TaurusDBEngine {
         code: "connection_spike_long_running_sessions",
         title: "Long-running sessions are holding connections",
         confidence: longRunningSessions.length >= 3 ? "high" : "medium",
-        rationale:
-          `${longRunningSessions.length} matching sessions have been active for at least 60 seconds, which can reduce pool turnover and amplify connection growth.`,
+        rationale: `${longRunningSessions.length} matching sessions have been active for at least 60 seconds, which can reduce pool turnover and amplify connection growth.`,
+      });
+    }
+    if (
+      (connectionUsageMetric?.max ?? 0) >= 80 ||
+      (connectionCountMetric?.max ?? 0) >= 100
+    ) {
+      rootCauseCandidates.push({
+        code: "connection_spike_ces_connection_pressure",
+        title: "CES metrics confirm connection pressure",
+        confidence: (connectionUsageMetric?.max ?? 0) >= 90 ? "high" : "medium",
+        rationale: `Cloud Eye connection metrics crossed the current pressure thresholds${connectionUsageMetric?.max !== undefined ? `; max_connection_usage=${roundMetric(connectionUsageMetric.max)}` : ""}${connectionCountMetric?.max !== undefined ? `, max_connection_count=${roundMetric(connectionCountMetric.max)}` : ""}.`,
       });
     }
     if (rootCauseCandidates.length === 0) {
@@ -2876,9 +3290,13 @@ export class TaurusDBEngine {
 
     const maxCandidates = clampInteger(input.maxCandidates, 3, 1, 10);
     const severity: DiagnosticResult["severity"] =
-      rows.length >= 40 || activeSessions.length >= 15 || longRunningSessions.length >= 5
+      rows.length >= 40 ||
+      activeSessions.length >= 15 ||
+      longRunningSessions.length >= 5
         ? "high"
-        : rows.length >= 15 || activeSessions.length >= 5 || longRunningSessions.length >= 2
+        : rows.length >= 15 ||
+            activeSessions.length >= 5 ||
+            longRunningSessions.length >= 2
           ? "warning"
           : "info";
 
@@ -2918,8 +3336,28 @@ export class TaurusDBEngine {
     ];
     if (input.compareBaseline) {
       keyFindings.push(
-        "Baseline comparison was requested, but only a live processlist snapshot is currently available.",
+        this.metricsSource
+          ? "Baseline comparison was requested; CES connection metrics were collected for the requested time window."
+          : "Baseline comparison was requested, but only a live processlist snapshot is currently available.",
       );
+    }
+    if (connectionUsageMetric) {
+      keyFindings.push(
+        `CES connection usage: ${metricSummaryText(connectionUsageMetric)}.`,
+      );
+    }
+    if (connectionCountMetric) {
+      keyFindings.push(
+        `CES connection count: ${metricSummaryText(connectionCountMetric)}.`,
+      );
+    }
+    if (activeConnectionMetric) {
+      keyFindings.push(
+        `CES active connections: ${metricSummaryText(activeConnectionMetric)}.`,
+      );
+    }
+    if (qpsMetric) {
+      keyFindings.push(`CES QPS: ${metricSummaryText(qpsMetric)}.`);
     }
 
     const recommendedActions = [
@@ -2936,13 +3374,17 @@ export class TaurusDBEngine {
         "Review slow or blocked active sessions with explain_sql / explain_sql_enhanced and lock diagnostics.",
       );
     }
+    if ((connectionUsageMetric?.max ?? 0) >= 80) {
+      recommendedActions.push(
+        "Check configured max connections and application pool concurrency because CES connection usage crossed 80%.",
+      );
+    }
 
     const evidence = [
       {
         source: "processlist",
         title: "Current processlist snapshot",
-        summary:
-          `Snapshot captured ${rows.length} matching sessions, including ${activeSessions.length} active and ${sleepSessions.length} idle sessions.`,
+        summary: `Snapshot captured ${rows.length} matching sessions, including ${activeSessions.length} active and ${sleepSessions.length} idle sessions.`,
       },
       {
         source: "processlist",
@@ -2952,6 +3394,7 @@ export class TaurusDBEngine {
             ? `Top user: ${topUser?.key ?? "n/a"} (${topUser?.count ?? 0}); top host: ${topHost?.key ?? "n/a"} (${topHost?.count ?? 0}).`
             : "No dominant user or host distribution was identified.",
       },
+      ...metricEvidence,
     ];
 
     return {
@@ -2981,7 +3424,7 @@ export class TaurusDBEngine {
       recommendedActions: [...new Set(recommendedActions)],
       limitations: [
         "This diagnostic currently relies on a point-in-time processlist snapshot only.",
-        "No CES or control-plane connection metrics are connected yet.",
+        ...metricsSourceLimitation(this.metricsSource),
       ],
     };
   }
@@ -3125,7 +3568,8 @@ export class TaurusDBEngine {
     if (rootCauseCandidates.length === 0) {
       rootCauseCandidates.push({
         code: "lock_contention_snapshot_collected",
-        title: "Lock waits are present but no dominant blocker pattern was isolated",
+        title:
+          "Lock waits are present but no dominant blocker pattern was isolated",
         confidence: "low",
         rationale:
           "A live lock-wait snapshot was collected, but the current wait chain does not show one dominant blocker, table, or long-wait pattern.",
@@ -3145,7 +3589,8 @@ export class TaurusDBEngine {
         (row, index, allRows) =>
           row.blockingSessionId !== undefined &&
           allRows.findIndex(
-            (candidate) => candidate.blockingSessionId === row.blockingSessionId,
+            (candidate) =>
+              candidate.blockingSessionId === row.blockingSessionId,
           ) === index,
       )
       .slice(0, 3);
@@ -3244,7 +3689,8 @@ export class TaurusDBEngine {
           ? {
               sessions:
                 suspiciousSessions.length > 0 ? suspiciousSessions : undefined,
-              tables: suspiciousTables.length > 0 ? suspiciousTables : undefined,
+              tables:
+                suspiciousTables.length > 0 ? suspiciousTables : undefined,
             }
           : undefined,
       evidence,
@@ -3260,24 +3706,234 @@ export class TaurusDBEngine {
     input: DiagnoseReplicationLagInput,
     ctx: SessionContext,
   ): Promise<DiagnosticResult> {
-    return createPlaceholderDiagnosticResult("diagnose_replication_lag", input, {
-      summary: withDatasourceSummary("Replication-lag diagnosis is scaffolded but not implemented", ctx.datasource),
-      candidateTitle: "Replication evidence unavailable",
-      candidateRationale:
-        "This tool needs replica topology, applier state, and lag metrics, but those signals are not connected yet.",
-      keyFindings: [
-        input.replicaId ? `Replica focus provided: ${input.replicaId}.` : "No replica identifier was provided.",
-        input.channel ? `Replication channel provided: ${input.channel}.` : "No replication channel was provided.",
-      ],
+    const [metrics, replicationStatus] = await Promise.all([
+      queryMetricsSafely(
+        this.metricsSource,
+        [
+          "replication_delay",
+          "long_trx_count",
+          "write_iops",
+          "write_throughput",
+        ],
+        input,
+        ctx,
+      ),
+      this.executor
+        .executeReadonly("SHOW REPLICA STATUS", ctx, { maxRows: 10 })
+        .catch(async () =>
+          this.executor
+            .executeReadonly("SHOW SLAVE STATUS", ctx, { maxRows: 10 })
+            .catch(() => undefined),
+        ),
+    ]);
+    const rows = replicationStatus
+      ? parseReplicationStatusRows(replicationStatus)
+      : [];
+    const focusedRows = input.channel
+      ? rows.filter((row) => row.channelName === input.channel)
+      : rows;
+    const replicationDelayMetric = pickMetric(metrics, "replication_delay");
+    const longTrxMetric = pickMetric(metrics, "long_trx_count");
+    const writeIopsMetric = pickMetric(metrics, "write_iops");
+    const writeThroughputMetric = pickMetric(metrics, "write_throughput");
+    const metricEvidence = metrics.map((metric) => ({
+      source: "ces_metrics",
+      title: `CES ${metric.alias}`,
+      summary: metricSummaryText(metric),
+    }));
+
+    if (focusedRows.length === 0 && metrics.length === 0) {
+      return {
+        tool: "diagnose_replication_lag",
+        status: "not_applicable",
+        severity: "info",
+        summary: withDatasourceSummary(
+          "Replication-lag diagnosis did not find replica status or CES lag metrics",
+          ctx.datasource,
+        ),
+        diagnosisWindow: {
+          from: input.timeRange?.from,
+          to: input.timeRange?.to,
+          relative: input.timeRange?.relative,
+        },
+        rootCauseCandidates: [
+          {
+            code: "replication_lag_no_evidence",
+            title: "Replication evidence unavailable",
+            confidence: "low",
+            rationale:
+              "No replica status rows or Cloud Eye replication metrics were available for the selected datasource.",
+          },
+        ],
+        keyFindings: [
+          input.replicaId
+            ? `Replica focus provided: ${input.replicaId}.`
+            : "No replica identifier was provided.",
+          input.channel
+            ? `Replication channel provided: ${input.channel}.`
+            : "No replication channel was provided.",
+          "SHOW REPLICA STATUS / SHOW SLAVE STATUS did not return usable rows.",
+        ],
+        evidence: [
+          {
+            source: "replication_status",
+            title: "Replica status",
+            summary:
+              "No rows were returned from SHOW REPLICA STATUS or SHOW SLAVE STATUS.",
+          },
+        ],
+        recommendedActions: [
+          "Run this diagnostic on a replica or read-only node with replication status access.",
+          "Enable the CES metrics source to correlate replica lag with Cloud Eye lag, write IOPS, and long transaction metrics.",
+        ],
+        limitations: [
+          ...metricsSourceLimitation(this.metricsSource),
+          "The selected account may not have access to replication status commands.",
+        ],
+      };
+    }
+
+    const lagSecondsFromStatus = focusedRows
+      .map((row) => row.secondsBehindSource)
+      .filter((value): value is number => value !== undefined);
+    const maxStatusLag =
+      lagSecondsFromStatus.length > 0
+        ? Math.max(...lagSecondsFromStatus)
+        : undefined;
+    const maxCesLag = replicationDelayMetric?.max;
+    const rootCauseCandidates: DiagnosticRootCauseCandidate[] = [];
+    const stoppedRows = focusedRows.filter(
+      (row) =>
+        row.replicaIoRunning?.toLowerCase() === "no" ||
+        row.replicaSqlRunning?.toLowerCase() === "no" ||
+        row.lastIoError ||
+        row.lastSqlError,
+    );
+    if (stoppedRows.length > 0) {
+      rootCauseCandidates.push({
+        code: "replication_lag_applier_or_io_thread_stopped",
+        title: "Replica IO or SQL applier is stopped or reporting errors",
+        confidence: "high",
+        rationale: `Replica status returned ${stoppedRows.length} rows with stopped threads or IO/SQL errors.`,
+      });
+    }
+    if ((maxCesLag ?? 0) >= 60 || (maxStatusLag ?? 0) >= 60) {
+      rootCauseCandidates.push({
+        code: "replication_lag_delay_confirmed",
+        title: "Replication delay is elevated",
+        confidence: (maxCesLag ?? maxStatusLag ?? 0) >= 300 ? "high" : "medium",
+        rationale: `Replication lag exceeded the current threshold${maxCesLag !== undefined ? `; max_ces_lag=${roundMetric(maxCesLag)}` : ""}${maxStatusLag !== undefined ? `, max_status_lag=${roundMetric(maxStatusLag)}` : ""}.`,
+      });
+    }
+    if (longTrxMetric && (longTrxMetric.max ?? 0) > 0) {
+      rootCauseCandidates.push({
+        code: "replication_lag_long_transaction_pressure",
+        title: "Long transactions may delay replica replay",
+        confidence: (longTrxMetric?.max ?? 0) >= 3 ? "medium" : "low",
+        rationale: `CES long transaction count was non-zero; ${metricSummaryText(longTrxMetric)}.`,
+      });
+    }
+    if (
+      (writeIopsMetric?.max ?? 0) >= 1000 ||
+      (writeThroughputMetric?.max ?? 0) >= 50 * 1024 * 1024
+    ) {
+      rootCauseCandidates.push({
+        code: "replication_lag_write_pressure",
+        title: "Primary-side write pressure may be outpacing replay",
+        confidence: "medium",
+        rationale: `CES write workload metrics are elevated${writeIopsMetric?.max !== undefined ? `; max_write_iops=${roundMetric(writeIopsMetric.max)}` : ""}${writeThroughputMetric?.max !== undefined ? `, max_write_throughput=${roundMetric(writeThroughputMetric.max)}` : ""}.`,
+      });
+    }
+    if (rootCauseCandidates.length === 0) {
+      rootCauseCandidates.push({
+        code: "replication_lag_evidence_collected",
+        title:
+          "Replication evidence was collected without a dominant lag signal",
+        confidence: "low",
+        rationale:
+          "Replica status or CES replication metrics were collected, but lag/error thresholds were not crossed.",
+      });
+    }
+
+    const keyFindings = [
+      input.replicaId
+        ? `Replica focus provided: ${input.replicaId}.`
+        : "No replica identifier was provided.",
+      input.channel
+        ? `Replication channel provided: ${input.channel}.`
+        : "No replication channel was provided.",
+      focusedRows.length > 0
+        ? `Collected ${focusedRows.length} replication status rows.`
+        : "No replication status rows were available.",
+      replicationDelayMetric
+        ? `CES replication delay: ${metricSummaryText(replicationDelayMetric)}.`
+        : "CES replication delay metric was not returned.",
+    ];
+    if (longTrxMetric) {
+      keyFindings.push(
+        `CES long transaction count: ${metricSummaryText(longTrxMetric)}.`,
+      );
+    }
+    if (writeIopsMetric) {
+      keyFindings.push(
+        `CES write IOPS: ${metricSummaryText(writeIopsMetric)}.`,
+      );
+    }
+
+    const evidence = [
+      {
+        source: "replication_status",
+        title: "Replica status",
+        summary:
+          focusedRows.length > 0
+            ? `Collected ${focusedRows.length} rows; max_status_lag=${maxStatusLag ?? "n/a"} seconds, stopped_or_error_rows=${stoppedRows.length}.`
+            : "No rows were returned from SHOW REPLICA STATUS or SHOW SLAVE STATUS.",
+      },
+      ...metricEvidence,
+    ];
+
+    return {
+      tool: "diagnose_replication_lag",
+      status:
+        focusedRows.length > 0 || metrics.length > 0
+          ? rootCauseCandidates[0]?.code ===
+            "replication_lag_evidence_collected"
+            ? "inconclusive"
+            : "ok"
+          : "not_applicable",
+      severity:
+        stoppedRows.length > 0 || (maxCesLag ?? maxStatusLag ?? 0) >= 300
+          ? "high"
+          : (maxCesLag ?? maxStatusLag ?? 0) >= 60
+            ? "warning"
+            : "info",
+      summary: withDatasourceSummary(
+        rootCauseCandidates[0]?.code === "replication_lag_evidence_collected"
+          ? "Replication-lag diagnosis collected evidence without isolating a dominant lag signal"
+          : "Replication-lag diagnosis collected replica and control-plane evidence",
+        ctx.datasource,
+      ),
+      diagnosisWindow: {
+        from: input.timeRange?.from,
+        to: input.timeRange?.to,
+        relative: input.timeRange?.relative,
+      },
+      rootCauseCandidates: rootCauseCandidates.slice(
+        0,
+        clampInteger(input.maxCandidates, 3, 1, 10),
+      ),
+      keyFindings,
+      evidence,
       recommendedActions: [
-        "Validate replication topology and lag metrics before implementing this diagnostic.",
-        "Add replica-state and control-plane lag collectors before exposing this tool in production.",
+        "Check replica IO/SQL thread state and recent SQL/IO errors before restarting replication components.",
+        "Correlate replica lag with primary write spikes, long transactions, and DDL or bulk-load activity.",
+        "If CES lag is high but SHOW REPLICA STATUS is unavailable, validate the command on the read-only node or use cloud console replica diagnostics.",
       ],
       limitations: [
-        "No replication topology or replica-state collector is connected yet.",
-        "No CES lag metric is connected yet.",
+        ...metricsSourceLimitation(this.metricsSource),
+        "Replica status command availability depends on TaurusDB topology and account privileges.",
       ],
-    });
+    };
   }
 
   async diagnoseStoragePressure(
@@ -3285,10 +3941,42 @@ export class TaurusDBEngine {
     ctx: SessionContext,
   ): Promise<DiagnosticResult> {
     const maxCandidates = clampInteger(input.maxCandidates, 5, 1, 10);
-    const [digestRows, tableRows] = await Promise.all([
-      this.findStorageStatementDigests(input, ctx).catch(() => [] as StatementDigestRow[]),
-      this.findTableStorageStats(input, ctx).catch(() => [] as TableStorageRow[]),
+    const [digestRows, tableRows, metrics] = await Promise.all([
+      this.findStorageStatementDigests(input, ctx).catch(
+        () => [] as StatementDigestRow[],
+      ),
+      this.findTableStorageStats(input, ctx).catch(
+        () => [] as TableStorageRow[],
+      ),
+      queryMetricsSafely(
+        this.metricsSource,
+        [
+          "storage_used_size",
+          "storage_write_delay",
+          "storage_read_delay",
+          "write_iops",
+          "read_iops",
+          "write_throughput",
+          "read_throughput",
+          "temp_tables_per_min",
+        ],
+        input,
+        ctx,
+      ),
     ]);
+    const storageUsedMetric = pickMetric(metrics, "storage_used_size");
+    const writeDelayMetric = pickMetric(metrics, "storage_write_delay");
+    const readDelayMetric = pickMetric(metrics, "storage_read_delay");
+    const writeIopsMetric = pickMetric(metrics, "write_iops");
+    const readIopsMetric = pickMetric(metrics, "read_iops");
+    const writeThroughputMetric = pickMetric(metrics, "write_throughput");
+    const readThroughputMetric = pickMetric(metrics, "read_throughput");
+    const tempTablesMetric = pickMetric(metrics, "temp_tables_per_min");
+    const metricEvidence = metrics.map((metric) => ({
+      source: "ces_metrics",
+      title: `CES ${metric.alias}`,
+      summary: metricSummaryText(metric),
+    }));
 
     const focusedTableName = input.table?.includes(".")
       ? input.table.split(".").slice(1).join(".")
@@ -3303,15 +3991,21 @@ export class TaurusDBEngine {
         row.querySampleText?.toUpperCase().includes(target)
       );
     });
-    const tmpDiskDigests = relevantDigests.filter((row) => (row.avgTmpDiskTables ?? 0) > 0);
-    const tmpTableDigests = relevantDigests.filter((row) => (row.avgTmpTables ?? 0) > 0);
+    const tmpDiskDigests = relevantDigests.filter(
+      (row) => (row.avgTmpDiskTables ?? 0) > 0,
+    );
+    const tmpTableDigests = relevantDigests.filter(
+      (row) => (row.avgTmpTables ?? 0) > 0,
+    );
     const scanDigests = relevantDigests.filter(
       (row) =>
         (row.noIndexUsedCount ?? 0) > 0 ||
         (row.selectScanCount ?? 0) > 0 ||
         (row.avgRowsExamined ?? 0) >= 10_000,
     );
-    const sortDigests = relevantDigests.filter((row) => (row.avgSortRows ?? 0) >= 1_000);
+    const sortDigests = relevantDigests.filter(
+      (row) => (row.avgSortRows ?? 0) >= 1_000,
+    );
     const largeTables = tableRows.filter(
       (row) =>
         (row.totalMb ?? 0) >= 1024 ||
@@ -3326,8 +4020,7 @@ export class TaurusDBEngine {
         code: "storage_pressure_tmp_disk_spill",
         title: "SQL workload is spilling temporary tables to disk",
         confidence: (lead.avgTmpDiskTables ?? 0) >= 1 ? "high" : "medium",
-        rationale:
-          `Digest summaries show temporary disk table usage${lead.digestText ? ` for ${lead.digestText}` : ""}${lead.avgTmpDiskTables !== undefined ? `; avg_tmp_disk_tables=${lead.avgTmpDiskTables}` : ""}.`,
+        rationale: `Digest summaries show temporary disk table usage${lead.digestText ? ` for ${lead.digestText}` : ""}${lead.avgTmpDiskTables !== undefined ? `; avg_tmp_disk_tables=${lead.avgTmpDiskTables}` : ""}.`,
       });
     }
     if (scanDigests.length > 0) {
@@ -3336,11 +4029,11 @@ export class TaurusDBEngine {
         code: "storage_pressure_scan_heavy_sql",
         title: "Scan-heavy SQL is driving storage pressure",
         confidence:
-          (lead.noIndexUsedCount ?? 0) > 0 || (lead.avgRowsExamined ?? 0) >= 100_000
+          (lead.noIndexUsedCount ?? 0) > 0 ||
+          (lead.avgRowsExamined ?? 0) >= 100_000
             ? "high"
             : "medium",
-        rationale:
-          `Digest summaries show scan-heavy execution${lead.digestText ? ` for ${lead.digestText}` : ""}${lead.avgRowsExamined !== undefined ? `; avg_rows_examined=${lead.avgRowsExamined}` : ""}${lead.noIndexUsedCount !== undefined ? `, no_index_used_count=${lead.noIndexUsedCount}` : ""}${lead.selectScanCount !== undefined ? `, select_scan_count=${lead.selectScanCount}` : ""}.`,
+        rationale: `Digest summaries show scan-heavy execution${lead.digestText ? ` for ${lead.digestText}` : ""}${lead.avgRowsExamined !== undefined ? `; avg_rows_examined=${lead.avgRowsExamined}` : ""}${lead.noIndexUsedCount !== undefined ? `, no_index_used_count=${lead.noIndexUsedCount}` : ""}${lead.selectScanCount !== undefined ? `, select_scan_count=${lead.selectScanCount}` : ""}.`,
       });
     }
     if (sortDigests.length > 0 || tmpTableDigests.length > 0) {
@@ -3352,25 +4045,66 @@ export class TaurusDBEngine {
           (lead.avgSortRows ?? 0) >= 10_000 || (lead.avgTmpTables ?? 0) >= 1
             ? "medium"
             : "low",
-        rationale:
-          `Digest summaries show sort or temporary-table work${lead.digestText ? ` for ${lead.digestText}` : ""}${lead.avgSortRows !== undefined ? `; avg_sort_rows=${lead.avgSortRows}` : ""}${lead.avgTmpTables !== undefined ? `, avg_tmp_tables=${lead.avgTmpTables}` : ""}.`,
+        rationale: `Digest summaries show sort or temporary-table work${lead.digestText ? ` for ${lead.digestText}` : ""}${lead.avgSortRows !== undefined ? `; avg_sort_rows=${lead.avgSortRows}` : ""}${lead.avgTmpTables !== undefined ? `, avg_tmp_tables=${lead.avgTmpTables}` : ""}.`,
       });
     }
     if (largeTables.length > 0) {
       const lead = largeTables[0];
-      const qualifiedTable = [lead.schemaName, lead.tableName].filter(Boolean).join(".");
+      const qualifiedTable = [lead.schemaName, lead.tableName]
+        .filter(Boolean)
+        .join(".");
       rootCauseCandidates.push({
         code: "storage_pressure_large_or_fragmented_table",
         title: "Large or fragmented table may amplify storage work",
         confidence: "medium",
-        rationale:
-          `${qualifiedTable || "A table"} is among the largest local tables${lead.totalMb !== undefined ? `; total_mb=${lead.totalMb}` : ""}${lead.rowCountEstimate !== undefined ? `, row_count_estimate=${lead.rowCountEstimate}` : ""}${lead.dataFreeMb !== undefined ? `, data_free_mb=${lead.dataFreeMb}` : ""}.`,
+        rationale: `${qualifiedTable || "A table"} is among the largest local tables${lead.totalMb !== undefined ? `; total_mb=${lead.totalMb}` : ""}${lead.rowCountEstimate !== undefined ? `, row_count_estimate=${lead.rowCountEstimate}` : ""}${lead.dataFreeMb !== undefined ? `, data_free_mb=${lead.dataFreeMb}` : ""}.`,
+      });
+    }
+    if (
+      (writeDelayMetric?.max ?? 0) >= 50 ||
+      (readDelayMetric?.max ?? 0) >= 50
+    ) {
+      rootCauseCandidates.push({
+        code: "storage_pressure_ces_io_latency",
+        title: "Cloud Eye shows elevated storage read/write latency",
+        confidence:
+          (writeDelayMetric?.max ?? 0) >= 100 ||
+          (readDelayMetric?.max ?? 0) >= 100
+            ? "high"
+            : "medium",
+        rationale: `CES storage latency crossed the current thresholds${writeDelayMetric?.max !== undefined ? `; max_write_delay=${roundMetric(writeDelayMetric.max)}` : ""}${readDelayMetric?.max !== undefined ? `, max_read_delay=${roundMetric(readDelayMetric.max)}` : ""}.`,
+      });
+    }
+    if (
+      (writeIopsMetric?.max ?? 0) >= 1000 ||
+      (readIopsMetric?.max ?? 0) >= 1000 ||
+      (writeThroughputMetric?.max ?? 0) >= 50 * 1024 * 1024 ||
+      (readThroughputMetric?.max ?? 0) >= 50 * 1024 * 1024
+    ) {
+      rootCauseCandidates.push({
+        code: "storage_pressure_ces_io_throughput",
+        title: "Cloud Eye shows elevated IOPS or throughput",
+        confidence: "medium",
+        rationale: `CES I/O workload metrics are elevated${writeIopsMetric?.max !== undefined ? `; max_write_iops=${roundMetric(writeIopsMetric.max)}` : ""}${readIopsMetric?.max !== undefined ? `, max_read_iops=${roundMetric(readIopsMetric.max)}` : ""}${writeThroughputMetric?.max !== undefined ? `, max_write_throughput=${roundMetric(writeThroughputMetric.max)}` : ""}${readThroughputMetric?.max !== undefined ? `, max_read_throughput=${roundMetric(readThroughputMetric.max)}` : ""}.`,
+      });
+    }
+    if (
+      tempTablesMetric &&
+      (tempTablesMetric.max ?? 0) > 0 &&
+      tmpDiskDigests.length > 0
+    ) {
+      rootCauseCandidates.push({
+        code: "storage_pressure_tmp_table_metric_confirmed",
+        title: "Temporary table workload is visible in SQL and CES metrics",
+        confidence: "medium",
+        rationale: `Statement digests show temporary disk usage and CES temp-table metrics were non-zero; ${metricSummaryText(tempTablesMetric)}.`,
       });
     }
     if (rootCauseCandidates.length === 0) {
       rootCauseCandidates.push({
         code: "storage_pressure_snapshot_collected",
-        title: "Storage evidence was collected but no dominant pressure signal stood out",
+        title:
+          "Storage evidence was collected but no dominant pressure signal stood out",
         confidence: "low",
         rationale:
           "Local table size and statement digest summaries were collected, but temporary disk spill, scan pressure, and large-table thresholds were not crossed.",
@@ -3390,25 +4124,29 @@ export class TaurusDBEngine {
       )
       .slice(0, maxCandidates)
       .map((row) => ({
-        sqlHash: row.querySampleText ? sqlHash(normalizeSql(row.querySampleText)) : undefined,
+        sqlHash: row.querySampleText
+          ? sqlHash(normalizeSql(row.querySampleText))
+          : undefined,
         digestText: row.digestText,
-        reason:
-          `Statement digest shows storage-relevant work${row.avgTmpDiskTables !== undefined ? `; avg_tmp_disk_tables=${row.avgTmpDiskTables}` : ""}${row.avgTmpTables !== undefined ? `, avg_tmp_tables=${row.avgTmpTables}` : ""}${row.avgSortRows !== undefined ? `, avg_sort_rows=${row.avgSortRows}` : ""}${row.avgRowsExamined !== undefined ? `, avg_rows_examined=${row.avgRowsExamined}` : ""}.`,
+        reason: `Statement digest shows storage-relevant work${row.avgTmpDiskTables !== undefined ? `; avg_tmp_disk_tables=${row.avgTmpDiskTables}` : ""}${row.avgTmpTables !== undefined ? `, avg_tmp_tables=${row.avgTmpTables}` : ""}${row.avgSortRows !== undefined ? `, avg_sort_rows=${row.avgSortRows}` : ""}${row.avgRowsExamined !== undefined ? `, avg_rows_examined=${row.avgRowsExamined}` : ""}.`,
       }));
     const suspiciousTables = tableRows.slice(0, maxCandidates).map((row) => {
-      const qualifiedTable = [row.schemaName, row.tableName].filter(Boolean).join(".");
+      const qualifiedTable = [row.schemaName, row.tableName]
+        .filter(Boolean)
+        .join(".");
       return {
         table: qualifiedTable || row.tableName || input.table || "unknown",
-        reason:
-          input.table
-            ? "Provided as the storage-pressure focus and matched against local table-size metadata."
-            : `Top local table by storage footprint${row.totalMb !== undefined ? `; total_mb=${row.totalMb}` : ""}${row.rowCountEstimate !== undefined ? `, row_count_estimate=${row.rowCountEstimate}` : ""}.`,
+        reason: input.table
+          ? "Provided as the storage-pressure focus and matched against local table-size metadata."
+          : `Top local table by storage footprint${row.totalMb !== undefined ? `; total_mb=${row.totalMb}` : ""}${row.rowCountEstimate !== undefined ? `, row_count_estimate=${row.rowCountEstimate}` : ""}.`,
       };
     });
 
     const keyFindings = [
       `Scope requested: ${input.scope ?? "instance"}.`,
-      input.table ? `Table focus provided: ${input.table}.` : "No table focus was provided.",
+      input.table
+        ? `Table focus provided: ${input.table}.`
+        : "No table focus was provided.",
       relevantDigests.length > 0
         ? `Collected ${relevantDigests.length} statement digest rows for storage-pressure correlation.`
         : "No statement digest rows were available for storage-pressure correlation.",
@@ -3417,13 +4155,39 @@ export class TaurusDBEngine {
         : "No table-size rows were available from information_schema.TABLES.",
     ];
     if (tmpDiskDigests.length > 0) {
-      keyFindings.push(`${tmpDiskDigests.length} digest rows show temporary disk table usage.`);
+      keyFindings.push(
+        `${tmpDiskDigests.length} digest rows show temporary disk table usage.`,
+      );
     }
     if (scanDigests.length > 0) {
-      keyFindings.push(`${scanDigests.length} digest rows show scan-heavy execution.`);
+      keyFindings.push(
+        `${scanDigests.length} digest rows show scan-heavy execution.`,
+      );
     }
     if (leadDigest?.digestText) {
-      keyFindings.push(`Lead storage-relevant digest: ${leadDigest.digestText}.`);
+      keyFindings.push(
+        `Lead storage-relevant digest: ${leadDigest.digestText}.`,
+      );
+    }
+    if (storageUsedMetric) {
+      keyFindings.push(
+        `CES storage used size: ${metricSummaryText(storageUsedMetric)}.`,
+      );
+    }
+    if (writeDelayMetric) {
+      keyFindings.push(
+        `CES storage write delay: ${metricSummaryText(writeDelayMetric)}.`,
+      );
+    }
+    if (readDelayMetric) {
+      keyFindings.push(
+        `CES storage read delay: ${metricSummaryText(readDelayMetric)}.`,
+      );
+    }
+    if (writeIopsMetric || readIopsMetric) {
+      keyFindings.push(
+        `CES IOPS: write=${writeIopsMetric ? metricSummaryText(writeIopsMetric) : "n/a"}; read=${readIopsMetric ? metricSummaryText(readIopsMetric) : "n/a"}.`,
+      );
     }
 
     const recommendedActions = [
@@ -3440,9 +4204,20 @@ export class TaurusDBEngine {
         "Review the largest table footprints and purge/archive strategy before tuning only individual SQL statements.",
       );
     }
+    if (
+      (writeDelayMetric?.max ?? 0) >= 50 ||
+      (readDelayMetric?.max ?? 0) >= 50
+    ) {
+      recommendedActions.push(
+        "Correlate SQL spill/scan candidates with CES storage read/write latency before changing only query plans.",
+      );
+    }
 
     const severity: DiagnosticSeverity =
-      tmpDiskDigests.length > 0 || scanDigests.some((row) => (row.avgRowsExamined ?? 0) >= 100_000)
+      (writeDelayMetric?.max ?? 0) >= 100 ||
+      (readDelayMetric?.max ?? 0) >= 100 ||
+      tmpDiskDigests.length > 0 ||
+      scanDigests.some((row) => (row.avgRowsExamined ?? 0) >= 100_000)
         ? "warning"
         : rootCauseCandidates[0]?.code === "storage_pressure_snapshot_collected"
           ? "info"
@@ -3451,7 +4226,7 @@ export class TaurusDBEngine {
     return {
       tool: "diagnose_storage_pressure",
       status:
-        relevantDigests.length > 0 || tableRows.length > 0
+        relevantDigests.length > 0 || tableRows.length > 0 || metrics.length > 0
           ? "ok"
           : "inconclusive",
       severity,
@@ -3472,7 +4247,8 @@ export class TaurusDBEngine {
         suspiciousSqls.length > 0 || suspiciousTables.length > 0
           ? {
               sqls: suspiciousSqls.length > 0 ? suspiciousSqls : undefined,
-              tables: suspiciousTables.length > 0 ? suspiciousTables : undefined,
+              tables:
+                suspiciousTables.length > 0 ? suspiciousTables : undefined,
             }
           : undefined,
       evidence: [
@@ -3492,10 +4268,11 @@ export class TaurusDBEngine {
               ? `Collected ${tableRows.length} rows from information_schema.TABLES; largest=${[tableRows[0]?.schemaName, tableRows[0]?.tableName].filter(Boolean).join(".") || "n/a"}${tableRows[0]?.totalMb !== undefined ? ` (${tableRows[0].totalMb} MB)` : ""}.`
               : "No matching table-size rows were returned from information_schema.TABLES.",
         },
+        ...metricEvidence,
       ],
       recommendedActions: [...new Set(recommendedActions)],
       limitations: [
-        "No CES, OS-level IOPS, throughput, or disk-usage time-series metrics are connected yet.",
+        ...metricsSourceLimitation(this.metricsSource),
         "Statement digest counters are cumulative within performance_schema retention and are not yet filtered by the requested time_range.",
       ],
     };
@@ -3505,7 +4282,10 @@ export class TaurusDBEngine {
     return this.executor.explain(sql, ctx);
   }
 
-  async explainEnhanced(sql: string, ctx: SessionContext): Promise<EnhancedExplainResult> {
+  async explainEnhanced(
+    sql: string,
+    ctx: SessionContext,
+  ): Promise<EnhancedExplainResult> {
     const [standardPlan, features] = await Promise.all([
       this.executor.explain(sql, ctx),
       this.capabilityProbe.listFeatures(ctx),
@@ -3521,12 +4301,11 @@ export class TaurusDBEngine {
           condition: /using pushed ndp condition/i.test(extras),
           columns: /using pushed ndp columns/i.test(extras),
           aggregate: /using pushed ndp aggregate/i.test(extras),
-          blockedReason:
-            !features.ndp_pushdown.available
-              ? features.ndp_pushdown.reason
-              : features.ndp_pushdown.enabled === false
-                ? "ndp_pushdown is available but not enabled."
-                : undefined,
+          blockedReason: !features.ndp_pushdown.available
+            ? features.ndp_pushdown.reason
+            : features.ndp_pushdown.enabled === false
+              ? "ndp_pushdown is available but not enabled."
+              : undefined,
         },
         parallelQuery: {
           wouldEnable:
@@ -3540,17 +4319,22 @@ export class TaurusDBEngine {
                 ? 4
                 : 2
               : undefined,
-          blockedReason:
-            !features.parallel_query.available
-              ? features.parallel_query.reason
-              : features.parallel_query.enabled === false
-                ? "parallel_query is available but force_parallel_execute is disabled."
-                : undefined,
+          blockedReason: !features.parallel_query.available
+            ? features.parallel_query.reason
+            : features.parallel_query.enabled === false
+              ? "parallel_query is available but force_parallel_execute is disabled."
+              : undefined,
         },
         offsetPushdown:
-          hasOffset && features.offset_pushdown.available && features.offset_pushdown.enabled !== false,
+          hasOffset &&
+          features.offset_pushdown.available &&
+          features.offset_pushdown.enabled !== false,
       },
-      optimizationSuggestions: buildEnhancedExplainSuggestions(sql, features, standardPlan),
+      optimizationSuggestions: buildEnhancedExplainSuggestions(
+        sql,
+        features,
+        standardPlan,
+      ),
     };
   }
 
@@ -3584,7 +4368,8 @@ export class TaurusDBEngine {
           `Flashback query requires kernel version >= ${flashbackFeature.minVersion ?? "unknown"}.`,
         {
           requiredVersion: flashbackFeature.minVersion,
-          currentVersion: (await this.capabilityProbe.getKernelInfo(ctx)).kernelVersion,
+          currentVersion: (await this.capabilityProbe.getKernelInfo(ctx))
+            .kernelVersion,
         },
       );
     }
@@ -3611,7 +4396,9 @@ export class TaurusDBEngine {
     return this.executor.cancelQuery(queryId);
   }
 
-  async issueConfirmation(input: IssueConfirmationInput): Promise<ConfirmationToken> {
+  async issueConfirmation(
+    input: IssueConfirmationInput,
+  ): Promise<ConfirmationToken> {
     const resolved = resolveConfirmationSql(input);
     return this.confirmationStore.issue({
       sqlHash: resolved.hash,

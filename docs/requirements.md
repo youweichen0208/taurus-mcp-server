@@ -171,10 +171,10 @@ TaurusDB 的传统能力更容易先联想到管控面：
 | D-02 | `diagnose_service_latency` | 已落第一版 | 规划 | P1 |
 | D-03 | `diagnose_db_hotspot` | 已落第一版 | 规划 | P1 |
 | D-04 | `diagnose_slow_query` | 已落第一版 | 规划 | P1 |
-| D-05 | `diagnose_connection_spike` | 已落第一版 | 规划 | P1 |
+| D-05 | `diagnose_connection_spike` | 已落第一版，已接 CES 连接指标 | 规划 | P1 |
 | D-06 | `diagnose_lock_contention` | 已落第一版 | 规划 | P1 |
-| D-07 | `diagnose_replication_lag` | 已落 scaffold | 规划 | P1 |
-| D-08 | `diagnose_storage_pressure` | 已落本地第一版 | 规划 | P1 |
+| D-07 | `diagnose_replication_lag` | 已落可联调第一版，接复制状态 + CES lag 指标 | 规划 | P1 |
+| D-08 | `diagnose_storage_pressure` | 已落本地第一版，已接 CES 存储指标 | 规划 | P1 |
 
 建议把这组能力进一步分成两层：
 
@@ -270,15 +270,18 @@ type ServiceLatencyDiagnosis = {
 - `diagnose_slow_query` 已落 explain-based 第一版，并可用 `digest_text` 从 `performance_schema` 解析 sample SQL；当前也会吸收 digest 级 `avg_lock_time_ms`、临时表与 scan/no-index 运行时摘要
 - `diagnose_slow_query` 已接入 TaurusDB slow-log external source 第一版，可通过外部 API 解析 sample SQL 与基础运行时指标
 - `find_top_slow_sql`、`diagnose_service_latency`、`diagnose_db_hotspot` 已落本地第一版，可基于 digest ranking、锁等待和 processlist 做症状入口路由
+- `diagnose_service_latency` 已接入 CES / Cloud Eye 第一版，可把 CPU、内存、连接使用率、慢查询、存储延迟、复制延迟纳入入口层路由
 - 锁等待 collector 已落地到 `diagnose_lock_contention` 第一版
-- `diagnose_storage_pressure` 已落本地第一版，可基于 digest counters 与 `information_schema.TABLES` 识别 tmp disk spill、scan-heavy SQL 和 table storage footprint
-- 复制状态与 DAS / Top SQL / 全量 SQL 等后续 collector 仍待实现
+- `diagnose_connection_spike` 已接入 CES 连接指标，可合并连接数、活跃连接数、连接使用率和 QPS
+- `diagnose_replication_lag` 已从 scaffold 推进到可联调第一版，可读取 `SHOW REPLICA STATUS` / `SHOW SLAVE STATUS`，并合并 CES replication delay、long transaction、write IOPS、write throughput
+- `diagnose_storage_pressure` 已落本地第一版，可基于 digest counters 与 `information_schema.TABLES` 识别 tmp disk spill、scan-heavy SQL 和 table storage footprint，并已接入 CES 存储用量、读写延迟、IOPS、吞吐、临时表指标
+- DAS / Top SQL / 全量 SQL、MDL / deadlock history、OS 级磁盘指标等后续 collector 仍待实现
 
 下一阶段的推荐优先级应改成：
 
-1. 先落 `find_top_slow_sql`
-2. 再落 `diagnose_service_latency`
-3. 最后把 `diagnose_slow_query` 等现有二级分析器串进症状入口层
+1. 先在云端 TaurusDB 验证 CES / Cloud Eye 指标源、复制状态与 TaurusDB 权限差异
+2. 再补 DAS / Top SQL / 全量 SQL 等更高保留期 SQL 证据源
+3. 最后补 MDL / deadlock history 与 OS 级存储指标，提升锁与存储诊断置信度
 
 ### 5.3 前端专属能力
 

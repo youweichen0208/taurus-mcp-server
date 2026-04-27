@@ -791,7 +791,7 @@ export TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN='mysql://root:root@127.0.0.1:3306/mysql
   1. 调用任意 diagnostics handler
 - 预期结果：
   1. `diagnose_service_latency`、`diagnose_db_hotspot`、`find_top_slow_sql`、`diagnose_slow_query`、`diagnose_connection_spike`、`diagnose_lock_contention`、`diagnose_storage_pressure` 返回结构化结果
-  2. `diagnose_replication_lag` 允许返回结构化 scaffold 结果
+  2. `diagnose_replication_lag` 在无复制证据时允许返回结构化 `not_applicable`，在测试桩或云端复制链路下应返回 evidence-backed 结果
   3. 字段名稳定
 
 ### TC-L0-017 diagnostics 输入校验生效
@@ -984,6 +984,45 @@ LIMIT 5
   1. 不应抛未处理异常
   2. 若 `performance_schema` 也无法提供样本，应返回可解释的 `inconclusive`
   3. `limitations` 明确说明 external source 未能提供样本或当前覆盖有限
+
+### TC-L2-008 CES / Cloud Eye 指标源配置可用
+
+- 优先级：`P1`
+- 测试层级：`L2`
+- 测试环境：云端 TaurusDB
+- 前置条件：
+  - 已配置 `TAURUSDB_METRICS_SOURCE_CES_ENABLED=true`
+  - 已配置 `TAURUSDB_METRICS_SOURCE_CES_ENDPOINT`
+  - 已配置 `TAURUSDB_METRICS_SOURCE_CES_PROJECT_ID`
+  - 已配置 `TAURUSDB_METRICS_SOURCE_CES_INSTANCE_ID`
+  - 已配置 `TAURUSDB_METRICS_SOURCE_CES_NODE_ID`
+  - 已配置 `TAURUSDB_METRICS_SOURCE_CES_AUTH_TOKEN`
+- 测试步骤：
+  1. 调用 `diagnose_service_latency`，传入 `symptom=cpu` 和 `time_range.relative=30m`
+  2. 调用 `diagnose_connection_spike`，传入 `compare_baseline=true`
+  3. 调用 `diagnose_storage_pressure`，传入 `scope=instance`
+  4. 观察返回结果中的 `evidence`
+- 预期结果：
+  1. 不出现未处理异常
+  2. 配置和权限正确时，相关结果中出现 `source=ces_metrics`
+  3. `limitations` 能明确说明未返回指标、权限不足或时间窗口无数据等情况
+
+### TC-L2-009 diagnose_replication_lag 云端复制链路验证
+
+- 优先级：`P1`
+- 测试层级：`L2`
+- 测试环境：云端 TaurusDB，只读节点或具备复制状态的测试实例
+- 前置条件：
+  - 数据库账号可执行 `SHOW REPLICA STATUS` 或 `SHOW SLAVE STATUS`，或已确认该命令在当前 TaurusDB 形态不可用
+  - 已配置 CES / Cloud Eye 指标源
+- 测试步骤：
+  1. 调用 `diagnose_replication_lag`
+  2. 如有 channel，补充 `channel`
+  3. 观察 `status`、`root_cause_candidates`、`evidence`、`limitations`
+- 预期结果：
+  1. 有复制状态或 CES lag 指标时，返回 `ok` 或 `inconclusive`，并包含 `replication_status` 或 `ces_metrics` evidence
+  2. 无复制链路、单机实例或无权限时，返回 `not_applicable` 或可解释的 `inconclusive`
+  3. 不应返回 scaffold 文案或未处理异常
 
 ## 3.12 L 组：init 命令
 

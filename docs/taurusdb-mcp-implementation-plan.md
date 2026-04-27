@@ -85,18 +85,18 @@ MCP 当前已经具备：
 | Tool | 层级 | 验证级别 | 说明 |
 | --- | --- | --- |
 | `find_top_slow_sql` | 症状入口层 | `local-partial` | 本地可先基于 digest ranking / Top SQL 样本返回 suspect SQL；更强排序需云侧慢 SQL 源 |
-| `diagnose_service_latency` | 症状入口层 | `local-partial` | 本地可拼出 slow SQL / 锁 / 连接嫌疑；CPU / 资源压力仍需 CES |
+| `diagnose_service_latency` | 症状入口层 | `local-partial` | 本地可拼出 slow SQL / 锁 / 连接嫌疑；已接 CES CPU / 内存 / 连接 / 存储 / 复制指标第一版，仍需云端验证 |
 | `diagnose_db_hotspot` | 症状入口层 | `local-partial` | 本地可先输出热点 SQL / 表 / 会话；更高保真度依赖云侧指标 |
 | `diagnose_slow_query` | 根因分析层 | `local-verifiable` | 本地 MySQL 可验证 explain、慢 SQL、索引失配、临时表/排序等主要逻辑 |
-| `diagnose_connection_spike` | 根因分析层 | `local-partial` | 本地可验证 `processlist`、线程/连接状态；CES 指标和云实例侧异常模式需上云 |
+| `diagnose_connection_spike` | 根因分析层 | `local-partial` | 本地可验证 `processlist`、线程/连接状态；已接 CES 连接指标第一版，云实例异常模式需上云 |
 | `diagnose_lock_contention` | 根因分析层 | `local-verifiable` | 本地多会话即可复现锁等待、长事务、DDL 阻塞、死锁链路 |
-| `diagnose_replication_lag` | 根因分析层 | `cloud-required` | 需要托管复制链路、只读节点或控制面延迟指标才能完整验证 |
-| `diagnose_storage_pressure` | 根因分析层 | `local-partial` | 本地已基于 digest counters + table metadata 验证临时表落盘、filesort、扫描型 SQL；磁盘/IOPS/吞吐时间序列仍需 CES |
+| `diagnose_replication_lag` | 根因分析层 | `cloud-required` | 已接复制状态命令与 CES lag / long transaction / write pressure 指标第一版；需要托管复制链路或只读节点完整验证 |
+| `diagnose_storage_pressure` | 根因分析层 | `local-partial` | 本地已基于 digest counters + table metadata 验证临时表落盘、filesort、扫描型 SQL；已接 CES 存储延迟 / IOPS / 吞吐指标第一版，仍需云端验证 |
 
 建议把验证策略分成两段：
 
 1. 先在本地把 `local-verifiable` 和 `local-partial` 的数据面诊断逻辑跑通
-2. 再在云端 TaurusDB 上补齐 CES、只读节点、复制链路和 TaurusDB 特性相关证据
+2. 再在云端 TaurusDB 上验证 CES、只读节点、复制链路和 TaurusDB 特性相关证据，尤其是 Cloud Eye 维度名、IAM token、指标时间窗口和真实权限差异
 
 ## 4. 包边界
 
@@ -654,13 +654,21 @@ findTopSlowSql: async () => ({
 
 #### 4.7.7 第一版刻意不做
 
-为了让第一版在 1-2 次提交内能落地，建议明确不做：
+这一节是早期 `find_top_slow_sql` 第一版的约束，当前已部分过期。现在实际状态是：
 
-- 不做 `diagnose_service_latency`
-- 不做 `diagnose_db_hotspot`
+- `diagnose_service_latency` / `diagnose_db_hotspot` 已落本地第一版
+- `diagnose_service_latency` 已接入 CES / Cloud Eye 指标源第一版
+- `diagnose_connection_spike` 已接入 CES 连接指标第一版
+- `diagnose_replication_lag` 已从 scaffold 推进到复制状态 + CES lag 的可联调第一版
+- `diagnose_storage_pressure` 已接入本地 digest / table storage 证据与 CES 存储指标第一版
+
+当前仍刻意不做：
+
 - 不做跨多个外部慢 SQL 源的 merge ranking
-- 不做云侧 DAS / Top SQL / CES join
+- 不做 DAS / Top SQL 等高保留期 SQL 源的复杂 merge ranking；CES / Cloud Eye 指标源已有第一版，但仍需云端真实验证
 - 不做 sample SQL 缺失时的复杂回填策略
+- 不做 MDL / deadlock history collector
+- 不做 OS 级磁盘指标 collector
 
 先把“本地 digest ranking -> 返回 suspect SQL -> 可以继续调 `diagnose_slow_query`”这条链路做通，再扩外围。
 
@@ -760,11 +768,16 @@ MCP 启动流程当前应保持如下简单链路：
    - `diagnose_slow_query`
    - `diagnose_connection_spike`
    - `diagnose_lock_contention`
+   - `diagnose_replication_lag`
+   - `diagnose_storage_pressure`
+   - CES / Cloud Eye metrics source 第一版
 
    下一步继续推进：
 
-   - `diagnose_replication_lag`
-   - `diagnose_storage_pressure`
+   - 云端 TaurusDB 真实实例验证 CES 指标源、复制状态命令与权限边界
+   - DAS / Top SQL / 全量 SQL 证据源
+   - MDL / deadlock history
+   - OS 级磁盘 / IOPS / 吞吐指标
 
    它们共同依赖：
 
@@ -776,8 +789,9 @@ MCP 启动流程当前应保持如下简单链路：
    验证顺序建议：
 
    - 先在 Taurus slow-log external source 的基础上，继续补齐 DAS / Top SQL 与更强的 wait-event / 云侧运行时关联
-   - 再把 `diagnose_connection_spike` 的 CES 证据、`diagnose_lock_contention` 的 MDL / deadlock 证据补齐
-   - 最后在云端 TaurusDB 完整验证 `diagnose_replication_lag`，并补齐前述 Tool 的云侧联合证据
+   - 先在云端 TaurusDB 完整验证 CES / Cloud Eye 指标源、`diagnose_replication_lag` 和存储指标链路
+   - 再把 `diagnose_lock_contention` 的 MDL / deadlock 证据补齐
+   - 最后接入 DAS / Top SQL / 全量 SQL，并和本地 digest / slow-log source 合并排序
 
    首批 schema 设计建议：
 

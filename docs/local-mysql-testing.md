@@ -85,30 +85,30 @@
 
 下表中的能力，原则上都可以在本地 MySQL 下完成主功能验证。
 
-| MCP Tool               | 本地 MySQL 是否可测 | 说明                                               |
-| ---------------------- | ------------------- | -------------------------------------------------- |
-| `ping`                 | 是                  | 不依赖数据库，验证 server 存活与 MCP 调用链路      |
-| `list_data_sources`    | 是                  | 验证 profile 加载、默认 datasource、MCP 返回结构   |
-| `list_databases`       | 是                  | 验证 schema introspector 与 datasource context     |
-| `list_tables`          | 是                  | 验证数据库级表发现                                 |
-| `describe_table`       | 是                  | 验证列、索引、主键、engine hints                   |
-| `execute_readonly_sql` | 是                  | 验证只读 SQL 执行、guardrail、结果裁剪、错误映射   |
-| `explain_sql`          | 是                  | 验证 explain 结果、风险摘要、metadata              |
-| `execute_sql`          | 是                  | 验证 mutation 开关、确认流、写入执行、受影响行数   |
-| `init`                 | 是                  | 不依赖数据库，可本地直接测试客户端配置写入         |
+| MCP Tool               | 本地 MySQL 是否可测 | 说明                                             |
+| ---------------------- | ------------------- | ------------------------------------------------ |
+| `ping`                 | 是                  | 不依赖数据库，验证 server 存活与 MCP 调用链路    |
+| `list_data_sources`    | 是                  | 验证 profile 加载、默认 datasource、MCP 返回结构 |
+| `list_databases`       | 是                  | 验证 schema introspector 与 datasource context   |
+| `list_tables`          | 是                  | 验证数据库级表发现                               |
+| `describe_table`       | 是                  | 验证列、索引、主键、engine hints                 |
+| `execute_readonly_sql` | 是                  | 验证只读 SQL 执行、guardrail、结果裁剪、错误映射 |
+| `explain_sql`          | 是                  | 验证 explain 结果、风险摘要、metadata            |
+| `execute_sql`          | 是                  | 验证 mutation 开关、确认流、写入执行、受影响行数 |
+| `init`                 | 是                  | 不依赖数据库，可本地直接测试客户端配置写入       |
 
 ### 3.2 可部分覆盖的能力
 
 这些能力可以在本地 MySQL 下验证主逻辑，但不能完全替代 TaurusDB 验证。
 
-| 能力                 | 本地可覆盖部分                     | 仍需云端补测部分                    |
-| -------------------- | ---------------------------------- | ----------------------------------- |
-| 权限模型             | readonly / mutation 用户分离       | TaurusDB 实例真实账号权限与授权细节 |
-| explain 风险判断     | explain 主流程、risk summary       | TaurusDB 内核计划输出差异           |
-| schema introspection | `information_schema` 查询主链路    | TaurusDB 特定元数据差异             |
-| timeout / cancel     | 主逻辑、query tracker、cancel path | 云环境下真实网络延迟和内核中断语义  |
-| 大结果集裁剪         | row/column/field truncation        | 云端真实大表与慢查询行为            |
-| diagnostics          | `processlist`、InnoDB lock waits、部分 digest evidence | CES、MDL、deadlock history、云侧慢 SQL 保留期 |
+| 能力                 | 本地可覆盖部分                                                               | 仍需云端补测部分                                           |
+| -------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| 权限模型             | readonly / mutation 用户分离                                                 | TaurusDB 实例真实账号权限与授权细节                        |
+| explain 风险判断     | explain 主流程、risk summary                                                 | TaurusDB 内核计划输出差异                                  |
+| schema introspection | `information_schema` 查询主链路                                              | TaurusDB 特定元数据差异                                    |
+| timeout / cancel     | 主逻辑、query tracker、cancel path                                           | 云环境下真实网络延迟和内核中断语义                         |
+| 大结果集裁剪         | row/column/field truncation                                                  | 云端真实大表与慢查询行为                                   |
+| diagnostics          | `processlist`、InnoDB lock waits、部分 digest evidence、CES collector 单测桩 | CES 真实指标返回、MDL、deadlock history、云侧慢 SQL 保留期 |
 
 对 `diagnose_slow_query` 而言，本地阶段最适合先验证 explain-based 信号，而不是强求真实慢到秒级。当前第一版主要看：
 

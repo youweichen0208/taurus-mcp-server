@@ -31,6 +31,28 @@ const TaurusApiSlowSqlSourceSchema = z
   })
   .default({});
 
+const CesMetricsSourceSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    endpoint: z.string().min(1).optional(),
+    projectId: z.string().min(1).optional(),
+    instanceId: z.string().min(1).optional(),
+    nodeId: z.string().min(1).optional(),
+    authToken: z.string().min(1).optional(),
+    namespace: z.string().min(1).default("SYS.GAUSSDB"),
+    instanceDimension: z.string().min(1).default("gaussdb_mysql_instance_id"),
+    nodeDimension: z.string().min(1).default("gaussdb_mysql_node_id"),
+    period: z
+      .enum(["1", "60", "300", "1200", "3600", "14400", "86400"])
+      .default("60"),
+    filter: z
+      .enum(["average", "max", "min", "sum", "variance"])
+      .default("average"),
+    requestTimeoutMs: z.number().int().positive().default(5000),
+    defaultLookbackMinutes: z.number().int().positive().max(43_200).default(60),
+  })
+  .default({});
+
 export const ConfigSchema = z.object({
   defaultDatasource: z.string().min(1).optional(),
   profilesPath: z.string().min(1).optional(),
@@ -40,6 +62,11 @@ export const ConfigSchema = z.object({
   slowSqlSource: z
     .object({
       taurusApi: TaurusApiSlowSqlSourceSchema,
+    })
+    .default({}),
+  metricsSource: z
+    .object({
+      ces: CesMetricsSourceSchema,
     })
     .default({}),
 });

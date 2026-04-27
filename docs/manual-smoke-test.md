@@ -426,7 +426,7 @@ LIMIT 2
 
 ### 7.4.7 `find_top_slow_sql`
 
-先执行几次慢查询样例，给 `performance_schema` 留下 digest ranking：
+先执行几次查询样例，给 `performance_schema` 留下 digest ranking：
 
 ```sql
 SELECT id, remark, updated_at
@@ -435,6 +435,45 @@ WHERE remark LIKE '%order%'
 ORDER BY updated_at DESC
 LIMIT 2
 ```
+
+这条 SQL 用来验证 digest ranking 链路，不要求真的慢到秒级。
+
+如果想构造一个更明显的本地慢 SQL 样例，可以直接登录 Docker MySQL 后执行：
+
+```bash
+docker exec -it taurus-mysql-e2e mysql -uroot -proot taurus_mcp_test
+```
+
+可选：先清空 digest，避免历史测试数据干扰：
+
+```sql
+TRUNCATE TABLE performance_schema.events_statements_summary_by_digest;
+```
+
+然后执行几次 CPU 型慢查询：
+
+```sql
+SELECT BENCHMARK(3000000, SHA2('taurusdb-mcp', 256)) AS burn_cpu;
+SELECT BENCHMARK(3000000, SHA2('taurusdb-mcp', 256)) AS burn_cpu;
+SELECT BENCHMARK(3000000, SHA2('taurusdb-mcp', 256)) AS burn_cpu;
+```
+
+可以先直接确认 digest 统计：
+
+```sql
+SELECT
+  DIGEST_TEXT,
+  QUERY_SAMPLE_TEXT,
+  COUNT_STAR,
+  ROUND(AVG_TIMER_WAIT / 1000000000, 3) AS avg_latency_ms,
+  ROUND(SUM_TIMER_WAIT / 1000000000, 3) AS total_latency_ms
+FROM performance_schema.events_statements_summary_by_digest
+WHERE SCHEMA_NAME = 'taurus_mcp_test'
+ORDER BY SUM_TIMER_WAIT DESC
+LIMIT 5;
+```
+
+如果结果里同时出现 `TRUNCATE TABLE performance_schema.events_statements_summary_by_digest`，这是正常的；清空 digest 的语句本身也会被 `performance_schema` 记录。
 
 然后调用 `find_top_slow_sql`：
 
@@ -473,6 +512,14 @@ LIMIT 2
 ### 7.4.9 `diagnose_service_latency`
 
 这个 Tool 面向“先说症状，再找嫌疑对象”的场景，建议至少手工测 3 种症状。
+
+它不是分析某一条指定 SQL 的工具，而是从当前 `performance_schema` digest、`processlist` 和锁等待快照里做第一层症状路由：
+
+- `symptom=latency` / `cpu`：优先收敛到 slow SQL 候选
+- `symptom=connection_growth`：优先收敛到连接堆积候选
+- `symptom=timeout`：优先收敛到锁等待候选
+
+如果你要分析某一条明确 SQL，直接调用 `diagnose_slow_query`。如果你想让 `diagnose_service_latency` 指向某条目标 SQL，先清空 digest，再执行目标 SQL 几次，避免历史 `BENCHMARK`、建表、诊断查询本身排在前面。
 
 #### 场景 A：`latency -> slow_sql`
 
@@ -598,6 +645,59 @@ SQL：
 
 如果你想让“慢”的体感更明显，可以先往 `audit_events` 连续插入几百到几千条大 JSON 文本，再改用类似下面这种无索引过滤 + 排序 SQL：
 
+先登录 Docker MySQL：
+
+```bash
+docker exec -it taurus-mysql-e2e mysql -uroot -proot taurus_mcp_test
+```
+
+插入 5000 条大 JSON 文本：
+
+```sql
+SET SESSION cte_max_recursion_depth = 5000;
+
+INSERT INTO audit_events (
+  event_type,
+  actor,
+  resource_type,
+  resource_id,
+  payload_json,
+  created_at
+)
+WITH RECURSIVE seq AS (
+  SELECT 1 AS n
+  UNION ALL
+  SELECT n + 1 FROM seq WHERE n < 5000
+)
+SELECT
+  CASE WHEN n % 3 = 0 THEN 'order_paid' ELSE 'order_updated' END AS event_type,
+  CONCAT('user_', n % 50) AS actor,
+  'order' AS resource_type,
+  CONCAT('ORD-BULK-', LPAD(n, 6, '0')) AS resource_id,
+  JSON_OBJECT(
+    'status', CASE WHEN n % 3 = 0 THEN 'paid' ELSE 'pending' END,
+    'channel', CASE WHEN n % 2 = 0 THEN 'app' ELSE 'web' END,
+    'note', REPEAT(CONCAT('paid audit payload ', n, ' '), 80),
+    'tags', JSON_ARRAY('paid', 'audit', 'slow-query-test')
+  ) AS payload_json,
+  TIMESTAMP('2026-04-01 00:00:00') + INTERVAL n MINUTE AS created_at
+FROM seq;
+```
+
+确认数据量：
+
+```sql
+SELECT COUNT(*) FROM audit_events;
+```
+
+可选：清空 digest 后只执行目标 SQL，避免历史 `BENCHMARK` 或诊断查询干扰 `diagnose_service_latency` 的 slow SQL 候选排序：
+
+```sql
+TRUNCATE TABLE performance_schema.events_statements_summary_by_digest;
+```
+
+执行几次目标 SQL，让 digest summary 里留下运行时证据：
+
 ```sql
 SELECT id, payload_json, created_at
 FROM audit_events
@@ -606,12 +706,27 @@ ORDER BY created_at DESC
 LIMIT 20
 ```
 
+MCP 调用 `diagnose_slow_query` 时传这条 SQL，不要传 `SELECT COUNT(*)`：
+
+```json
+{
+  "sql": "SELECT id, payload_json, created_at FROM audit_events WHERE payload_json LIKE '%paid%' ORDER BY created_at DESC LIMIT 20"
+}
+```
+
 重点看：
 
 - 是否给出全表扫 / filesort / 弱索引候选
 - `evidence` 是否包含 `explain`
+- `evidence` 是否包含 `statement_digest`
 - `recommended_actions` 是否指向索引、排序或查询 shape
 - 如果改用 `diagnose_service_latency` 且 `symptom=latency`，是否先把嫌疑收敛到 slow SQL
+
+说明：
+
+- `SELECT COUNT(*) FROM audit_events` 只用于确认插入了多少测试数据，不是 `diagnose_slow_query` 的分析目标
+- `payload_json LIKE '%paid%'` 前置通配符无法走普通索引，`ORDER BY created_at DESC` 又没有匹配该过滤条件的联合索引，因此适合验证 full table scan、filesort 和弱索引诊断
+- 如果表级 row estimate 看起来偏旧，可以在 MySQL 里执行 `ANALYZE TABLE audit_events;` 后再重测
 
 #### 场景 B：Connection Spike
 

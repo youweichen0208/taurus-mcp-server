@@ -23,10 +23,20 @@ function parseBoolean(value: MaybeString, name: string): boolean | undefined {
     return undefined;
   }
 
-  if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") {
+  if (
+    normalized === "true" ||
+    normalized === "1" ||
+    normalized === "yes" ||
+    normalized === "on"
+  ) {
     return true;
   }
-  if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off") {
+  if (
+    normalized === "false" ||
+    normalized === "0" ||
+    normalized === "no" ||
+    normalized === "off"
+  ) {
     return false;
   }
 
@@ -66,16 +76,30 @@ function expandTildePath(inputPath: string | undefined): string | undefined {
   return inputPath;
 }
 
-function buildRawConfigFromEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
+function buildRawConfigFromEnv(
+  env: NodeJS.ProcessEnv,
+): Record<string, unknown> {
   return {
     defaultDatasource: readString(env.TAURUSDB_DEFAULT_DATASOURCE),
     profilesPath: expandTildePath(readString(env.TAURUSDB_SQL_PROFILES)),
-    enableMutations: parseBoolean(env.TAURUSDB_MCP_ENABLE_MUTATIONS, "TAURUSDB_MCP_ENABLE_MUTATIONS"),
+    enableMutations: parseBoolean(
+      env.TAURUSDB_MCP_ENABLE_MUTATIONS,
+      "TAURUSDB_MCP_ENABLE_MUTATIONS",
+    ),
     limits: {
       maxRows: parseInteger(env.TAURUSDB_MCP_MAX_ROWS, "TAURUSDB_MCP_MAX_ROWS"),
-      maxColumns: parseInteger(env.TAURUSDB_MCP_MAX_COLUMNS, "TAURUSDB_MCP_MAX_COLUMNS"),
-      maxStatementMs: parseInteger(env.TAURUSDB_MCP_MAX_STATEMENT_MS, "TAURUSDB_MCP_MAX_STATEMENT_MS"),
-      maxFieldChars: parseInteger(env.TAURUSDB_MCP_MAX_FIELD_CHARS, "TAURUSDB_MCP_MAX_FIELD_CHARS"),
+      maxColumns: parseInteger(
+        env.TAURUSDB_MCP_MAX_COLUMNS,
+        "TAURUSDB_MCP_MAX_COLUMNS",
+      ),
+      maxStatementMs: parseInteger(
+        env.TAURUSDB_MCP_MAX_STATEMENT_MS,
+        "TAURUSDB_MCP_MAX_STATEMENT_MS",
+      ),
+      maxFieldChars: parseInteger(
+        env.TAURUSDB_MCP_MAX_FIELD_CHARS,
+        "TAURUSDB_MCP_MAX_FIELD_CHARS",
+      ),
     },
     audit: {
       logPath: expandTildePath(readString(env.TAURUSDB_MCP_AUDIT_LOG_PATH)),
@@ -91,10 +115,16 @@ function buildRawConfigFromEnv(env: NodeJS.ProcessEnv): Record<string, unknown> 
           "TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_ENABLED",
         ),
         endpoint: readString(env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_ENDPOINT),
-        projectId: readString(env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_PROJECT_ID),
-        instanceId: readString(env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_INSTANCE_ID),
+        projectId: readString(
+          env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_PROJECT_ID,
+        ),
+        instanceId: readString(
+          env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_INSTANCE_ID,
+        ),
         nodeId: readString(env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_NODE_ID),
-        authToken: readString(env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_AUTH_TOKEN),
+        authToken: readString(
+          env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_AUTH_TOKEN,
+        ),
         language: readString(env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_LANGUAGE),
         requestTimeoutMs: parseInteger(
           env.TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_TIMEOUT_MS,
@@ -110,13 +140,47 @@ function buildRawConfigFromEnv(env: NodeJS.ProcessEnv): Record<string, unknown> 
         ),
       },
     },
+    metricsSource: {
+      ces: {
+        enabled: parseBoolean(
+          env.TAURUSDB_METRICS_SOURCE_CES_ENABLED,
+          "TAURUSDB_METRICS_SOURCE_CES_ENABLED",
+        ),
+        endpoint: readString(env.TAURUSDB_METRICS_SOURCE_CES_ENDPOINT),
+        projectId: readString(env.TAURUSDB_METRICS_SOURCE_CES_PROJECT_ID),
+        instanceId: readString(env.TAURUSDB_METRICS_SOURCE_CES_INSTANCE_ID),
+        nodeId: readString(env.TAURUSDB_METRICS_SOURCE_CES_NODE_ID),
+        authToken: readString(env.TAURUSDB_METRICS_SOURCE_CES_AUTH_TOKEN),
+        namespace: readString(env.TAURUSDB_METRICS_SOURCE_CES_NAMESPACE),
+        instanceDimension: readString(
+          env.TAURUSDB_METRICS_SOURCE_CES_INSTANCE_DIMENSION,
+        ),
+        nodeDimension: readString(
+          env.TAURUSDB_METRICS_SOURCE_CES_NODE_DIMENSION,
+        ),
+        period: readString(env.TAURUSDB_METRICS_SOURCE_CES_PERIOD),
+        filter: readString(env.TAURUSDB_METRICS_SOURCE_CES_FILTER),
+        requestTimeoutMs: parseInteger(
+          env.TAURUSDB_METRICS_SOURCE_CES_TIMEOUT_MS,
+          "TAURUSDB_METRICS_SOURCE_CES_TIMEOUT_MS",
+        ),
+        defaultLookbackMinutes: parseInteger(
+          env.TAURUSDB_METRICS_SOURCE_CES_DEFAULT_LOOKBACK_MINUTES,
+          "TAURUSDB_METRICS_SOURCE_CES_DEFAULT_LOOKBACK_MINUTES",
+        ),
+      },
+    },
   };
 }
 
-export function createConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Config {
+export function createConfigFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): Config {
   const parsed = ConfigSchema.safeParse(buildRawConfigFromEnv(env));
   if (!parsed.success) {
-    const issues = parsed.error.issues.map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`);
+    const issues = parsed.error.issues.map(
+      (issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`,
+    );
     throw new Error(`Invalid configuration:\n${issues.join("\n")}`);
   }
   return parsed.data;
@@ -133,7 +197,8 @@ export function resetConfigForTests(): void {
   configSingleton = undefined;
 }
 
-const SENSITIVE_KEY_PATTERN = /(password|secret|token|credential|apikey|api_key)/i;
+const SENSITIVE_KEY_PATTERN =
+  /(password|secret|token|credential|apikey|api_key)/i;
 
 function deepRedact(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -142,8 +207,12 @@ function deepRedact(value: unknown): unknown {
 
   if (value && typeof value === "object") {
     const output: Record<string, unknown> = {};
-    for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
-      output[key] = SENSITIVE_KEY_PATTERN.test(key) ? "[REDACTED]" : deepRedact(nestedValue);
+    for (const [key, nestedValue] of Object.entries(
+      value as Record<string, unknown>,
+    )) {
+      output[key] = SENSITIVE_KEY_PATTERN.test(key)
+        ? "[REDACTED]"
+        : deepRedact(nestedValue);
     }
     return output;
   }

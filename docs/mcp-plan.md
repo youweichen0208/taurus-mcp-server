@@ -112,6 +112,19 @@ export TAURUSDB_MCP_LOG_LEVEL=info
 export TAURUSDB_MCP_ENABLE_MUTATIONS=true
 ```
 
+如果你要在云端 TaurusDB 联调 CES / Cloud Eye 指标证据，额外配置：
+
+```bash
+export TAURUSDB_METRICS_SOURCE_CES_ENABLED=true
+export TAURUSDB_METRICS_SOURCE_CES_ENDPOINT='https://ces.<region>.myhuaweicloud.com'
+export TAURUSDB_METRICS_SOURCE_CES_PROJECT_ID='<project_id>'
+export TAURUSDB_METRICS_SOURCE_CES_INSTANCE_ID='<taurusdb_instance_id>'
+export TAURUSDB_METRICS_SOURCE_CES_NODE_ID='<taurusdb_node_id>'
+export TAURUSDB_METRICS_SOURCE_CES_AUTH_TOKEN='<iam_token>'
+```
+
+默认使用 TaurusDB 的 Cloud Eye namespace `SYS.GAUSSDB`，维度名默认为 `gaussdb_mysql_instance_id` / `gaussdb_mysql_node_id`，默认查询最近 60 分钟、60 秒粒度的 `average` 指标。
+
 ### 3.5 可选：直接走环境变量单 datasource 模式
 
 如果你不想先写 profile，也可以直接用环境变量跑一个 datasource：

@@ -74,7 +74,7 @@
 
 - 当前测试重点是 **MCP 协议适配 + 数据面主链路 + minimal guardrail + token confirmation + TaurusDB 首阶段差异化能力**
 - CLI 不作为本轮主测试对象
-- diagnostics 当前默认暴露；本地阶段重点验收 explain / digest / processlist / lock waits / table storage 这类数据面证据链，云侧 CES / DAS / Top SQL / 复制链路仍放到 TaurusDB 联调阶段
+- diagnostics 当前默认暴露；本地阶段重点验收 explain / digest / processlist / lock waits / table storage 这类数据面证据链；CES / Cloud Eye 指标源已有第一版配置与 collector，仍需在云端 TaurusDB 联调阶段验证真实指标返回、维度名、权限与时间窗口；DAS / Top SQL / MDL / deadlock history 仍放到后续云侧补齐
 
 ---
 
@@ -236,11 +236,11 @@
 
 建议至少准备下面 3 套环境。
 
-| 环境 | 目的 | 是否必测 | 主要覆盖 |
-| --- | --- | --- | --- |
-| 无数据库本地环境 | 跑默认自动化基线 | 是 | 构建、单测、协议层、handler、registry、init |
-| 本地 MySQL | 跑主功能集成测试 | 是 | schema、readonly、explain、mutation、confirmation、`show_processlist` |
-| 云端 TaurusDB | 跑兼容性与专属能力验证 | 是 | capability probe、专属 Tool、真实网络/权限/TLS |
+| 环境             | 目的                   | 是否必测 | 主要覆盖                                                              |
+| ---------------- | ---------------------- | -------- | --------------------------------------------------------------------- |
+| 无数据库本地环境 | 跑默认自动化基线       | 是       | 构建、单测、协议层、handler、registry、init                           |
+| 本地 MySQL       | 跑主功能集成测试       | 是       | schema、readonly、explain、mutation、confirmation、`show_processlist` |
+| 云端 TaurusDB    | 跑兼容性与专属能力验证 | 是       | capability probe、专属 Tool、真实网络/权限/TLS                        |
 
 不建议只测云端。
 
@@ -292,7 +292,8 @@
 
 - 真实 TaurusDB 环境行为
 - 网络与 TLS
-- diagnostics 的云侧 CES / DAS / Top SQL / MDL / deadlock history 联合证据
+- diagnostics 的云侧 CES / Cloud Eye 真实指标返回、维度名、IAM token、权限与时间窗口
+- diagnostics 的云侧 DAS / Top SQL / MDL / deadlock history 联合证据
 - 大表/大结果集下的行为
 - 能力探测与 Taurus 内核差异
 
@@ -557,6 +558,17 @@ node packages/mcp/dist/index.js
 - `flashback_query` 是否只读且符合 feature gate
 - 网络、白名单、安全组、TLS、真实账号权限是否影响调用
 - TaurusDB 与本地 MySQL 在 explain / 元数据上的差异是否符合预期
+- CES / Cloud Eye 指标源是否可用：
+  - `TAURUSDB_METRICS_SOURCE_CES_ENDPOINT`
+  - `TAURUSDB_METRICS_SOURCE_CES_PROJECT_ID`
+  - `TAURUSDB_METRICS_SOURCE_CES_INSTANCE_ID`
+  - `TAURUSDB_METRICS_SOURCE_CES_NODE_ID`
+  - `TAURUSDB_METRICS_SOURCE_CES_AUTH_TOKEN`
+  - namespace 默认 `SYS.GAUSSDB`
+  - 维度名默认 `gaussdb_mysql_instance_id` / `gaussdb_mysql_node_id`
+- `diagnose_connection_spike` 是否能返回 `ces_metrics` evidence
+- `diagnose_replication_lag` 在有复制链路或只读节点时是否能合并 replication delay 与复制状态；在单机或无权限场景是否返回 `not_applicable` 或可解释的 `inconclusive`
+- `diagnose_storage_pressure` 是否能返回存储延迟、IOPS、吞吐、临时表相关 `ces_metrics` evidence
 
 通过标准：
 
@@ -564,6 +576,7 @@ node packages/mcp/dist/index.js
 - capability probe 结果可信
 - `explain_sql_enhanced` 可用
 - `flashback_query` 在支持环境下可用，或在不支持环境下明确不可用
+- CES 指标源配置正确时，相关 diagnostics 至少能返回结构化 `ces_metrics` evidence；配置缺失或无权限时不出现未处理异常
 
 #### 阶段四：继续推进 diagnostics
 
@@ -573,13 +586,16 @@ node packages/mcp/dist/index.js
 
 1. `show_processlist`
 2. `diagnose_slow_query` 第一版
-3. `diagnose_connection_spike` 第一版
+3. `diagnose_connection_spike` 第一版 + CES 连接指标第一版
 4. `diagnose_lock_contention` 第一版
+5. `diagnose_replication_lag` 复制状态 + CES lag 第一版
+6. `diagnose_storage_pressure` 本地 SQL/table evidence + CES 存储指标第一版
+7. CES / Cloud Eye metrics source 第一版
 
 下一步建议实现顺序：
 
 1. 为 `diagnose_slow_query` 在 Taurus slow-log external source 之外，再补 DAS / Top SQL / 更强的 wait-event / 云侧运行时关联
-2. 为 `diagnose_connection_spike` 补 CES 侧证据
+2. 在云端 TaurusDB 验证 CES / Cloud Eye 指标源、复制状态和只读节点权限
 3. 为 `diagnose_lock_contention` 补 MDL / deadlock history
 
 这一阶段继续关注：
@@ -590,9 +606,9 @@ node packages/mcp/dist/index.js
 
 这一阶段暂时不要做：
 
-- diagnostics 默认注册到 MCP tool registry
-- replication lag / storage pressure 的云侧完整 collector
 - CLI diagnose 命令
+- DAS / Top SQL / 全量 SQL 的复杂 merge ranking
+- OS 级磁盘指标 collector
 
 ---
 
@@ -606,14 +622,14 @@ node packages/mcp/dist/index.js
 
 核心用例：
 
-| 编号 | 用例 | 期望结果 | 关键观测点 |
-| --- | --- | --- | --- |
-| A-01 | 启动 MCP server | 进程成功启动并完成握手 | 无异常退出；stdout 可被 MCP client 正常消费 |
-| A-02 | `tools/list` | 返回默认工具集合 | 工具数量和名称正确 |
-| A-03 | `enableMutations=false` | `execute_sql` 不暴露 | tool list 中无 `execute_sql` |
-| A-04 | `enableMutations=true` | `execute_sql` 暴露 | tool list 中有 `execute_sql` |
-| A-05 | 日志边界 | 日志不污染 stdout | stderr 有日志，stdout 仅协议输出 |
-| A-06 | 异常 handler | 返回结构化错误 | `ok=false`，`error.code` 合理 |
+| 编号 | 用例                    | 期望结果               | 关键观测点                                  |
+| ---- | ----------------------- | ---------------------- | ------------------------------------------- |
+| A-01 | 启动 MCP server         | 进程成功启动并完成握手 | 无异常退出；stdout 可被 MCP client 正常消费 |
+| A-02 | `tools/list`            | 返回默认工具集合       | 工具数量和名称正确                          |
+| A-03 | `enableMutations=false` | `execute_sql` 不暴露   | tool list 中无 `execute_sql`                |
+| A-04 | `enableMutations=true`  | `execute_sql` 暴露     | tool list 中有 `execute_sql`                |
+| A-05 | 日志边界                | 日志不污染 stdout      | stderr 有日志，stdout 仅协议输出            |
+| A-06 | 异常 handler            | 返回结构化错误         | `ok=false`，`error.code` 合理               |
 
 ### 9.2 B 组：配置、Profile 与 Context 解析
 
@@ -621,14 +637,14 @@ node packages/mcp/dist/index.js
 
 核心用例：
 
-| 编号 | 用例 | 期望结果 | 关键观测点 |
-| --- | --- | --- | --- |
-| B-01 | 存在默认 datasource | 可正确解析默认 datasource | `list_data_sources.default_datasource` 正确 |
-| B-02 | 显式传入 datasource | 覆盖默认 datasource | 返回中的 datasource 正确 |
-| B-03 | 传入 database 覆盖 profile 默认库 | tool 在指定库执行 | `data.database` 正确 |
-| B-04 | datasource 不存在 | 返回结构化错误 | `DATASOURCE_NOT_FOUND` |
-| B-05 | timeout 超范围 | 被服务端限制或报错 | `timeout_ms` 行为符合限制 |
-| B-06 | 缺少 database 且 profile 也无默认库 | 返回输入错误 | 提示需要提供 database |
+| 编号 | 用例                                | 期望结果                  | 关键观测点                                  |
+| ---- | ----------------------------------- | ------------------------- | ------------------------------------------- |
+| B-01 | 存在默认 datasource                 | 可正确解析默认 datasource | `list_data_sources.default_datasource` 正确 |
+| B-02 | 显式传入 datasource                 | 覆盖默认 datasource       | 返回中的 datasource 正确                    |
+| B-03 | 传入 database 覆盖 profile 默认库   | tool 在指定库执行         | `data.database` 正确                        |
+| B-04 | datasource 不存在                   | 返回结构化错误            | `DATASOURCE_NOT_FOUND`                      |
+| B-05 | timeout 超范围                      | 被服务端限制或报错        | `timeout_ms` 行为符合限制                   |
+| B-06 | 缺少 database 且 profile 也无默认库 | 返回输入错误              | 提示需要提供 database                       |
 
 ### 9.3 C 组：Schema 探查能力
 
@@ -636,13 +652,13 @@ node packages/mcp/dist/index.js
 
 核心用例：
 
-| 编号 | 用例 | 期望结果 | 关键观测点 |
-| --- | --- | --- | --- |
-| C-01 | `list_data_sources` | 返回公开 datasource 元信息 | 不泄露密码；默认标识正确 |
-| C-02 | `list_databases` | 返回数据库列表 | 数据库名正确 |
-| C-03 | `list_tables` | 返回表/视图列表 | 表名、类型、行数估计合理 |
-| C-04 | `describe_table` | 返回列、索引、主键、engine hints | `primary_key`、`indexes`、`engine_hints` 正确 |
-| C-05 | 表不存在 | 返回结构化错误 | 错误信息可定位 |
+| 编号 | 用例                | 期望结果                         | 关键观测点                                    |
+| ---- | ------------------- | -------------------------------- | --------------------------------------------- |
+| C-01 | `list_data_sources` | 返回公开 datasource 元信息       | 不泄露密码；默认标识正确                      |
+| C-02 | `list_databases`    | 返回数据库列表                   | 数据库名正确                                  |
+| C-03 | `list_tables`       | 返回表/视图列表                  | 表名、类型、行数估计合理                      |
+| C-04 | `describe_table`    | 返回列、索引、主键、engine hints | `primary_key`、`indexes`、`engine_hints` 正确 |
+| C-05 | 表不存在            | 返回结构化错误                   | 错误信息可定位                                |
 
 ### 9.4 D 组：只读 SQL 与 Explain
 
@@ -650,16 +666,16 @@ node packages/mcp/dist/index.js
 
 核心用例：
 
-| 编号 | 用例 | 期望结果 | 关键观测点 |
-| --- | --- | --- | --- |
-| D-01 | `SELECT` 聚合查询 | 成功返回结果 | `ok=true`，`row_count` 正确 |
-| D-02 | `SHOW` 查询 | 成功返回结果 | `statement_type` 正确 |
-| D-03 | `DESCRIBE` 查询 | 成功返回结果 | 行列结构合理 |
-| D-04 | 只读 SQL 大结果集 | 正确触发裁剪 | `truncated=true` |
-| D-05 | 非只读 SQL 调 `execute_readonly_sql` | 被阻断 | `BLOCKED_SQL` |
-| D-06 | 非法 SQL 调 `execute_readonly_sql` | 结构化报错 | `SQL_SYNTAX_ERROR` |
-| D-07 | `explain_sql` 正常执行 | 返回 plan 和 guardrail 信息 | `plan`、`guardrail`、`duration_ms` 正确 |
-| D-08 | 高风险 SQL 执行 Explain | Explain 可出结果，但 guardrail 风险提示存在 | `guardrail.action` 合理 |
+| 编号 | 用例                                 | 期望结果                                    | 关键观测点                              |
+| ---- | ------------------------------------ | ------------------------------------------- | --------------------------------------- |
+| D-01 | `SELECT` 聚合查询                    | 成功返回结果                                | `ok=true`，`row_count` 正确             |
+| D-02 | `SHOW` 查询                          | 成功返回结果                                | `statement_type` 正确                   |
+| D-03 | `DESCRIBE` 查询                      | 成功返回结果                                | 行列结构合理                            |
+| D-04 | 只读 SQL 大结果集                    | 正确触发裁剪                                | `truncated=true`                        |
+| D-05 | 非只读 SQL 调 `execute_readonly_sql` | 被阻断                                      | `BLOCKED_SQL`                           |
+| D-06 | 非法 SQL 调 `execute_readonly_sql`   | 结构化报错                                  | `SQL_SYNTAX_ERROR`                      |
+| D-07 | `explain_sql` 正常执行               | 返回 plan 和 guardrail 信息                 | `plan`、`guardrail`、`duration_ms` 正确 |
+| D-08 | 高风险 SQL 执行 Explain              | Explain 可出结果，但 guardrail 风险提示存在 | `guardrail.action` 合理                 |
 
 额外重点：
 
@@ -673,17 +689,17 @@ node packages/mcp/dist/index.js
 
 核心用例：
 
-| 编号 | 用例 | 期望结果 | 关键观测点 |
-| --- | --- | --- | --- |
-| E-01 | 默认配置下查看 tool list | 无 `execute_sql` | tool 暴露面正确 |
-| E-02 | 开启 mutation 后查看 tool list | 有 `execute_sql` | 开关生效 |
-| E-03 | `execute_sql` 传只读 SQL | 被阻断 | tool scope 正确 |
+| 编号 | 用例                              | 期望结果                     | 关键观测点                                     |
+| ---- | --------------------------------- | ---------------------------- | ---------------------------------------------- |
+| E-01 | 默认配置下查看 tool list          | 无 `execute_sql`             | tool 暴露面正确                                |
+| E-02 | 开启 mutation 后查看 tool list    | 有 `execute_sql`             | 开关生效                                       |
+| E-03 | `execute_sql` 传只读 SQL          | 被阻断                       | tool scope 正确                                |
 | E-04 | `UPDATE ... WHERE ...` 不带 token | 返回 `CONFIRMATION_REQUIRED` | `error.code` 与 `data.confirmation_token` 正确 |
-| E-05 | 携带错误 token 重试 | 返回 `CONFIRMATION_INVALID` | token 校验严格 |
-| E-06 | 携带正确 token 重试 | 执行成功 | `affected_rows` 与数据库实际一致 |
-| E-07 | 重复使用同一 token | 校验失败 | token 一次性使用 |
-| E-08 | 无 WHERE 的高风险 mutation | 被阻断 | guardrail 静态规则生效 |
-| E-09 | mutation 执行失败 | 回滚 | 数据未脏写 |
+| E-05 | 携带错误 token 重试               | 返回 `CONFIRMATION_INVALID`  | token 校验严格                                 |
+| E-06 | 携带正确 token 重试               | 执行成功                     | `affected_rows` 与数据库实际一致               |
+| E-07 | 重复使用同一 token                | 校验失败                     | token 一次性使用                               |
+| E-08 | 无 WHERE 的高风险 mutation        | 被阻断                       | guardrail 静态规则生效                         |
+| E-09 | mutation 执行失败                 | 回滚                         | 数据未脏写                                     |
 
 ### 9.6 F 组：Timeout 与异常路径
 
@@ -691,11 +707,11 @@ node packages/mcp/dist/index.js
 
 核心用例：
 
-| 编号 | 用例 | 期望结果 | 关键观测点 |
-| --- | --- | --- | --- |
-| F-01 | 制造 timeout | 返回 `QUERY_TIMEOUT` | 错误码准确 |
-| F-02 | 连接失败 | 返回 `CONNECTION_FAILED` | 错误映射稳定 |
-| F-03 | 非法 SQL | 返回结构化错误 | `SQL_SYNTAX_ERROR` 稳定 |
+| 编号 | 用例         | 期望结果                 | 关键观测点              |
+| ---- | ------------ | ------------------------ | ----------------------- |
+| F-01 | 制造 timeout | 返回 `QUERY_TIMEOUT`     | 错误码准确              |
+| F-02 | 连接失败     | 返回 `CONNECTION_FAILED` | 错误映射稳定            |
+| F-03 | 非法 SQL     | 返回结构化错误           | `SQL_SYNTAX_ERROR` 稳定 |
 
 ### 9.7 G 组：TaurusDB 能力探测与专属 Tool
 
@@ -703,13 +719,13 @@ node packages/mcp/dist/index.js
 
 核心用例：
 
-| 编号 | 用例 | 期望结果 | 关键观测点 |
-| --- | --- | --- | --- |
-| G-01 | 非 Taurus 环境启动 | 专属 Tool 按能力缺失隐藏 | tool list 不应错误暴露 |
-| G-02 | Taurus 环境 capability probe 成功 | 返回 kernel / feature 信息 | `get_kernel_info`、`list_taurus_features` 可用 |
-| G-03 | `explain_sql_enhanced` | 返回增强提示 | `taurusHints`、`optimizationSuggestions` 存在 |
-| G-04 | `flashback_query` 在支持环境下执行 | 返回历史只读数据 | 当前表数据不被修改 |
-| G-05 | 不支持 flashback 的环境调用 | 返回合理错误或不暴露 tool | 行为与 feature gate 一致 |
+| 编号 | 用例                               | 期望结果                   | 关键观测点                                     |
+| ---- | ---------------------------------- | -------------------------- | ---------------------------------------------- |
+| G-01 | 非 Taurus 环境启动                 | 专属 Tool 按能力缺失隐藏   | tool list 不应错误暴露                         |
+| G-02 | Taurus 环境 capability probe 成功  | 返回 kernel / feature 信息 | `get_kernel_info`、`list_taurus_features` 可用 |
+| G-03 | `explain_sql_enhanced`             | 返回增强提示               | `taurusHints`、`optimizationSuggestions` 存在  |
+| G-04 | `flashback_query` 在支持环境下执行 | 返回历史只读数据           | 当前表数据不被修改                             |
+| G-05 | 不支持 flashback 的环境调用        | 返回合理错误或不暴露 tool  | 行为与 feature gate 一致                       |
 
 ### 9.8 H 组：Diagnostics
 
@@ -717,22 +733,23 @@ node packages/mcp/dist/index.js
 
 核心用例：
 
-| 编号 | 用例 | 期望结果 | 关键观测点 |
-| --- | --- | --- | --- |
-| H-01 | 默认 tool list | 出现 diagnostics tool | 当前默认注册行为正确 |
-| H-02 | 直接测试 `diagnose_slow_query` handler | 返回 explain-based 结构化结果 | `root_cause_candidates`、`evidence`、`recommended_actions` 稳定 |
-| H-03 | 直接测试 `find_top_slow_sql` / `diagnose_db_hotspot` / `diagnose_service_latency` | 返回 symptom-entry 结构化结果 | `top_sqls`、`hotspots`、`top_candidates`、`recommended_next_tools` 稳定 |
-| H-04 | 直接测试 `diagnose_connection_spike` handler | 返回 evidence-backed 结构化结果 | `root_cause_candidates`、`evidence`、`recommended_actions` 稳定 |
-| H-05 | 直接测试 `diagnose_lock_contention` handler | 返回 evidence-backed 结构化结果 | blocker / table / evidence 摘要稳定 |
-| H-06 | 直接测试 `diagnose_storage_pressure` handler | 返回本地存储压力结构化结果 | `statement_digest`、`table_storage`、tmp disk spill / scan-heavy 候选稳定 |
-| H-07 | `diagnose_replication_lag` scaffold contract | 返回结构化 scaffold 结果 | 结果字段稳定 |
-| H-08 | 输入缺失 | 返回输入校验错误 | 校验提示清晰 |
+| 编号 | 用例                                                                              | 期望结果                                                               | 关键观测点                                                                |
+| ---- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| H-01 | 默认 tool list                                                                    | 出现 diagnostics tool                                                  | 当前默认注册行为正确                                                      |
+| H-02 | 直接测试 `diagnose_slow_query` handler                                            | 返回 explain-based 结构化结果                                          | `root_cause_candidates`、`evidence`、`recommended_actions` 稳定           |
+| H-03 | 直接测试 `find_top_slow_sql` / `diagnose_db_hotspot` / `diagnose_service_latency` | 返回 symptom-entry 结构化结果                                          | `top_sqls`、`hotspots`、`top_candidates`、`recommended_next_tools` 稳定   |
+| H-04 | 直接测试 `diagnose_connection_spike` handler                                      | 返回 evidence-backed 结构化结果                                        | `root_cause_candidates`、`evidence`、`recommended_actions` 稳定           |
+| H-05 | 直接测试 `diagnose_lock_contention` handler                                       | 返回 evidence-backed 结构化结果                                        | blocker / table / evidence 摘要稳定                                       |
+| H-06 | 直接测试 `diagnose_storage_pressure` handler                                      | 返回本地存储压力结构化结果                                             | `statement_digest`、`table_storage`、tmp disk spill / scan-heavy 候选稳定 |
+| H-07 | `diagnose_replication_lag` handler                                                | 无复制证据时返回 `not_applicable`，有测试桩时返回 evidence-backed 结果 | 复制状态、CES lag、limitations 字段稳定                                   |
+| H-08 | 输入缺失                                                                          | 返回输入校验错误                                                       | 校验提示清晰                                                              |
 
 说明：
 
 - diagnostics 当前默认注册到 MCP tool registry
 - 本地可验证 `diagnose_slow_query`、`diagnose_connection_spike`、`diagnose_lock_contention`、`diagnose_storage_pressure` 的主要数据面 evidence chain
-- 不应把当前版本当成完整云侧“诊断正确率”验收；CES / DAS / Top SQL / 复制链路 / MDL / deadlock history 仍需上云补齐
+- CES / Cloud Eye metrics source 已有第一版自动化单测覆盖，但真实指标返回、IAM token、维度名和时间窗口仍需云端 TaurusDB 验证
+- 不应把当前版本当成完整云侧“诊断正确率”验收；DAS / Top SQL / MDL / deadlock history / OS 级存储指标仍需后续补齐
 
 ### 9.9 I 组：`init` 命令
 
@@ -740,11 +757,11 @@ node packages/mcp/dist/index.js
 
 核心用例：
 
-| 编号 | 用例 | 期望结果 | 关键观测点 |
-| --- | --- | --- | --- |
-| I-01 | 初始化 Cursor 配置 | 正确写入 server entry | 配置结构正确 |
-| I-02 | 目标配置中已有同名 entry | 不覆盖已有配置 | merge 行为符合预期 |
-| I-03 | 不同 client 参数 | 输出目标文件正确 | 目标路径和内容合理 |
+| 编号 | 用例                     | 期望结果              | 关键观测点         |
+| ---- | ------------------------ | --------------------- | ------------------ |
+| I-01 | 初始化 Cursor 配置       | 正确写入 server entry | 配置结构正确       |
+| I-02 | 目标配置中已有同名 entry | 不覆盖已有配置        | merge 行为符合预期 |
+| I-03 | 不同 client 参数         | 输出目标文件正确      | 目标路径和内容合理 |
 
 ### 9.10 J 组：回归与非功能性检查
 
@@ -752,12 +769,12 @@ node packages/mcp/dist/index.js
 
 核心用例：
 
-| 编号 | 用例 | 期望结果 | 关键观测点 |
-| --- | --- | --- | --- |
-| J-01 | 连续多次启动/关闭 server | 无明显资源泄漏 | 进程稳定 |
-| J-02 | 连续多次执行只读查询 | 返回稳定 | 无随机异常 |
-| J-03 | 多次错误输入 | 错误码和 envelope 稳定 | 无未处理异常 |
-| J-04 | 敏感配置打印 | 日志不泄露密码 | 配置已脱敏 |
+| 编号 | 用例                     | 期望结果               | 关键观测点   |
+| ---- | ------------------------ | ---------------------- | ------------ |
+| J-01 | 连续多次启动/关闭 server | 无明显资源泄漏         | 进程稳定     |
+| J-02 | 连续多次执行只读查询     | 返回稳定               | 无随机异常   |
+| J-03 | 多次错误输入             | 错误码和 envelope 稳定 | 无未处理异常 |
+| J-04 | 敏感配置打印             | 日志不泄露密码         | 配置已脱敏   |
 
 ---
 

@@ -153,11 +153,12 @@ npx @huaweicloud/taurusdb-mcp init --client vscode
 
 - 稳定 `core` / `mcp` 的边界
 - 稳定 capability probe 与动态 Tool 注册
+- 在云端 TaurusDB 上验证 capability probe、enhanced explain、flashback query
+- 在云端 TaurusDB 上验证 CES / Cloud Eye 指标源、复制状态与 diagnostics 联合证据
 - 在 `core` 上实现 CLI 命令模式
-- 下一阶段引入场景化诊断 Tool
 - 回收站、history/binlog、CLI REPL/AI 属于后续阶段
 
-当前 diagnostics Tool 已直接纳入默认 tool 集合。
+当前 diagnostics Tool 已直接纳入默认 tool 集合。CES / Cloud Eye 指标源已有第一版，可通过 `TAURUSDB_METRICS_SOURCE_CES_*` 环境变量启用；详见 [docs/mcp-plan.md](./docs/mcp-plan.md)。
 
 ## Notes
 
