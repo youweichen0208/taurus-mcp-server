@@ -38,8 +38,18 @@ MCP 当前已经具备：
   - `list_taurus_features`
   - `explain_sql_enhanced`
   - `flashback_query`
+- 第一版 diagnostics Tool 面：
+  - `show_processlist`
+  - `find_top_slow_sql`
+  - `diagnose_service_latency`
+  - `diagnose_db_hotspot`
+  - `diagnose_slow_query`
+  - `diagnose_connection_spike`
+  - `diagnose_lock_contention`
+  - `diagnose_replication_lag`
+  - `diagnose_storage_pressure`
 
-下一阶段最值得新增的不是更多执行型 Tool，而是一组**场景化诊断 Tool**。
+下一阶段最值得继续增强的不是更多执行型 Tool，而是把**场景化诊断 Tool** 的云侧证据、长历史和 merge 质量补齐。
 
 ## 3. 第一阶段范围
 
@@ -62,7 +72,7 @@ MCP 当前已经具备：
 - SQL history / Binlog / preflight / safety posture
 - doctor 类诊断编排
 
-但下一阶段建议正式引入一条 diagnostics 产品线，并明确拆成两层：
+但 diagnostics 产品线已经落地第一版，下一阶段建议继续拆成两层并补齐证据源：
 
 1. 症状入口层
    先回答“当前是谁在影响业务或实例”
@@ -664,10 +674,10 @@ findTopSlowSql: async () => ({
 
 当前仍刻意不做：
 
-- 不做跨多个外部慢 SQL 源的 merge ranking
-- 不做 DAS / Top SQL 等高保留期 SQL 源的复杂 merge ranking；CES / Cloud Eye 指标源已有第一版，但仍需云端真实验证
+- 不做跨多个外部慢 SQL 源的复杂 merge ranking
+- 不做 DAS / 全量 SQL 等高保留期 SQL 源的复杂 merge ranking；当前已接 Taurus slow-log external source / external ranking merge 第一版，CES / Cloud Eye 指标源已有第一版，但仍需云端真实验证
 - 不做 sample SQL 缺失时的复杂回填策略
-- 不做 MDL / deadlock history collector
+- 不做更长 deadlock history archive 与更复杂的 MDL 根因归并
 - 不做 OS 级磁盘指标 collector
 
 先把“本地 digest ranking -> 返回 suspect SQL -> 可以继续调 `diagnose_slow_query`”这条链路做通，再扩外围。
@@ -776,7 +786,7 @@ MCP 启动流程当前应保持如下简单链路：
 
    - 云端 TaurusDB 真实实例验证 CES 指标源、复制状态命令与权限边界
    - DAS / Top SQL / 全量 SQL 证据源
-   - MDL / deadlock history
+   - 更长 deadlock history archive 与更复杂的 MDL 根因归并
    - OS 级磁盘 / IOPS / 吞吐指标
 
    它们共同依赖：
@@ -790,7 +800,7 @@ MCP 启动流程当前应保持如下简单链路：
 
    - 先在 Taurus slow-log external source 的基础上，继续补齐 DAS / Top SQL 与更强的 wait-event / 云侧运行时关联
    - 先在云端 TaurusDB 完整验证 CES / Cloud Eye 指标源、`diagnose_replication_lag` 和存储指标链路
-   - 再把 `diagnose_lock_contention` 的 MDL / deadlock 证据补齐
+   - 再补更长 deadlock history archive 与更强的 MDL 根因归并
    - 最后接入 DAS / Top SQL / 全量 SQL，并和本地 digest / slow-log source 合并排序
 
    首批 schema 设计建议：

@@ -29,6 +29,8 @@ packages/cli/src/index.ts
 
 当前行为是直接输出 “scaffolded but not implemented yet” 并退出。
 
+同时要注意：`core` / `mcp` 侧的 diagnostics 第一版已经落地，CLI 这里仍只负责未来的命令包装，不要把它误写成“连 diagnostics 也还没开始”。
+
 所以这份文档描述的是**第一阶段目标命令面**，不是现有完成度的夸大描述。
 
 ## 3. 第一阶段范围

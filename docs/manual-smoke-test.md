@@ -18,6 +18,7 @@
 - 给 MCP 配好本地环境变量
 - 启动本地 MCP server
 - 手工验证 discovery / readonly / explain / mutation confirmation / diagnostics 主链路
+- 其中 diagnostics 已经有第一版默认暴露，手工 smoke 不要只看通用 SQL 主链路
 
 ---
 
