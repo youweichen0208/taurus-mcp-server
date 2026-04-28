@@ -16,6 +16,7 @@ import {
   getKernelInfoTool,
   listTaurusFeaturesTool,
 } from "../dist/tools/taurus/capability.js";
+import { listCloudTaurusInstancesTool } from "../dist/tools/taurus/cloud-instances.js";
 import {
   diagnoseDbHotspotTool,
   diagnoseServiceLatencyTool,
@@ -28,10 +29,25 @@ import {
 } from "../dist/tools/taurus/diagnostics.js";
 import { explainSqlEnhancedTool } from "../dist/tools/taurus/explain.js";
 import { flashbackQueryTool } from "../dist/tools/taurus/flashback.js";
+import {
+  listRecycleBinTool,
+  restoreRecycleBinTableTool,
+} from "../dist/tools/taurus/recycle-bin.js";
 
 function createDeps(engineOverrides = {}) {
   return {
-    config: { enableMutations: true },
+    config: {
+      enableMutations: true,
+      cloud: {
+        provider: "huaweicloud",
+        region: "cn-north-4",
+        projectId: "project-1",
+        authToken: "token-1",
+        apiEndpoint: "https://gaussdb.cn-north-4.myhuaweicloud.com",
+        domainSuffix: "myhuaweicloud.com",
+        language: "zh-cn",
+      },
+    },
     pingResponse: "pong",
     engine: {
       listDataSources: async () => [],
@@ -196,6 +212,31 @@ function createDeps(engineOverrides = {}) {
         droppedColumns: [],
         truncatedColumns: [],
         durationMs: 7,
+      }),
+      listRecycleBin: async () => ({
+        queryId: "qry_recycle_1",
+        columns: [{ name: "TABLE_NAME" }],
+        rows: [["orders@123"]],
+        rowCount: 1,
+        originalRowCount: 1,
+        truncated: false,
+        rowTruncated: false,
+        columnTruncated: false,
+        fieldTruncated: false,
+        redactedColumns: [],
+        droppedColumns: [],
+        truncatedColumns: [],
+        durationMs: 8,
+      }),
+      restoreRecycleBinTable: async () => ({
+        queryId: "qry_restore_1",
+        affectedRows: 1,
+        durationMs: 21,
+      }),
+      issueConfirmation: async () => ({
+        token: "ctok_restore_1",
+        issuedAt: 1,
+        expiresAt: 301,
       }),
       diagnoseSlowQuery: async (input) => ({
         tool: "diagnose_slow_query",
@@ -723,6 +764,83 @@ test("flashback_query returns structured readonly result", async () => {
   assert.equal(result.data.database, "app");
   assert.equal(result.data.table, "orders");
   assert.equal(result.data.row_count, 1);
+});
+
+test("list_recycle_bin returns structured readonly result", async () => {
+  const deps = createDeps();
+
+  const result = await listRecycleBinTool.handler({}, deps, context);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data.datasource, "main");
+  assert.equal(result.data.row_count, 1);
+  assert.equal(result.data.rows[0][0], "orders@123");
+});
+
+test("list_cloud_taurus_instances returns structured cloud instance list", async () => {
+  const deps = createDeps();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        instances: [
+          {
+            id: "instance-1",
+            name: "prod-taurus",
+            status: "normal",
+            mode: "Cluster",
+            datastore: { version: "8.0" },
+            private_ips: ["10.0.0.8"],
+            public_ips: ["1.2.3.4"],
+            port: "3306",
+            created: "2026-04-01T00:00:00Z",
+            updated: "2026-04-02T00:00:00Z",
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+
+  try {
+    const result = await listCloudTaurusInstancesTool.handler({}, deps, context);
+
+    assert.equal(result.ok, true);
+    assert.equal(result.data.total, 1);
+    assert.equal(result.data.items[0].id, "instance-1");
+    assert.equal(result.data.items[0].name, "prod-taurus");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("restore_recycle_bin_table requires confirmation before restore", async () => {
+  const deps = createDeps();
+
+  const first = await restoreRecycleBinTableTool.handler(
+    {
+      recycle_table: "orders@123",
+      method: "native_restore",
+    },
+    deps,
+    context,
+  );
+
+  assert.equal(first.ok, false);
+  assert.equal(first.error.code, ErrorCode.CONFIRMATION_REQUIRED);
+  assert.equal(first.data.confirmation_token, "ctok_restore_1");
+
+  const second = await restoreRecycleBinTableTool.handler(
+    {
+      recycle_table: "orders@123",
+      method: "native_restore",
+      confirmation_token: "ctok_restore_1",
+    },
+    deps,
+    context,
+  );
+
+  assert.equal(second.ok, true);
+  assert.equal(second.data.affected_rows, 1);
 });
 
 test("execute_sql returns confirmation_invalid when token validation fails", async () => {

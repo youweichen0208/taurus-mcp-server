@@ -4,9 +4,9 @@
 
 配套文档：
 
-- [testing.md](/Users/youweichen/projects/taurus-mcp-server/docs/testing.md)
-- [testing-cases.md](/Users/youweichen/projects/taurus-mcp-server/docs/testing-cases.md)
-- [testdata/mysql/README.md](/Users/youweichen/projects/taurus-mcp-server/testdata/mysql/README.md)
+- [testing.md](./testing.md)
+- [cloud-taurusdb-testing.md](./cloud-taurusdb-testing.md)
+- [testdata/mysql/README.md](../testdata/mysql/README.md)
 
 ---
 
@@ -19,6 +19,7 @@
 - 启动本地 MCP server
 - 手工验证 discovery / readonly / explain / mutation confirmation / diagnostics 主链路
 - 其中 diagnostics 已经有第一版默认暴露，手工 smoke 不要只看通用 SQL 主链路
+- TaurusDB recycle bin 属于云端能力，本地 MySQL smoke 不会暴露这两个 Tool
 
 ---
 
@@ -26,8 +27,7 @@
 
 开始前先确认：
 
-- 你当前在仓库根目录：
-  `/Users/youweichen/projects/taurus-mcp-server`
+- 你当前在仓库根目录
 - 本机已安装 Docker
 - 本机可执行 `docker compose`
 - 本机已执行过依赖安装：
@@ -44,7 +44,7 @@ npm install
 
 仓库已经提供了本地测试用的 compose 文件：
 
-- [testdata/mysql/compose.yaml](/Users/youweichen/projects/taurus-mcp-server/testdata/mysql/compose.yaml)
+- [testdata/mysql/compose.yaml](../testdata/mysql/compose.yaml)
 
 它会自动完成：
 
@@ -137,7 +137,8 @@ env | rg '^TAURUSDB_' | sed 's/=.*$/=<set>/'
 说明：
 
 - diagnostics 本地 smoke 依赖 `PROCESS` 和 `SELECT ON performance_schema.*`
-- 仓库里的 [local-mysql-users.sql](/Users/youweichen/projects/taurus-mcp-server/testdata/mysql/local-mysql-users.sql) 已包含这两项授权
+- 仓库里的 [local-mysql-users.sql](../testdata/mysql/local-mysql-users.sql) 已包含这两项授权
+- 上云联调请按 [cloud-taurusdb-testing.md](./cloud-taurusdb-testing.md) 准备 datasource、DAS/CES 环境变量和 `npm run cloud:validate`
 
 ---
 
@@ -636,7 +637,26 @@ SQL：
 - `affected_rows` 合理
 - 数据库里对应记录已变更
 
-### 7.4.12 diagnostics 场景化手工构造
+### 7.4.12 `list_recycle_bin` / `restore_recycle_bin_table`
+
+这两个 Tool 只在 TaurusDB 且 capability probe 命中 `recycle_bin` 时暴露，所以不要在本地 MySQL 环境里测。
+
+推荐验证方式：
+
+1. 在云端 TaurusDB 上先准备一个可丢弃的测试表。
+2. 通过 `list_recycle_bin` 确认回收站里出现了目标表。
+3. 调用 `restore_recycle_bin_table`，第一次不带 `confirmation_token`。
+4. 用返回的 `confirmation_token` 重试同一组参数。
+
+重点看：
+
+- `list_recycle_bin` 返回的是只读结果，不应要求 confirmation
+- `restore_recycle_bin_table` 第一次应返回 `CONFIRMATION_REQUIRED`
+- 第二次必须使用相同的 `recycle_table`、`method` 和目标参数
+- `insert_select` 模式需要先建好兼容结构的目标表
+- `native_restore` 只适合直接恢复到原表名，或在同时提供 `destination_database` / `destination_table` 时重命名恢复
+
+### 7.4.13 diagnostics 场景化手工构造
 
 如果你想手工验证 diagnostics，而不只看自动化测试，建议按下面 4 组场景做。
 
@@ -929,7 +949,7 @@ claude mcp add --transport stdio --scope local \
   --env TAURUSDB_MCP_ENABLE_MUTATIONS="$TAURUSDB_MCP_ENABLE_MUTATIONS" \
   --env TAURUSDB_MCP_LOG_LEVEL="$TAURUSDB_MCP_LOG_LEVEL" \
   huaweicloud-taurusdb-local -- \
-  node /Users/youweichen/projects/taurus-mcp-server/packages/mcp/dist/index.js
+  node packages/mcp/dist/index.js
 ```
 
 然后检查：

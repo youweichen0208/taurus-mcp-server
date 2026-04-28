@@ -23,9 +23,16 @@ import {
 import { showProcesslistTool } from "./processlist.js";
 import { pingTool } from "./ping.js";
 import { getKernelInfoTool, listTaurusFeaturesTool } from "./taurus/capability.js";
+import {
+  selectCloudTaurusInstanceTool,
+  setCloudAccessKeysTool,
+  setCloudRegionTool,
+} from "./taurus/cloud-context.js";
+import { listCloudTaurusInstancesTool } from "./taurus/cloud-instances.js";
 import { diagnosticToolDefinitions } from "./taurus/diagnostics.js";
 import { explainSqlEnhancedTool } from "./taurus/explain.js";
 import { flashbackQueryTool } from "./taurus/flashback.js";
+import { listRecycleBinTool, restoreRecycleBinTableTool } from "./taurus/recycle-bin.js";
 import {
   ErrorCode,
   formatError,
@@ -146,6 +153,10 @@ export const commonToolDefinitions: ToolDefinition[] = [
 export const capabilityToolDefinitions: ToolDefinition[] = [
   getKernelInfoTool,
   listTaurusFeaturesTool,
+  setCloudRegionTool,
+  setCloudAccessKeysTool,
+  listCloudTaurusInstancesTool,
+  selectCloudTaurusInstanceTool,
 ];
 
 function buildDefaultToolDefinitions(_config: Config, probe?: ToolRegistrationProbe): ToolDefinition[] {
@@ -161,6 +172,9 @@ function buildDefaultToolDefinitions(_config: Config, probe?: ToolRegistrationPr
     }
     if (probe.features.flashback_query.available) {
       tools.push(flashbackQueryTool);
+    }
+    if (probe.features.recycle_bin.available) {
+      tools.push(listRecycleBinTool, restoreRecycleBinTableTool);
     }
   }
 

@@ -33,11 +33,13 @@ MCP 当前已经具备：
 - 最小 Guardrail + token confirmation
 - TaurusDB capability probe
 - 基于 probe 的动态 Tool 注册
-- 4 个 TaurusDB 首阶段 Tool：
+- TaurusDB 首阶段 Tool：
   - `get_kernel_info`
   - `list_taurus_features`
   - `explain_sql_enhanced`
   - `flashback_query`
+  - `list_recycle_bin`
+  - `restore_recycle_bin_table`
 - 第一版 diagnostics Tool 面：
   - `show_processlist`
   - `find_top_slow_sql`
@@ -62,24 +64,26 @@ MCP 当前已经具备：
    AST 分类、tool scope 校验、静态阻断规则、token confirmation、结果裁剪/脱敏
 
 3. TaurusDB 差异化能力
-   capability discovery、enhanced explain、flashback query
+   capability discovery、enhanced explain、flashback query、recycle bin
+
+4. 场景化 diagnostics 能力
+   slow SQL 发现、服务延迟入口、热点定位、慢查询根因、连接暴涨、锁竞争、复制延迟、存储压力
 
 第一阶段明确不做：
 
 - `ConfirmationStrategy` 抽象
 - schema cache / capability cache
-- recycle bin Tool
 - SQL history / Binlog / preflight / safety posture
-- doctor 类诊断编排
+- 更高保留期的全量 SQL / Binlog / deadlock archive 深度编排
 
-但 diagnostics 产品线已经落地第一版，下一阶段建议继续拆成两层并补齐证据源：
+diagnostics 产品线已经落地第一版，并按两层组织：
 
 1. 症状入口层
    先回答“当前是谁在影响业务或实例”
 2. 根因分析层
    再分析 suspect SQL / session / table 的具体根因
 
-建议优先做：
+当前已默认暴露：
 
 - `find_top_slow_sql`
 - `diagnose_service_latency`
@@ -90,7 +94,7 @@ MCP 当前已经具备：
 - `diagnose_replication_lag`
 - `diagnose_storage_pressure`
 
-这些 Tool 的验证边界建议在立项时就写清楚：
+这些 Tool 的验证边界如下：
 
 | Tool | 层级 | 验证级别 | 说明 |
 | --- | --- | --- |
@@ -121,7 +125,7 @@ MCP 当前已经具备：
 - TaurusDB capability probe
 - enhanced explain 与 flashback query
 
-下一阶段建议在 `core` 内新增 `diagnostics/`，但不要污染当前执行主链。推荐拆分为：
+`core` 已新增 `diagnostics/`，并保持不污染当前执行主链。当前边界按下面三类继续维护：
 
 - `diagnostics/orchestrator`
 - `diagnostics/control-plane-adapters`
@@ -763,9 +767,9 @@ MCP 启动流程当前应保持如下简单链路：
 
 - MCP Tool 全部通过 `TaurusDBEngine` 调用，不再绕过 `core`
 - 启动时 capability probe 与动态 Tool 注册稳定可用
-- 4 个 TaurusDB 首阶段 Tool 行为稳定
+- TaurusDB 首阶段 Tool 行为稳定，包括 capability、enhanced explain、flashback query 和 recycle bin
 - token confirmation 链路稳定
-- 文档不再把 recycle bin / history / doctor 写成已交付能力
+- 文档不再把 history / doctor 写成已交付能力
 
 ## 9. 后续阶段
 
@@ -809,11 +813,8 @@ MCP 启动流程当前应保持如下简单链路：
    - 再冻结 `DiagnosticResult`
    - 最后为 5 个 Tool 逐个补专属输入和 evidence collector 列表
 
-2. recycle bin Tool
-   前提是补齐权威 SQL / CALL 语法与元数据视图。
-
-3. history / binlog / audit 闭环
+2. history / binlog / audit 闭环
    前提是确认 DAS / 全量 SQL / SQL 审计 / Binlog 的真实接入面。
 
-4. 更丰富的 TaurusDB 专属观测
+3. 更丰富的 TaurusDB 专属观测
    如分区、Statement Outline、长事务、只读节点状态。

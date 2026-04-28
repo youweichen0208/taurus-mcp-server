@@ -95,7 +95,34 @@ export type {
 export { normalizeSql, sqlHash } from "./utils/hash.js";
 export { generateQueryId, generateTaskId } from "./utils/id.js";
 export { logger, withTaskContext } from "./utils/logger.js";
+export {
+  CloudTaurusInstanceClient,
+  createCloudTaurusInstanceClient,
+} from "./cloud/instances.js";
+export type {
+  CloudTaurusInstanceSummary,
+  ListCloudTaurusInstancesInput,
+} from "./cloud/instances.js";
+export {
+  canAuthenticateHuaweiCloudRequests,
+  fetchHuaweiCloud,
+  getHuaweiCloudAuthFromConfig,
+  hasHuaweiCloudCredentialAuth,
+  inferHuaweiCloudRegionFromEndpoint,
+  resolveHuaweiCloudProjectId,
+} from "./cloud/auth.js";
+export type { HuaweiCloudAuthOptions } from "./cloud/auth.js";
 export type { FlashbackInput } from "./taurus/flashback.js";
+export {
+  buildListRecycleBinSql,
+  buildRestoreRecycleBinTableSql,
+  RECYCLE_BIN_DATABASE,
+} from "./taurus/recycle-bin.js";
+export type {
+  RecycleBinListResult,
+  RecycleBinRestoreResult,
+  RestoreRecycleBinTableInput,
+} from "./taurus/recycle-bin.js";
 export { createPlaceholderDiagnosticResult } from "./diagnostics/types.js";
 export {
   buildResolveSlowSqlInput,

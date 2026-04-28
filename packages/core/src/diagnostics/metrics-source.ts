@@ -1,5 +1,6 @@
 import type { Config } from "../config/index.js";
 import type { SessionContext } from "../context/session-context.js";
+import { fetchHuaweiCloud } from "../cloud/auth.js";
 import type { DiagnosisWindow } from "./types.js";
 
 export type MetricAlias =
@@ -56,7 +57,10 @@ type CesMetricsSourceOptions = {
   projectId: string;
   instanceId: string;
   nodeId?: string;
-  authToken: string;
+  authToken?: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+  securityToken?: string;
   namespace: string;
   instanceDimension: string;
   nodeDimension: string;
@@ -224,7 +228,10 @@ export class CesMetricsSource implements MetricsSource {
   private readonly projectId: string;
   private readonly instanceId: string;
   private readonly nodeId?: string;
-  private readonly authToken: string;
+  private readonly authToken?: string;
+  private readonly accessKeyId?: string;
+  private readonly secretAccessKey?: string;
+  private readonly securityToken?: string;
   private readonly namespace: string;
   private readonly instanceDimension: string;
   private readonly nodeDimension: string;
@@ -240,6 +247,9 @@ export class CesMetricsSource implements MetricsSource {
     this.instanceId = options.instanceId;
     this.nodeId = options.nodeId;
     this.authToken = options.authToken;
+    this.accessKeyId = options.accessKeyId;
+    this.secretAccessKey = options.secretAccessKey;
+    this.securityToken = options.securityToken;
     this.namespace = options.namespace;
     this.instanceDimension = options.instanceDimension;
     this.nodeDimension = options.nodeDimension;
@@ -315,14 +325,25 @@ export class CesMetricsSource implements MetricsSource {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
     try {
-      const response = await this.fetchImpl(`${this.endpoint}${path}`, {
+      const body = JSON.stringify(payload);
+      const response = await fetchHuaweiCloud({
+        url: `${this.endpoint}${path}`,
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-auth-token": this.authToken,
         },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
+        body,
+        auth: {
+          authToken: this.authToken,
+          accessKeyId: this.accessKeyId,
+          secretAccessKey: this.secretAccessKey,
+          securityToken: this.securityToken,
+        },
+        fetchImpl: (input, init) =>
+          this.fetchImpl(input, {
+            ...init,
+            signal: controller.signal,
+          }),
       });
       if (!response.ok) {
         return {};
@@ -343,7 +364,8 @@ export function createMetricsSource(config: Config): MetricsSource | undefined {
     !ces.endpoint ||
     !ces.projectId ||
     !ces.instanceId ||
-    !ces.authToken
+    (!ces.authToken &&
+      !(config.cloud?.accessKeyId && config.cloud?.secretAccessKey))
   ) {
     return undefined;
   }
@@ -354,6 +376,9 @@ export function createMetricsSource(config: Config): MetricsSource | undefined {
     instanceId: ces.instanceId,
     nodeId: ces.nodeId,
     authToken: ces.authToken,
+    accessKeyId: config.cloud?.accessKeyId,
+    secretAccessKey: config.cloud?.secretAccessKey,
+    securityToken: config.cloud?.securityToken,
     namespace: ces.namespace,
     instanceDimension: ces.instanceDimension,
     nodeDimension: ces.nodeDimension,

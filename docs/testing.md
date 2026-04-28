@@ -4,10 +4,11 @@
 
 配套阅读：
 
-- [architecture.md](/Users/youweichen/projects/taurus-mcp-server/docs/architecture.md)
-- [progress.md](/Users/youweichen/projects/taurus-mcp-server/progress.md)
-- [local-mysql-testing.md](/Users/youweichen/projects/taurus-mcp-server/docs/local-mysql-testing.md)
-- [requirements.md](/Users/youweichen/projects/taurus-mcp-server/docs/requirements.md)
+- [architecture.md](./architecture.md)
+- [manual-smoke-test.md](./manual-smoke-test.md)
+- [cloud-taurusdb-testing.md](./cloud-taurusdb-testing.md)
+- [taurusdb-ops-playbook.md](./taurusdb-ops-playbook.md)
+- [progress.md](../progress.md)
 
 ---
 
@@ -51,6 +52,8 @@
   - `list_taurus_features`
   - `explain_sql_enhanced`
   - `flashback_query`
+  - `list_recycle_bin`
+  - `restore_recycle_bin_table`
 
 当前已经实现并默认暴露的 diagnostics 能力：
 
@@ -65,10 +68,14 @@
 
 当前明确不在首阶段范围内：
 
-- recycle bin
 - SQL history / binlog / preflight
 - CLI REPL / ask / agent / doctor
 - 云控制面功能本身
+
+补充说明：
+
+- `list_recycle_bin` 和 `restore_recycle_bin_table` 属于 TaurusDB 专属能力，只有在 capability probe 命中 `recycle_bin` 时才会进入工具面
+- `restore_recycle_bin_table` 还额外受 `TAURUSDB_MCP_ENABLE_MUTATIONS=true` 控制，并且第一次调用必须走 confirmation token
 
 结论：
 
@@ -352,10 +359,10 @@ npm run test --workspace @huaweicloud/taurusdb-mcp
 
 本地 MySQL 测试资产见：
 
-- [testdata/mysql/README.md](/Users/youweichen/projects/taurus-mcp-server/testdata/mysql/README.md)
-- [local-mysql-schema.sql](/Users/youweichen/projects/taurus-mcp-server/testdata/mysql/local-mysql-schema.sql)
-- [local-mysql-seed.sql](/Users/youweichen/projects/taurus-mcp-server/testdata/mysql/local-mysql-seed.sql)
-- [local-mysql-profiles.example.json](/Users/youweichen/projects/taurus-mcp-server/testdata/mysql/local-mysql-profiles.example.json)
+- [testdata/mysql/README.md](../testdata/mysql/README.md)
+- [local-mysql-schema.sql](../testdata/mysql/local-mysql-schema.sql)
+- [local-mysql-seed.sql](../testdata/mysql/local-mysql-seed.sql)
+- [local-mysql-profiles.example.json](../testdata/mysql/local-mysql-profiles.example.json)
 
 ### 8.5 推荐验证顺序
 
@@ -566,6 +573,37 @@ node packages/mcp/dist/index.js
 
 先按现有 profile 机制配置 datasource，确保 MCP 能先连上数据库。
 
+推荐优先使用高层 cloud resolver 配置。当前默认主路径已经收敛到 `region + AK/SK`：
+
+```bash
+export TAURUSDB_CLOUD_REGION=...
+export TAURUSDB_CLOUD_ACCESS_KEY_ID=...
+export TAURUSDB_CLOUD_SECRET_ACCESS_KEY=...
+export TAURUSDB_CLOUD_ENABLE_EVIDENCE=true
+```
+
+说明：
+
+- `project_id` 不是首选手工输入项。配置了 region + AK/SK 后，会先尝试自动解析项目。
+- `instance_id` 不是首选手工输入项。`npm run cloud:validate` 会优先使用显式 `instance_id`，否则尝试根据 datasource `host/port` 自动解析唯一实例。
+- 如果自动解析失败或出现多实例歧义，先调用 `list_cloud_taurus_instances`，再通过 `select_cloud_taurus_instance` 固定当前会话的默认 `instance_id`。
+- `instance_name` 只用于展示和人工选择，不应作为唯一键。
+- `set_cloud_region` 和 `set_cloud_access_keys` 适合在 MCP 会话内切换云侧上下文，避免反复改 `export`。
+
+如果使用临时 AK/SK，再补：
+
+```bash
+export TAURUSDB_CLOUD_SECURITY_TOKEN=...
+```
+
+如果需要显式启用 Taurus API slow SQL，再补：
+
+```bash
+export TAURUSDB_CLOUD_ENABLE_TAURUS_API=true
+```
+
+底层 DAS / CES / Taurus API 环境变量仍然支持，但应视为 override / 调试入口，而不是默认配置路径。
+
 Taurus slow SQL source：
 
 ```bash
@@ -625,6 +663,7 @@ npm run cloud:validate
 
 这个脚本当前会单独检查：
 
+- 当前 datasource 是否能自动解析唯一 `instance_id`
 - DAS `sql/switch`
 - DAS `top-slow-log`
 - CES `batch-query-metric-data`
@@ -1730,7 +1769,6 @@ mysql -uroot -p < testdata/mysql/local-mysql-users.sql
 ### 12.3 当前允许未完成
 
 - diagnostics 的云侧完整闭环与长历史补齐
-- recycle bin
 - history/binlog
 - CLI 真正落地
 

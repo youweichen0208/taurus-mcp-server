@@ -16,6 +16,24 @@ const AuditSchema = z
   })
   .default({});
 
+const CloudSchema = z
+  .object({
+    provider: z.enum(["huaweicloud"]).default("huaweicloud"),
+    region: z.string().min(1).optional(),
+    projectId: z.string().min(1).optional(),
+    instanceId: z.string().min(1).optional(),
+    nodeId: z.string().min(1).optional(),
+    authToken: z.string().min(1).optional(),
+    accessKeyId: z.string().min(1).optional(),
+    secretAccessKey: z.string().min(1).optional(),
+    securityToken: z.string().min(1).optional(),
+    apiEndpoint: z.string().min(1).optional(),
+    iamEndpoint: z.string().min(1).optional(),
+    domainSuffix: z.string().min(1).default("myhuaweicloud.com"),
+    language: z.enum(["en-us", "zh-cn"]).default("zh-cn"),
+  })
+  .default({});
+
 const TaurusApiSlowSqlSourceSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -72,6 +90,7 @@ export const ConfigSchema = z.object({
   defaultDatasource: z.string().min(1).optional(),
   profilesPath: z.string().min(1).optional(),
   enableMutations: z.boolean().default(false),
+  cloud: CloudSchema,
   limits: LimitsSchema,
   audit: AuditSchema,
   slowSqlSource: z

@@ -69,6 +69,13 @@ import {
   type FlashbackInput,
 } from "./taurus/flashback.js";
 import {
+  buildListRecycleBinSql,
+  buildRestoreRecycleBinTableSql,
+  recycleBinMutationOptions,
+  recycleBinReadonlyOptions,
+  type RestoreRecycleBinTableInput,
+} from "./taurus/recycle-bin.js";
+import {
   createPlaceholderDiagnosticResult,
   type DbHotspotItem,
   type DbHotspotResult,
@@ -5013,6 +5020,55 @@ export class TaurusDBEngine {
       ...flashbackReadonlyOptions(input.limit),
       ...opts,
     });
+  }
+
+  async listRecycleBin(
+    ctx: SessionContext,
+    opts?: ReadonlyOptions,
+  ): Promise<QueryResult> {
+    const features = await this.capabilityProbe.listFeatures(ctx);
+    const recycleBinFeature = features.recycle_bin;
+    if (!recycleBinFeature.available || recycleBinFeature.enabled === false) {
+      throw new UnsupportedFeatureError(
+        "recycle_bin",
+        recycleBinFeature.reason ??
+          `Recycle bin requires kernel version >= ${recycleBinFeature.minVersion ?? "unknown"}.`,
+        {
+          requiredVersion: recycleBinFeature.minVersion,
+          currentVersion: (await this.capabilityProbe.getKernelInfo(ctx))
+            .kernelVersion,
+        },
+      );
+    }
+
+    return this.executor.executeReadonly(buildListRecycleBinSql(), ctx, recycleBinReadonlyOptions(opts));
+  }
+
+  async restoreRecycleBinTable(
+    input: RestoreRecycleBinTableInput,
+    ctx: SessionContext,
+    opts?: MutationOptions,
+  ): Promise<MutationResult> {
+    const features = await this.capabilityProbe.listFeatures(ctx);
+    const recycleBinFeature = features.recycle_bin;
+    if (!recycleBinFeature.available || recycleBinFeature.enabled === false) {
+      throw new UnsupportedFeatureError(
+        "recycle_bin",
+        recycleBinFeature.reason ??
+          `Recycle bin requires kernel version >= ${recycleBinFeature.minVersion ?? "unknown"}.`,
+        {
+          requiredVersion: recycleBinFeature.minVersion,
+          currentVersion: (await this.capabilityProbe.getKernelInfo(ctx))
+            .kernelVersion,
+        },
+      );
+    }
+
+    return this.executor.executeMutation(
+      buildRestoreRecycleBinTableSql(input),
+      ctx,
+      recycleBinMutationOptions(opts),
+    );
   }
 
   async getQueryStatus(queryId: string): Promise<QueryStatus> {

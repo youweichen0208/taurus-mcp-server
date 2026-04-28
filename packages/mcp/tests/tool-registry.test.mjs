@@ -51,6 +51,8 @@ test("tool registry registers default MCP tools through legacy tool API", async 
       "explain_sql",
       "get_kernel_info",
       "list_taurus_features",
+      "set_cloud_region",
+      "set_cloud_access_keys",
       "diagnose_service_latency",
       "diagnose_db_hotspot",
       "find_top_slow_sql",
@@ -98,6 +100,27 @@ test("tool registry registers diagnostics tools by default", () => {
   );
 });
 
+test("tool registry registers cloud instance discovery when cloud config is present", () => {
+  const enabled = createLegacyToolServerRecorder();
+  registerTools(
+    enabled.server,
+    { pingResponse: "pong" },
+    createConfigFromEnv({
+      TAURUSDB_CLOUD_REGION: "cn-north-4",
+      TAURUSDB_CLOUD_ACCESS_KEY_ID: "ak-1",
+      TAURUSDB_CLOUD_SECRET_ACCESS_KEY: "sk-1",
+    }),
+  );
+  assert.equal(
+    enabled.calls.some((call) => call.name === "list_cloud_taurus_instances"),
+    true,
+  );
+  assert.equal(
+    enabled.calls.some((call) => call.name === "select_cloud_taurus_instance"),
+    true,
+  );
+});
+
 test("tool registry registers TaurusDB-specific tools based on startup probe", () => {
   const { server, calls } = createLegacyToolServerRecorder();
 
@@ -131,6 +154,38 @@ test("tool registry registers TaurusDB-specific tools based on startup probe", (
 
   assert.equal(calls.some((call) => call.name === "explain_sql_enhanced"), true);
   assert.equal(calls.some((call) => call.name === "flashback_query"), true);
+  assert.equal(calls.some((call) => call.name === "list_recycle_bin"), true);
+  assert.equal(calls.some((call) => call.name === "restore_recycle_bin_table"), false);
+
+  const mutationEnabled = createLegacyToolServerRecorder();
+  registerTools(
+    mutationEnabled.server,
+    { pingResponse: "pong" },
+    createConfigFromEnv({ TAURUSDB_MCP_ENABLE_MUTATIONS: "true" }),
+    {
+      kernelInfo: {
+        isTaurusDB: true,
+        kernelVersion: "2.0.69.250900",
+        mysqlCompat: "8.0",
+        rawVersion: "8.0.32 TaurusDB 2.0.69.250900",
+      },
+      features: {
+        flashback_query: { available: true, enabled: true, minVersion: "2.0.69.250900" },
+        parallel_query: { available: true, enabled: false, param: "force_parallel_execute=OFF" },
+        ndp_pushdown: { available: true, enabled: true, mode: "REPLICA_ON" },
+        offset_pushdown: { available: true, enabled: true },
+        recycle_bin: { available: true, enabled: true, minVersion: "2.0.57.240900" },
+        statement_outline: { available: true, enabled: false, minVersion: "2.0.42.230600" },
+        column_compression: { available: true, minVersion: "2.0.54.240600" },
+        multi_tenant: { available: true, enabled: false, active: false, minVersion: "2.0.54.240600" },
+        partition_mdl: { available: true, minVersion: "2.0.57.240900" },
+        dynamic_masking: { available: true, minVersion: "2.0.69.250900" },
+        nonblocking_ddl: { available: true, minVersion: "2.0.54.240600" },
+        hot_row_update: { available: true, minVersion: "2.0.54.240600" },
+      },
+    },
+  );
+  assert.equal(mutationEnabled.calls.some((call) => call.name === "restore_recycle_bin_table"), true);
 });
 
 test("tool registry registers tools through registerTool API when available", async () => {

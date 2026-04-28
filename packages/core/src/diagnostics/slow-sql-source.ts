@@ -1,4 +1,5 @@
 import type { Config } from "../config/index.js";
+import { fetchHuaweiCloud } from "../cloud/auth.js";
 import type {
   DiagnoseSlowQueryInput,
   DiagnosisWindow,
@@ -57,7 +58,10 @@ type TaurusApiSlowSqlSourceOptions = {
   projectId: string;
   instanceId: string;
   nodeId: string;
-  authToken: string;
+  authToken?: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+  securityToken?: string;
   language: "en-us" | "zh-cn";
   requestTimeoutMs: number;
   defaultLookbackMinutes: number;
@@ -69,7 +73,10 @@ type DasSlowSqlSourceOptions = {
   endpoint: string;
   projectId: string;
   instanceId: string;
-  authToken: string;
+  authToken?: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+  securityToken?: string;
   datastoreType: "MySQL" | "TaurusDB";
   requestTimeoutMs: number;
   defaultLookbackMinutes: number;
@@ -451,7 +458,10 @@ export class TaurusApiSlowSqlSource implements SlowSqlSource {
   private readonly projectId: string;
   private readonly instanceId: string;
   private readonly nodeId: string;
-  private readonly authToken: string;
+  private readonly authToken?: string;
+  private readonly accessKeyId?: string;
+  private readonly secretAccessKey?: string;
+  private readonly securityToken?: string;
   private readonly language: "en-us" | "zh-cn";
   private readonly requestTimeoutMs: number;
   private readonly defaultLookbackMinutes: number;
@@ -464,6 +474,9 @@ export class TaurusApiSlowSqlSource implements SlowSqlSource {
     this.instanceId = options.instanceId;
     this.nodeId = options.nodeId;
     this.authToken = options.authToken;
+    this.accessKeyId = options.accessKeyId;
+    this.secretAccessKey = options.secretAccessKey;
+    this.securityToken = options.securityToken;
     this.language = options.language;
     this.requestTimeoutMs = options.requestTimeoutMs;
     this.defaultLookbackMinutes = options.defaultLookbackMinutes;
@@ -589,15 +602,26 @@ export class TaurusApiSlowSqlSource implements SlowSqlSource {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
     try {
-      const response = await this.fetchImpl(`${this.endpoint}${path}`, {
+      const body = JSON.stringify(payload);
+      const response = await fetchHuaweiCloud({
+        url: `${this.endpoint}${path}`,
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-auth-token": this.authToken,
           "x-language": this.language,
         },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
+        body,
+        auth: {
+          authToken: this.authToken,
+          accessKeyId: this.accessKeyId,
+          secretAccessKey: this.secretAccessKey,
+          securityToken: this.securityToken,
+        },
+        fetchImpl: (input, init) =>
+          this.fetchImpl(input, {
+            ...init,
+            signal: controller.signal,
+          }),
       });
       if (!response.ok) {
         return {};
@@ -615,7 +639,10 @@ export class DasSlowSqlSource implements SlowSqlSource {
   private readonly endpoint: string;
   private readonly projectId: string;
   private readonly instanceId: string;
-  private readonly authToken: string;
+  private readonly authToken?: string;
+  private readonly accessKeyId?: string;
+  private readonly secretAccessKey?: string;
+  private readonly securityToken?: string;
   private readonly datastoreType: "MySQL" | "TaurusDB";
   private readonly requestTimeoutMs: number;
   private readonly defaultLookbackMinutes: number;
@@ -628,6 +655,9 @@ export class DasSlowSqlSource implements SlowSqlSource {
     this.projectId = options.projectId;
     this.instanceId = options.instanceId;
     this.authToken = options.authToken;
+    this.accessKeyId = options.accessKeyId;
+    this.secretAccessKey = options.secretAccessKey;
+    this.securityToken = options.securityToken;
     this.datastoreType = options.datastoreType;
     this.requestTimeoutMs = options.requestTimeoutMs;
     this.defaultLookbackMinutes = options.defaultLookbackMinutes;
@@ -816,17 +846,24 @@ export class DasSlowSqlSource implements SlowSqlSource {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
     try {
-      const response = await this.fetchImpl(
-        `${this.endpoint}${path}${queryString ? `?${queryString}` : ""}`,
-        {
-          method: "GET",
-          headers: {
-            "content-type": "application/json",
-            "x-auth-token": this.authToken,
-          },
-          signal: controller.signal,
+      const response = await fetchHuaweiCloud({
+        url: `${this.endpoint}${path}${queryString ? `?${queryString}` : ""}`,
+        method: "GET",
+        headers: {
+          "content-type": "application/json",
         },
-      );
+        auth: {
+          authToken: this.authToken,
+          accessKeyId: this.accessKeyId,
+          secretAccessKey: this.secretAccessKey,
+          securityToken: this.securityToken,
+        },
+        fetchImpl: (input, init) =>
+          this.fetchImpl(input, {
+            ...init,
+            signal: controller.signal,
+          }),
+      });
       if (!response.ok) {
         return {};
       }
@@ -891,7 +928,8 @@ export function createSlowSqlSource(config: Config): SlowSqlSource | undefined {
     taurusApi.projectId &&
     taurusApi.instanceId &&
     taurusApi.nodeId &&
-    taurusApi.authToken
+    (taurusApi.authToken ||
+      (config.cloud?.accessKeyId && config.cloud?.secretAccessKey))
   ) {
     sources.push(
       new TaurusApiSlowSqlSource({
@@ -900,6 +938,9 @@ export function createSlowSqlSource(config: Config): SlowSqlSource | undefined {
         instanceId: taurusApi.instanceId,
         nodeId: taurusApi.nodeId,
         authToken: taurusApi.authToken,
+        accessKeyId: config.cloud?.accessKeyId,
+        secretAccessKey: config.cloud?.secretAccessKey,
+        securityToken: config.cloud?.securityToken,
         language: taurusApi.language,
         requestTimeoutMs: taurusApi.requestTimeoutMs,
         defaultLookbackMinutes: taurusApi.defaultLookbackMinutes,
@@ -914,7 +955,7 @@ export function createSlowSqlSource(config: Config): SlowSqlSource | undefined {
     das.endpoint &&
     das.projectId &&
     das.instanceId &&
-    das.authToken
+    (das.authToken || (config.cloud?.accessKeyId && config.cloud?.secretAccessKey))
   ) {
     sources.push(
       new DasSlowSqlSource({
@@ -922,6 +963,9 @@ export function createSlowSqlSource(config: Config): SlowSqlSource | undefined {
         projectId: das.projectId,
         instanceId: das.instanceId,
         authToken: das.authToken,
+        accessKeyId: config.cloud?.accessKeyId,
+        secretAccessKey: config.cloud?.secretAccessKey,
+        securityToken: config.cloud?.securityToken,
         datastoreType: das.datastoreType,
         requestTimeoutMs: das.requestTimeoutMs,
         defaultLookbackMinutes: das.defaultLookbackMinutes,

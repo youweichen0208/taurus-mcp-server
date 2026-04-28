@@ -57,6 +57,8 @@ test("stdio transport exposes expected tools and keeps logs on stderr", async ()
       "explain_sql",
       "get_kernel_info",
       "list_taurus_features",
+      "set_cloud_region",
+      "set_cloud_access_keys",
       "diagnose_service_latency",
       "diagnose_db_hotspot",
       "find_top_slow_sql",

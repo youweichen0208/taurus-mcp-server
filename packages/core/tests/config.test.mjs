@@ -13,6 +13,19 @@ test("config uses documented defaults when env is empty", () => {
   assert.equal(config.defaultDatasource, undefined);
   assert.equal(config.profilesPath, undefined);
   assert.equal(config.enableMutations, false);
+  assert.equal(config.cloud.provider, "huaweicloud");
+  assert.equal(config.cloud.region, undefined);
+  assert.equal(config.cloud.projectId, undefined);
+  assert.equal(config.cloud.instanceId, undefined);
+  assert.equal(config.cloud.nodeId, undefined);
+  assert.equal(config.cloud.authToken, undefined);
+  assert.equal(config.cloud.accessKeyId, undefined);
+  assert.equal(config.cloud.secretAccessKey, undefined);
+  assert.equal(config.cloud.securityToken, undefined);
+  assert.equal(config.cloud.apiEndpoint, undefined);
+  assert.equal(config.cloud.iamEndpoint, undefined);
+  assert.equal(config.cloud.domainSuffix, "myhuaweicloud.com");
+  assert.equal(config.cloud.language, "zh-cn");
   assert.equal(config.limits.maxRows, 200);
   assert.equal(config.limits.maxColumns, 50);
   assert.equal(config.limits.maxStatementMs, 15000);
@@ -89,11 +102,23 @@ test("config maps env vars into typed fields", () => {
     TAURUSDB_METRICS_SOURCE_CES_FILTER: "max",
     TAURUSDB_METRICS_SOURCE_CES_TIMEOUT_MS: "8000",
     TAURUSDB_METRICS_SOURCE_CES_DEFAULT_LOOKBACK_MINUTES: "120",
+    TAURUSDB_CLOUD_ACCESS_KEY_ID: "ak-1",
+    TAURUSDB_CLOUD_SECRET_ACCESS_KEY: "sk-1",
+    TAURUSDB_CLOUD_SECURITY_TOKEN: "sts-1",
   });
 
   assert.equal(config.defaultDatasource, "local_mysql");
   assert.equal(config.profilesPath, `${os.homedir()}/profiles.json`);
   assert.equal(config.enableMutations, true);
+  assert.equal(config.cloud.provider, "huaweicloud");
+  assert.equal(config.cloud.region, "cn-north-4");
+  assert.equal(config.cloud.accessKeyId, "ak-1");
+  assert.equal(config.cloud.secretAccessKey, "sk-1");
+  assert.equal(config.cloud.securityToken, "sts-1");
+  assert.equal(
+    config.cloud.iamEndpoint,
+    "https://iam.cn-north-4.myhuaweicloud.com",
+  );
   assert.equal(config.limits.maxRows, 123);
   assert.equal(config.limits.maxColumns, 12);
   assert.equal(config.limits.maxStatementMs, 3000);
@@ -147,6 +172,113 @@ test("config maps env vars into typed fields", () => {
   assert.equal(config.metricsSource.ces.defaultLookbackMinutes, 120);
 });
 
+test("config resolves shared cloud env into DAS and CES sources", () => {
+  const config = createConfigFromEnv({
+    TAURUSDB_CLOUD_REGION: "cn-north-4",
+    TAURUSDB_CLOUD_PROJECT_ID: "project-shared",
+    TAURUSDB_CLOUD_INSTANCE_ID: "instance-shared",
+    TAURUSDB_CLOUD_NODE_ID: "node-shared",
+    TAURUSDB_CLOUD_AUTH_TOKEN: "token-shared",
+    TAURUSDB_CLOUD_ENABLE_EVIDENCE: "true",
+    TAURUSDB_CLOUD_ENABLE_TAURUS_API: "true",
+  });
+
+  assert.equal(config.slowSqlSource.das.enabled, true);
+  assert.equal(
+    config.slowSqlSource.das.endpoint,
+    "https://das.cn-north-4.myhuaweicloud.com",
+  );
+  assert.equal(config.slowSqlSource.das.projectId, "project-shared");
+  assert.equal(config.slowSqlSource.das.instanceId, "instance-shared");
+  assert.equal(config.slowSqlSource.das.authToken, "token-shared");
+
+  assert.equal(config.metricsSource.ces.enabled, true);
+  assert.equal(
+    config.metricsSource.ces.endpoint,
+    "https://ces.cn-north-4.myhuaweicloud.com",
+  );
+  assert.equal(config.metricsSource.ces.projectId, "project-shared");
+  assert.equal(config.metricsSource.ces.instanceId, "instance-shared");
+  assert.equal(config.metricsSource.ces.nodeId, "node-shared");
+  assert.equal(config.metricsSource.ces.authToken, "token-shared");
+
+  assert.equal(config.slowSqlSource.taurusApi.enabled, true);
+  assert.equal(
+    config.slowSqlSource.taurusApi.endpoint,
+    "https://gaussdb.cn-north-4.myhuaweicloud.com",
+  );
+  assert.equal(config.slowSqlSource.taurusApi.projectId, "project-shared");
+  assert.equal(config.slowSqlSource.taurusApi.instanceId, "instance-shared");
+  assert.equal(config.slowSqlSource.taurusApi.nodeId, "node-shared");
+  assert.equal(config.slowSqlSource.taurusApi.authToken, "token-shared");
+});
+
+test("config infers cloud region from SQL host when shared region is omitted", () => {
+  const config = createConfigFromEnv({
+    TAURUSDB_SQL_HOST: "gaussdb-mysql-proxy.cn-east-3.myhuaweicloud.com",
+    TAURUSDB_CLOUD_PROJECT_ID: "project-auto",
+    TAURUSDB_CLOUD_INSTANCE_ID: "instance-auto",
+    TAURUSDB_CLOUD_AUTH_TOKEN: "token-auto",
+    TAURUSDB_CLOUD_ENABLE_CES: "true",
+  });
+
+  assert.equal(config.metricsSource.ces.enabled, true);
+  assert.equal(
+    config.metricsSource.ces.endpoint,
+    "https://ces.cn-east-3.myhuaweicloud.com",
+  );
+  assert.equal(config.metricsSource.ces.projectId, "project-auto");
+  assert.equal(config.metricsSource.ces.instanceId, "instance-auto");
+  assert.equal(config.metricsSource.ces.authToken, "token-auto");
+});
+
+test("config supports AK/SK-only cloud discovery inputs", () => {
+  const config = createConfigFromEnv({
+    TAURUSDB_CLOUD_REGION: "cn-east-3",
+    TAURUSDB_CLOUD_ACCESS_KEY_ID: "ak-only",
+    TAURUSDB_CLOUD_SECRET_ACCESS_KEY: "sk-only",
+    TAURUSDB_CLOUD_ENABLE_EVIDENCE: "true",
+  });
+
+  assert.equal(config.cloud.region, "cn-east-3");
+  assert.equal(config.cloud.projectId, undefined);
+  assert.equal(config.cloud.authToken, undefined);
+  assert.equal(config.cloud.accessKeyId, "ak-only");
+  assert.equal(config.cloud.secretAccessKey, "sk-only");
+  assert.equal(
+    config.cloud.apiEndpoint,
+    "https://gaussdb.cn-east-3.myhuaweicloud.com",
+  );
+  assert.equal(
+    config.cloud.iamEndpoint,
+    "https://iam.cn-east-3.myhuaweicloud.com",
+  );
+});
+
+test("explicit per-source env values override shared cloud defaults", () => {
+  const config = createConfigFromEnv({
+    TAURUSDB_CLOUD_REGION: "cn-north-4",
+    TAURUSDB_CLOUD_PROJECT_ID: "project-shared",
+    TAURUSDB_CLOUD_INSTANCE_ID: "instance-shared",
+    TAURUSDB_CLOUD_AUTH_TOKEN: "token-shared",
+    TAURUSDB_CLOUD_ENABLE_EVIDENCE: "true",
+    TAURUSDB_SLOW_SQL_SOURCE_DAS_ENDPOINT:
+      "https://das.custom.example.com",
+    TAURUSDB_METRICS_SOURCE_CES_PROJECT_ID: "project-explicit",
+  });
+
+  assert.equal(
+    config.slowSqlSource.das.endpoint,
+    "https://das.custom.example.com",
+  );
+  assert.equal(config.slowSqlSource.das.projectId, "project-shared");
+  assert.equal(config.metricsSource.ces.projectId, "project-explicit");
+  assert.equal(
+    config.metricsSource.ces.endpoint,
+    "https://ces.cn-north-4.myhuaweicloud.com",
+  );
+});
+
 test("config throws on invalid boolean env values", () => {
   assert.throws(
     () =>
@@ -172,6 +304,15 @@ test("redactConfigForLog redacts sensitive keys recursively", () => {
     defaultDatasource: "a",
     profilesPath: "/tmp/profiles.json",
     enableMutations: false,
+    cloud: {
+      provider: "huaweicloud",
+      authToken: "token_000",
+      accessKeyId: "ak_000",
+      secretAccessKey: "sk_000",
+      securityToken: "sts_000",
+      domainSuffix: "myhuaweicloud.com",
+      language: "zh-cn",
+    },
     limits: { maxRows: 1, maxColumns: 1, maxStatementMs: 1, maxFieldChars: 1 },
     audit: { logPath: "/tmp/audit.jsonl", includeRawSql: false },
     slowSqlSource: {
@@ -217,6 +358,10 @@ test("redactConfigForLog redacts sensitive keys recursively", () => {
   });
 
   assert.equal(redacted.token, "[REDACTED]");
+  assert.equal(redacted.cloud.authToken, "[REDACTED]");
+  assert.equal(redacted.cloud.accessKeyId, "[REDACTED]");
+  assert.equal(redacted.cloud.secretAccessKey, "[REDACTED]");
+  assert.equal(redacted.cloud.securityToken, "[REDACTED]");
   assert.equal(redacted.metricsSource.ces.authToken, "[REDACTED]");
   assert.equal(redacted.slowSqlSource.taurusApi.authToken, "[REDACTED]");
   assert.equal(redacted.slowSqlSource.das.authToken, "[REDACTED]");
