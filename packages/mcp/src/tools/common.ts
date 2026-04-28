@@ -506,6 +506,12 @@ export function toPublicDiagnosticResult(result: DiagnosticResult) {
       }),
     ),
     recommended_actions: result.recommendedActions,
+    recommended_next_tools: result.recommendedNextTools,
+    next_tool_inputs: result.nextToolInputs?.map((item) => ({
+      tool: item.tool,
+      input: item.input,
+      rationale: item.rationale,
+    })),
     limitations: result.limitations,
   };
 }

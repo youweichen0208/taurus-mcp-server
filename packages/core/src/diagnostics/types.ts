@@ -178,6 +178,8 @@ export interface DiagnosticResult {
   suspiciousEntities?: DiagnosticSuspiciousEntities;
   evidence: DiagnosticEvidenceItem[];
   recommendedActions: string[];
+  recommendedNextTools?: string[];
+  nextToolInputs?: DiagnosticNextToolInput[];
   limitations?: string[];
 }
 

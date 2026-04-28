@@ -338,7 +338,7 @@ export const diagnoseLockContentionTool: ToolDefinition = {
 export const diagnoseReplicationLagTool: ToolDefinition = {
   name: "diagnose_replication_lag",
   description:
-    "Diagnose replication lag and replica replay pressure. This handler is scaffolded and currently returns a structured placeholder result.",
+    "Diagnose replication lag and replica replay pressure using replica status plus CES lag, long-transaction, and write-pressure signals.",
   inputSchema: {
     ...diagnosticBaseInputShape,
     replica_id: diagnosticString("Optional replica identifier to focus on."),

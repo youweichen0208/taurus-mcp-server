@@ -9,7 +9,8 @@
     "check": "npm run check --workspace @huaweicloud/taurusdb-core && npm run check --workspace @huaweicloud/taurusdb-mcp",
     "dev": "npm run dev --workspace @huaweicloud/taurusdb-mcp",
     "start": "npm run start --workspace @huaweicloud/taurusdb-mcp",
-    "test": "npm run build && npm run test --workspace @huaweicloud/taurusdb-core && npm run test --workspace @huaweicloud/taurusdb-mcp"
+    "test": "npm run build && npm run test --workspace @huaweicloud/taurusdb-core && npm run test --workspace @huaweicloud/taurusdb-mcp",
+    "cloud:validate": "node scripts/cloud-taurusdb-validate.mjs"
   },
   "engines": {
     "node": ">=20.0.0"

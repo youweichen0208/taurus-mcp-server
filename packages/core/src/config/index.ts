@@ -139,6 +139,35 @@ function buildRawConfigFromEnv(
           "TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_MAX_RECORDS",
         ),
       },
+      das: {
+        enabled: parseBoolean(
+          env.TAURUSDB_SLOW_SQL_SOURCE_DAS_ENABLED,
+          "TAURUSDB_SLOW_SQL_SOURCE_DAS_ENABLED",
+        ),
+        endpoint: readString(env.TAURUSDB_SLOW_SQL_SOURCE_DAS_ENDPOINT),
+        projectId: readString(env.TAURUSDB_SLOW_SQL_SOURCE_DAS_PROJECT_ID),
+        instanceId: readString(env.TAURUSDB_SLOW_SQL_SOURCE_DAS_INSTANCE_ID),
+        authToken: readString(env.TAURUSDB_SLOW_SQL_SOURCE_DAS_AUTH_TOKEN),
+        datastoreType: readString(
+          env.TAURUSDB_SLOW_SQL_SOURCE_DAS_DATASTORE_TYPE,
+        ),
+        requestTimeoutMs: parseInteger(
+          env.TAURUSDB_SLOW_SQL_SOURCE_DAS_TIMEOUT_MS,
+          "TAURUSDB_SLOW_SQL_SOURCE_DAS_TIMEOUT_MS",
+        ),
+        defaultLookbackMinutes: parseInteger(
+          env.TAURUSDB_SLOW_SQL_SOURCE_DAS_DEFAULT_LOOKBACK_MINUTES,
+          "TAURUSDB_SLOW_SQL_SOURCE_DAS_DEFAULT_LOOKBACK_MINUTES",
+        ),
+        maxRecords: parseInteger(
+          env.TAURUSDB_SLOW_SQL_SOURCE_DAS_MAX_RECORDS,
+          "TAURUSDB_SLOW_SQL_SOURCE_DAS_MAX_RECORDS",
+        ),
+        maxPages: parseInteger(
+          env.TAURUSDB_SLOW_SQL_SOURCE_DAS_MAX_PAGES,
+          "TAURUSDB_SLOW_SQL_SOURCE_DAS_MAX_PAGES",
+        ),
+      },
     },
     metricsSource: {
       ces: {

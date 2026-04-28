@@ -379,6 +379,12 @@ function createDeps(engineOverrides = {}) {
         keyFindings: [input.replicaId ?? "pending"],
         evidence: [{ source: "diagnostics_scaffold", title: "pending", summary: "pending" }],
         recommendedActions: ["implement it"],
+        recommendedNextTools: ["show_processlist"],
+        nextToolInputs: [{
+          tool: "show_processlist",
+          input: { include_idle: false, include_info: true },
+          rationale: "inspect replica-side sessions",
+        }],
         limitations: ["pending"],
       }),
       diagnoseStoragePressure: async (input) => ({
@@ -392,6 +398,12 @@ function createDeps(engineOverrides = {}) {
         suspiciousEntities: input.table ? { tables: [{ table: input.table, reason: "focus" }] } : undefined,
         evidence: [{ source: "diagnostics_scaffold", title: "pending", summary: "pending" }],
         recommendedActions: ["implement it"],
+        recommendedNextTools: ["diagnose_slow_query"],
+        nextToolInputs: [{
+          tool: "diagnose_slow_query",
+          input: { sql: "SELECT * FROM orders ORDER BY created_at DESC" },
+          rationale: "inspect lead digest",
+        }],
         limitations: ["pending"],
       }),
       getQueryStatus: async (queryId) => ({ queryId, status: "completed", durationMs: 10 }),
@@ -840,6 +852,8 @@ test("diagnostic tool handlers return structured diagnostic payloads", async () 
   assert.equal(replicationLag.ok, true);
   assert.equal(replicationLag.data.tool, "diagnose_replication_lag");
   assert.equal(replicationLag.data.status, "not_applicable");
+  assert.equal(replicationLag.data.recommended_next_tools[0], "show_processlist");
+  assert.equal(replicationLag.data.next_tool_inputs[0].input.include_idle, false);
 
   const storagePressure = await diagnoseStoragePressureTool.handler(
     { scope: "table", table: "orders" },
@@ -849,4 +863,9 @@ test("diagnostic tool handlers return structured diagnostic payloads", async () 
   assert.equal(storagePressure.ok, true);
   assert.equal(storagePressure.data.tool, "diagnose_storage_pressure");
   assert.equal(storagePressure.data.key_findings[0], "table");
+  assert.equal(storagePressure.data.recommended_next_tools[0], "diagnose_slow_query");
+  assert.equal(
+    storagePressure.data.next_tool_inputs[0].input.sql,
+    "SELECT * FROM orders ORDER BY created_at DESC",
+  );
 });

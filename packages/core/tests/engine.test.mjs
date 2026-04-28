@@ -403,6 +403,84 @@ test("engine exposes evidence-backed slow/connection/lock diagnosis plus stable 
             durationMs: 6,
           };
         }
+        if (sql.includes("performance_schema.metadata_locks")) {
+          return {
+            queryId: "qry_metadata_locks_1",
+            columns: [
+              { name: "waiting_session_id" },
+              { name: "waiting_user" },
+              { name: "waiting_state" },
+              { name: "blocking_session_id" },
+              { name: "blocking_user" },
+              { name: "blocking_state" },
+              { name: "object_type" },
+              { name: "object_schema" },
+              { name: "object_name" },
+              { name: "waiting_lock_type" },
+              { name: "waiting_lock_duration" },
+              { name: "blocking_lock_type" },
+              { name: "blocking_lock_duration" },
+            ],
+            rows: [
+              [
+                401,
+                "app_user",
+                "Waiting for table metadata lock",
+                201,
+                "app_user",
+                "altering table",
+                "TABLE",
+                "demo",
+                "orders",
+                "SHARED_UPGRADABLE",
+                "TRANSACTION",
+                "EXCLUSIVE",
+                "TRANSACTION",
+              ],
+            ],
+            rowCount: 1,
+            originalRowCount: 1,
+            truncated: false,
+            rowTruncated: false,
+            columnTruncated: false,
+            fieldTruncated: false,
+            redactedColumns: [],
+            droppedColumns: [],
+            truncatedColumns: [],
+            durationMs: 4,
+          };
+        }
+        if (sql === "SHOW ENGINE INNODB STATUS") {
+          return {
+            queryId: "qry_innodb_status_1",
+            columns: [{ name: "Type" }, { name: "Name" }, { name: "Status" }],
+            rows: [[
+              "InnoDB",
+              "",
+              `LATEST DETECTED DEADLOCK
+2026-04-27 12:00:00
+*** (1) TRANSACTION:
+TRANSACTION 12345, ACTIVE 10 sec
+WAITING FOR THIS LOCK TO BE GRANTED:
+RECORD LOCKS space id 1 page no 1 index PRIMARY of table \`demo\`.\`orders\`
+*** (2) TRANSACTION:
+TRANSACTION 67890, ACTIVE 12 sec
+HOLDS THE LOCK(S):
+RECORD LOCKS space id 1 page no 1 index PRIMARY of table \`demo\`.\`orders\`
+*** WE ROLL BACK TRANSACTION (1)`,
+            ]],
+            rowCount: 1,
+            originalRowCount: 1,
+            truncated: false,
+            rowTruncated: false,
+            columnTruncated: false,
+            fieldTruncated: false,
+            redactedColumns: [],
+            droppedColumns: [],
+            truncatedColumns: [],
+            durationMs: 3,
+          };
+        }
         if (sql.includes("information_schema.TABLES")) {
           return {
             queryId: "qry_table_storage_1",
@@ -490,7 +568,7 @@ test("engine exposes evidence-backed slow/connection/lock diagnosis plus stable 
   );
   const dbHotspot = await engine.diagnoseDbHotspot({ scope: "session" }, ctx);
   const lockContention = await engine.diagnoseLockContention(
-    { table: "orders" },
+    { table: "orders", maxCandidates: 10 },
     ctx,
   );
   const connectionSpike = await engine.diagnoseConnectionSpike(
@@ -640,6 +718,20 @@ test("engine exposes evidence-backed slow/connection/lock diagnosis plus stable 
     "demo.orders",
   );
   assert.equal(lockContention.evidence[0].source, "lock_waits");
+  assert.equal(
+    lockContention.evidence.some((item) => item.source === "metadata_locks"),
+    true,
+  );
+  assert.equal(
+    lockContention.evidence.some((item) => item.source === "deadlock_history"),
+    true,
+  );
+  assert.equal(
+    lockContention.rootCauseCandidates.some(
+      (candidate) => candidate.code === "lock_contention_metadata_lock_blocker",
+    ),
+    true,
+  );
 
   assert.equal(connectionSpike.tool, "diagnose_connection_spike");
   assert.equal(connectionSpike.status, "ok");
@@ -654,6 +746,12 @@ test("engine exposes evidence-backed slow/connection/lock diagnosis plus stable 
     replicationLag.rootCauseCandidates[0].code,
     "replication_lag_no_evidence",
   );
+  assert.equal(
+    replicationLag.recommendedNextTools.includes("show_processlist"),
+    true,
+  );
+  assert.equal(replicationLag.nextToolInputs[0].tool, "show_processlist");
+  assert.equal(replicationLag.nextToolInputs[0].input.include_idle, false);
 
   assert.equal(storagePressure.tool, "diagnose_storage_pressure");
   assert.equal(storagePressure.status, "ok");
@@ -670,6 +768,27 @@ test("engine exposes evidence-backed slow/connection/lock diagnosis plus stable 
   assert.equal(
     storagePressure.suspiciousEntities.tables[0].table,
     "demo.orders",
+  );
+  assert.equal(
+    storagePressure.recommendedNextTools.includes("diagnose_slow_query"),
+    true,
+  );
+  assert.equal(
+    storagePressure.nextToolInputs.some(
+      (item) =>
+        item.tool === "diagnose_slow_query" &&
+        item.input.sql ===
+          "SELECT * FROM orders ORDER BY created_at DESC",
+    ),
+    true,
+  );
+  assert.equal(
+    storagePressure.nextToolInputs.some(
+      (item) =>
+        item.tool === "diagnose_db_hotspot" &&
+        item.input.scope === "table",
+    ),
+    true,
   );
 });
 
@@ -1421,6 +1540,75 @@ test("engine can resolve slow-query SQL from an external Taurus slow-log source"
   );
 });
 
+test("engine merges external Taurus slow-SQL ranking into top slow SQL discovery", async () => {
+  const ctx = makeContext();
+  const engine = new TaurusDBEngine({
+    config: makeConfig(),
+    profileLoader: {
+      async load() {
+        return new Map();
+      },
+      async getDefault() {
+        return undefined;
+      },
+      async get() {
+        return undefined;
+      },
+    },
+    secretResolver: {},
+    datasourceResolver: {},
+    connectionPool: { async close() {} },
+    schemaIntrospector: {},
+    guardrail: {},
+    executor: {
+      async executeReadonly() {
+        throw new Error("digest unavailable");
+      },
+      async explain() {
+        throw new Error("not used");
+      },
+    },
+    confirmationStore: {},
+    capabilityProbe: makeCapabilityProbe(),
+    slowSqlSource: {
+      async resolve() {
+        return undefined;
+      },
+      async findTop() {
+        return [
+          {
+            source: "taurus_api_slow_logs",
+            sql: "SELECT * FROM orders WHERE status = 'pending' ORDER BY created_at DESC",
+            sqlHash: "sql_hash_top_1",
+            digestText: "SELECT * FROM orders WHERE status = ? ORDER BY created_at DESC",
+            avgLatencyMs: 180,
+            avgLockTimeMs: 22,
+            avgRowsExamined: 30000,
+            execCount: 8,
+            rawRef: "taurus_api:/v3/project/instances/instance/slow-logs/statistics",
+          },
+        ];
+      },
+    },
+  });
+
+  const result = await engine.findTopSlowSql(
+    { topN: 5, sortBy: "total_latency" },
+    ctx,
+  );
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.topSqls[0].sqlHash, "sql_hash_top_1");
+  assert.equal(
+    result.topSqls[0].evidenceSources.includes("taurus_api_slow_logs"),
+    true,
+  );
+  assert.equal(
+    result.evidence.some((item) => item.source === "taurus_api_slow_logs"),
+    true,
+  );
+});
+
 test("engine merges CES metrics into TaurusDB diagnostics", async () => {
   const ctx = makeContext();
   const metricCalls = [];
@@ -1564,6 +1752,18 @@ test("engine merges CES metrics into TaurusDB diagnostics", async () => {
     replicationLag.evidence.some((item) => item.source === "ces_metrics"),
     true,
   );
+  assert.equal(
+    replicationLag.recommendedNextTools.includes("diagnose_db_hotspot"),
+    true,
+  );
+  assert.equal(
+    replicationLag.nextToolInputs.some(
+      (item) =>
+        item.tool === "diagnose_db_hotspot" &&
+        item.input.scope === "session",
+    ),
+    true,
+  );
 
   assert.equal(
     connectionSpike.rootCauseCandidates.some(
@@ -1585,6 +1785,16 @@ test("engine merges CES metrics into TaurusDB diagnostics", async () => {
   );
   assert.equal(
     storagePressure.evidence.some((item) => item.source === "ces_metrics"),
+    true,
+  );
+  assert.equal(
+    storagePressure.recommendedNextTools.includes("find_top_slow_sql"),
+    true,
+  );
+  assert.equal(
+    storagePressure.nextToolInputs.some(
+      (item) => item.tool === "find_top_slow_sql",
+    ),
     true,
   );
 

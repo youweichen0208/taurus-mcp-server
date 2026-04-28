@@ -23,6 +23,12 @@ test("config uses documented defaults when env is empty", () => {
   assert.equal(config.slowSqlSource.taurusApi.requestTimeoutMs, 5000);
   assert.equal(config.slowSqlSource.taurusApi.defaultLookbackMinutes, 60);
   assert.equal(config.slowSqlSource.taurusApi.maxRecords, 20);
+  assert.equal(config.slowSqlSource.das.enabled, false);
+  assert.equal(config.slowSqlSource.das.datastoreType, "TaurusDB");
+  assert.equal(config.slowSqlSource.das.requestTimeoutMs, 5000);
+  assert.equal(config.slowSqlSource.das.defaultLookbackMinutes, 60);
+  assert.equal(config.slowSqlSource.das.maxRecords, 50);
+  assert.equal(config.slowSqlSource.das.maxPages, 2);
   assert.equal(config.metricsSource.ces.enabled, false);
   assert.equal(config.metricsSource.ces.namespace, "SYS.GAUSSDB");
   assert.equal(
@@ -58,6 +64,17 @@ test("config maps env vars into typed fields", () => {
     TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_TIMEOUT_MS: "9000",
     TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_DEFAULT_LOOKBACK_MINUTES: "180",
     TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_MAX_RECORDS: "40",
+    TAURUSDB_SLOW_SQL_SOURCE_DAS_ENABLED: "true",
+    TAURUSDB_SLOW_SQL_SOURCE_DAS_ENDPOINT:
+      "https://das.cn-north-4.myhuaweicloud.com",
+    TAURUSDB_SLOW_SQL_SOURCE_DAS_PROJECT_ID: "project-2",
+    TAURUSDB_SLOW_SQL_SOURCE_DAS_INSTANCE_ID: "instance-2",
+    TAURUSDB_SLOW_SQL_SOURCE_DAS_AUTH_TOKEN: "token-3",
+    TAURUSDB_SLOW_SQL_SOURCE_DAS_DATASTORE_TYPE: "TaurusDB",
+    TAURUSDB_SLOW_SQL_SOURCE_DAS_TIMEOUT_MS: "7000",
+    TAURUSDB_SLOW_SQL_SOURCE_DAS_DEFAULT_LOOKBACK_MINUTES: "240",
+    TAURUSDB_SLOW_SQL_SOURCE_DAS_MAX_RECORDS: "80",
+    TAURUSDB_SLOW_SQL_SOURCE_DAS_MAX_PAGES: "3",
     TAURUSDB_METRICS_SOURCE_CES_ENABLED: "true",
     TAURUSDB_METRICS_SOURCE_CES_ENDPOINT:
       "https://ces.cn-north-4.myhuaweicloud.com",
@@ -96,6 +113,19 @@ test("config maps env vars into typed fields", () => {
   assert.equal(config.slowSqlSource.taurusApi.requestTimeoutMs, 9000);
   assert.equal(config.slowSqlSource.taurusApi.defaultLookbackMinutes, 180);
   assert.equal(config.slowSqlSource.taurusApi.maxRecords, 40);
+  assert.equal(config.slowSqlSource.das.enabled, true);
+  assert.equal(
+    config.slowSqlSource.das.endpoint,
+    "https://das.cn-north-4.myhuaweicloud.com",
+  );
+  assert.equal(config.slowSqlSource.das.projectId, "project-2");
+  assert.equal(config.slowSqlSource.das.instanceId, "instance-2");
+  assert.equal(config.slowSqlSource.das.authToken, "token-3");
+  assert.equal(config.slowSqlSource.das.datastoreType, "TaurusDB");
+  assert.equal(config.slowSqlSource.das.requestTimeoutMs, 7000);
+  assert.equal(config.slowSqlSource.das.defaultLookbackMinutes, 240);
+  assert.equal(config.slowSqlSource.das.maxRecords, 80);
+  assert.equal(config.slowSqlSource.das.maxPages, 3);
   assert.equal(config.metricsSource.ces.enabled, true);
   assert.equal(
     config.metricsSource.ces.endpoint,
@@ -153,6 +183,18 @@ test("redactConfigForLog redacts sensitive keys recursively", () => {
         defaultLookbackMinutes: 60,
         maxRecords: 20,
       },
+      das: {
+        enabled: true,
+        endpoint: "https://das.example.com",
+        projectId: "project",
+        instanceId: "instance",
+        authToken: "token_789",
+        datastoreType: "TaurusDB",
+        requestTimeoutMs: 5000,
+        defaultLookbackMinutes: 60,
+        maxRecords: 50,
+        maxPages: 2,
+      },
     },
     metricsSource: {
       ces: {
@@ -177,6 +219,7 @@ test("redactConfigForLog redacts sensitive keys recursively", () => {
   assert.equal(redacted.token, "[REDACTED]");
   assert.equal(redacted.metricsSource.ces.authToken, "[REDACTED]");
   assert.equal(redacted.slowSqlSource.taurusApi.authToken, "[REDACTED]");
+  assert.equal(redacted.slowSqlSource.das.authToken, "[REDACTED]");
   assert.equal(redacted.nested.password, "[REDACTED]");
   assert.equal(redacted.nested.api_key, "[REDACTED]");
   assert.equal(redacted.nested.keep, "x");

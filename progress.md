@@ -181,17 +181,32 @@
 - `diagnose_slow_query` 已接入 explain-based 诊断，并支持通过 `digest_text` 从 `performance_schema` 解析 sample SQL
 - `diagnose_slow_query` 已补充 digest 级运行时指标，包括 `avg_lock_time_ms`、临时表落盘与 no-index/scan 摘要
 - `diagnose_slow_query` 已接入 TaurusDB slow-log external source 第一版，可通过外部 API 解析 sample SQL 与基础运行时摘要
+- `diagnose_slow_query` 已补 DAS slow-query/full-SQL fallback 第一版，可在云侧更长保留期源上继续解析 sample SQL
 - `diagnose_slow_query` 在直接传入 SQL 文本时，已可自动匹配 `performance_schema` digest sample，并吸收 wait-event / lock-time / rows-examined 运行时证据
 - `diagnose_connection_spike` 已接入 live `processlist` 采集与最小启发式根因分析
 - `diagnose_lock_contention` 已接入 `performance_schema.data_lock_waits` + `INNODB_TRX` 的 InnoDB 锁等待诊断
+- `diagnose_lock_contention` 已补 metadata lock 与 latest deadlock collector 第一版：
+  - 基于 `performance_schema.metadata_locks` 识别 MDL blocker / hot object
+  - 基于 `SHOW ENGINE INNODB STATUS` 解析 latest deadlock 摘要
 - `diagnose_service_latency` 已接入 symptom-entry 路由，能够聚合 slow SQL、锁等待、连接堆积证据并给出 next-tool 建议
 - `diagnose_db_hotspot` 已接入热点对象聚合，能够按 `scope=sql|table|session` 汇总 SQL、锁等待、processlist 热点
 - `find_top_slow_sql` 已接入 `performance_schema.events_statements_summary_by_digest` 的 digest ranking 第一版
+- `find_top_slow_sql` 已补 Taurus external slow SQL ranking merge 第一版：
+  - 当配置 Taurus slow-log external source 时，可直接吸收外部 Top SQL 候选
+  - 会与本地 digest ranking 去重合并，而不是只依赖 `performance_schema`
+- `find_top_slow_sql` 已补 DAS Top SQL merge 第一版：
+  - 当配置 DAS source 时，可吸收 `top-slow-log` 候选
+  - 可与 digest ranking、Taurus slow-log external ranking 做去重合并
 - `diagnose_service_latency` / `diagnose_db_hotspot` 已补充 `next_tool_inputs`，SQL、锁等待、连接堆积候选可直接产出可复用的下钻入参模板：
   - `diagnose_slow_query`
   - `diagnose_lock_contention`
   - `diagnose_connection_spike`
   - `show_processlist`
+- `diagnose_replication_lag` / `diagnose_storage_pressure` 已补充跨工具下钻建议，诊断结果可直接产出可复用的 `recommended_next_tools` / `next_tool_inputs`：
+  - `show_processlist`
+  - `diagnose_db_hotspot`
+  - `find_top_slow_sql`
+  - `diagnose_slow_query`
 - `diagnose_slow_query` 已增强“直接传 SQL”时的 SQL -> digest 匹配：
   - 保留 `QUERY_SAMPLE_TEXT` 精确 hash 命中
   - 增加基于 digest shape 的字面量归一化匹配
@@ -221,11 +236,12 @@
 
 当前刻意未做：
 
-- 未实现 DAS / Top SQL 等后续 collector
-- `diagnose_lock_contention` 仍未接入 MDL / deadlock history
+- 仍未实现 DAS / 全量 SQL 等更高保留期 collector
+- 仍未实现更完整的 DAS / 全量 SQL 多源复杂 merge ranking 与更深云侧 runtime correlation
+- `diagnose_lock_contention` 当前只接 latest deadlock section，尚未接更长 deadlock history archive
 - `diagnose_storage_pressure` 仍未接入 OS 级磁盘、IOPS、吞吐指标，只接了 CES 时间序列第一版
 - `diagnose_slow_query` 已接入基于 `events_statements_history_long` + `events_waits_history_long` 的 digest/history 级 wait-event 关联
-- `diagnose_slow_query` 仍未接入 DAS / Top SQL / 全量 SQL 等更高保留期的外部慢 SQL 源，也未接入更强的云侧运行时关联
+- `diagnose_slow_query` / `find_top_slow_sql` 已接 Taurus slow-log external source 与 DAS 第一版，但仍未接更完整的全量 SQL 历史回溯与更强的云侧运行时关联
 
 `diagnose_slow_query` 后续可继续增强：
 

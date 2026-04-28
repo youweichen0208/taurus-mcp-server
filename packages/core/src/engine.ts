@@ -207,6 +207,30 @@ type LockWaitRow = {
   blockingQuery?: string;
 };
 
+type MetadataLockRow = {
+  waitingSessionId?: string;
+  waitingUser?: string;
+  waitingState?: string;
+  blockingSessionId?: string;
+  blockingUser?: string;
+  blockingState?: string;
+  objectType?: string;
+  objectSchema?: string;
+  objectName?: string;
+  waitingLockType?: string;
+  waitingLockDuration?: string;
+  blockingLockType?: string;
+  blockingLockDuration?: string;
+};
+
+type DeadlockSummary = {
+  detectedAt?: string;
+  summary: string;
+  waitingTables: string[];
+  blockingTables: string[];
+  transactionIds: string[];
+};
+
 type StatementDigestRow = {
   schemaName?: string;
   digest?: string;
@@ -417,6 +441,122 @@ function parseOptionalNumber(value: unknown): number | undefined {
     : typeof value === "string" && value.trim().length > 0
       ? Number.parseFloat(value)
       : undefined;
+}
+
+function parseMetadataLockRows(result: QueryResult): MetadataLockRow[] {
+  const columns = result.columns.map((column) => column.name);
+  return result.rows.map((row) => {
+    const mapped = Object.fromEntries(
+      columns.map((name, index) => [name, row[index]]),
+    );
+
+    return {
+      waitingSessionId:
+        mapped.waiting_session_id === undefined
+          ? undefined
+          : String(mapped.waiting_session_id),
+      waitingUser:
+        typeof mapped.waiting_user === "string"
+          ? mapped.waiting_user
+          : undefined,
+      waitingState:
+        typeof mapped.waiting_state === "string"
+          ? mapped.waiting_state
+          : undefined,
+      blockingSessionId:
+        mapped.blocking_session_id === undefined
+          ? undefined
+          : String(mapped.blocking_session_id),
+      blockingUser:
+        typeof mapped.blocking_user === "string"
+          ? mapped.blocking_user
+          : undefined,
+      blockingState:
+        typeof mapped.blocking_state === "string"
+          ? mapped.blocking_state
+          : undefined,
+      objectType:
+        typeof mapped.object_type === "string" ? mapped.object_type : undefined,
+      objectSchema:
+        typeof mapped.object_schema === "string"
+          ? mapped.object_schema
+          : undefined,
+      objectName:
+        typeof mapped.object_name === "string" ? mapped.object_name : undefined,
+      waitingLockType:
+        typeof mapped.waiting_lock_type === "string"
+          ? mapped.waiting_lock_type
+          : undefined,
+      waitingLockDuration:
+        typeof mapped.waiting_lock_duration === "string"
+          ? mapped.waiting_lock_duration
+          : undefined,
+      blockingLockType:
+        typeof mapped.blocking_lock_type === "string"
+          ? mapped.blocking_lock_type
+          : undefined,
+      blockingLockDuration:
+        typeof mapped.blocking_lock_duration === "string"
+          ? mapped.blocking_lock_duration
+          : undefined,
+    };
+  });
+}
+
+function parseDeadlockSummary(result: QueryResult): DeadlockSummary | undefined {
+  const statusColumnIndex = result.columns.findIndex(
+    (column) => column.name.toLowerCase() === "status",
+  );
+  if (statusColumnIndex < 0 || result.rows.length === 0) {
+    return undefined;
+  }
+  const statusValue = result.rows[0]?.[statusColumnIndex];
+  if (typeof statusValue !== "string" || !statusValue.includes("DEADLOCK")) {
+    return undefined;
+  }
+
+  const startIndex = statusValue.indexOf("LATEST DETECTED DEADLOCK");
+  if (startIndex < 0) {
+    return undefined;
+  }
+  const deadlockText = statusValue.slice(startIndex);
+  const lines = deadlockText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !/^[-*]{3,}$/.test(line));
+
+  const detectedAt = lines.find((line) => /^\d{4}-\d{2}-\d{2}/.test(line));
+  const transactionIds = Array.from(
+    new Set(
+      [...deadlockText.matchAll(/TRANSACTION\s+(\d+)/g)].map(
+        (match) => match[1],
+      ),
+    ),
+  );
+  const tableRefs = Array.from(
+    new Set(
+      [...deadlockText.matchAll(/table\s+`([^`]+)`\.`([^`]+)`/gi)].map(
+        (match) => `${match[1]}.${match[2]}`,
+      ),
+    ),
+  );
+  const summaryLines = lines
+    .filter(
+      (line) =>
+        !line.startsWith("LATEST DETECTED DEADLOCK") &&
+        !/^\d{4}-\d{2}-\d{2}/.test(line),
+    )
+    .slice(0, 3);
+
+  return {
+    detectedAt,
+    summary:
+      summaryLines.join(" ").slice(0, 400) ||
+      "InnoDB reported a recent deadlock in SHOW ENGINE INNODB STATUS.",
+    waitingTables: tableRefs,
+    blockingTables: tableRefs,
+    transactionIds,
+  };
 }
 
 function parseStatementDigestRows(result: QueryResult): StatementDigestRow[] {
@@ -949,6 +1089,46 @@ function buildBaseNextToolInput(
     nextInput.max_candidates = input.maxCandidates;
   }
   return nextInput;
+}
+
+function buildDbHotspotNextToolInput(
+  source: {
+    scope?: "sql" | "table" | "session";
+  },
+  input: DiagnosticBaseInput,
+  rationale: string,
+): DiagnosticNextToolInput {
+  const nextInput = buildBaseNextToolInput(input);
+  if (source.scope) {
+    nextInput.scope = source.scope;
+  }
+  return {
+    tool: "diagnose_db_hotspot",
+    input: nextInput,
+    rationale,
+  };
+}
+
+function buildFindTopSlowSqlNextToolInput(
+  source: {
+    sortBy?: "avg_latency" | "total_latency" | "exec_count" | "lock_time";
+    topN?: number;
+  },
+  input: DiagnosticBaseInput,
+  rationale: string,
+): DiagnosticNextToolInput {
+  const nextInput = buildBaseNextToolInput(input);
+  if (source.sortBy) {
+    nextInput.sort_by = source.sortBy;
+  }
+  if (source.topN !== undefined) {
+    nextInput.top_n = source.topN;
+  }
+  return {
+    tool: "find_top_slow_sql",
+    input: nextInput,
+    rationale,
+  };
 }
 
 function buildLockContentionNextToolInput(
@@ -1486,6 +1666,104 @@ export class TaurusDBEngine {
       maxFieldChars: includeSql ? sqlMaxChars : 256,
       timeoutMs: ctx.limits.timeoutMs,
     });
+  }
+
+  async findMetadataLockWaits(
+    input: DiagnoseLockContentionInput,
+    ctx: SessionContext,
+  ): Promise<MetadataLockRow[]> {
+    const maxRows = lockEvidenceRowLimit(input.evidenceLevel);
+    const whereClauses = [
+      "waiting.LOCK_STATUS = 'PENDING'",
+      "blocking.LOCK_STATUS = 'GRANTED'",
+      "waiting.OWNER_THREAD_ID <> blocking.OWNER_THREAD_ID",
+    ];
+    const focusedTable = input.table?.includes(".")
+      ? {
+          schema: input.table.split(".")[0],
+          table: input.table.split(".").slice(1).join("."),
+        }
+      : {
+          schema: ctx.database,
+          table: input.table,
+        };
+
+    if (focusedTable.schema) {
+      whereClauses.push(
+        `waiting.OBJECT_SCHEMA = ${quoteLiteral(focusedTable.schema)}`,
+      );
+    }
+    if (focusedTable.table) {
+      whereClauses.push(
+        `waiting.OBJECT_NAME = ${quoteLiteral(focusedTable.table)}`,
+      );
+    }
+    if (input.blockerSessionId) {
+      whereClauses.push(
+        `blocking_threads.PROCESSLIST_ID = ${quoteLiteral(input.blockerSessionId)}`,
+      );
+    }
+
+    const sql = `
+      SELECT
+        waiting_threads.PROCESSLIST_ID AS waiting_session_id,
+        waiting_threads.PROCESSLIST_USER AS waiting_user,
+        waiting_threads.PROCESSLIST_STATE AS waiting_state,
+        blocking_threads.PROCESSLIST_ID AS blocking_session_id,
+        blocking_threads.PROCESSLIST_USER AS blocking_user,
+        blocking_threads.PROCESSLIST_STATE AS blocking_state,
+        waiting.OBJECT_TYPE AS object_type,
+        waiting.OBJECT_SCHEMA AS object_schema,
+        waiting.OBJECT_NAME AS object_name,
+        waiting.LOCK_TYPE AS waiting_lock_type,
+        waiting.LOCK_DURATION AS waiting_lock_duration,
+        blocking.LOCK_TYPE AS blocking_lock_type,
+        blocking.LOCK_DURATION AS blocking_lock_duration
+      FROM performance_schema.metadata_locks AS waiting
+      INNER JOIN performance_schema.threads AS waiting_threads
+        ON waiting_threads.THREAD_ID = waiting.OWNER_THREAD_ID
+      INNER JOIN performance_schema.metadata_locks AS blocking
+        ON blocking.OBJECT_TYPE = waiting.OBJECT_TYPE
+        AND COALESCE(blocking.OBJECT_SCHEMA, '') = COALESCE(waiting.OBJECT_SCHEMA, '')
+        AND COALESCE(blocking.OBJECT_NAME, '') = COALESCE(waiting.OBJECT_NAME, '')
+      INNER JOIN performance_schema.threads AS blocking_threads
+        ON blocking_threads.THREAD_ID = blocking.OWNER_THREAD_ID
+      WHERE ${whereClauses.join(" AND ")}
+      ORDER BY waiting.OBJECT_SCHEMA ASC, waiting.OBJECT_NAME ASC, blocking_threads.PROCESSLIST_ID ASC
+      LIMIT ${maxRows}
+    `.trim();
+
+    try {
+      const result = await this.executor.executeReadonly(sql, ctx, {
+        maxRows,
+        maxColumns: 13,
+        maxFieldChars: 512,
+        timeoutMs: ctx.limits.timeoutMs,
+      });
+      return parseMetadataLockRows(result);
+    } catch {
+      return [];
+    }
+  }
+
+  async findLatestDeadlock(
+    ctx: SessionContext,
+  ): Promise<DeadlockSummary | undefined> {
+    try {
+      const result = await this.executor.executeReadonly(
+        "SHOW ENGINE INNODB STATUS",
+        ctx,
+        {
+          maxRows: 1,
+          maxColumns: 3,
+          maxFieldChars: 32768,
+          timeoutMs: ctx.limits.timeoutMs,
+        },
+      );
+      return parseDeadlockSummary(result);
+    } catch {
+      return undefined;
+    }
   }
 
   async findStatementDigestSample(
@@ -2924,9 +3202,16 @@ export class TaurusDBEngine {
     ctx: SessionContext,
   ): Promise<FindTopSlowSqlResult> {
     try {
-      const digestRows = await this.findTopStatementDigests(input, ctx);
+      const [digestRows, externalTopSqls] = await Promise.all([
+        this.findTopStatementDigests(input, ctx).catch(
+          () => [] as StatementDigestRow[],
+        ),
+        this.slowSqlSource?.findTop
+          ? this.slowSqlSource.findTop(input, ctx).catch(() => [])
+          : Promise.resolve([] as ExternalSlowSqlSample[]),
+      ]);
 
-      if (digestRows.length === 0) {
+      if (digestRows.length === 0 && externalTopSqls.length === 0) {
         return {
           tool: "find_top_slow_sql",
           status: "inconclusive",
@@ -2945,17 +3230,19 @@ export class TaurusDBEngine {
               source: "statement_digest",
               title: "Statement digest ranking",
               summary:
-                "No matching rows were returned from performance_schema.events_statements_summary_by_digest.",
+                "No matching rows were returned from performance_schema.events_statements_summary_by_digest, and no external Taurus slow-SQL ranking was available.",
             },
           ],
           limitations: [
-            "This discovery currently depends on performance_schema digest summaries being enabled and populated.",
+            this.slowSqlSource?.findTop
+              ? "Neither performance_schema digest ranking nor the configured external Taurus slow-SQL ranking returned usable rows."
+              : "This discovery currently depends on performance_schema digest summaries being enabled and populated.",
             "The selected time_range is not yet enforced against cumulative digest counters; current ranking reflects retained digest summaries.",
           ],
         };
       }
 
-      const topSqls = digestRows.map((row) => {
+      const digestTopSqls = digestRows.map((row) => {
         const evidenceSources = ["statement_digest"];
         const recommendationParts = [];
         if (row.querySampleText || row.digestText) {
@@ -2992,6 +3279,103 @@ export class TaurusDBEngine {
               : "Review this digest with diagnose_slow_query if it aligns with the reported symptom window.",
         };
       });
+      const externalMappedSqls = externalTopSqls.map((sample) => {
+        const recommendationParts = [
+          "Run diagnose_slow_query with sql or digest_text to analyze the dominant bottleneck.",
+        ];
+        if ((sample.avgLockTimeMs ?? 0) >= 10) {
+          recommendationParts.push(
+            "Correlate with diagnose_lock_contention if lock time remains elevated.",
+          );
+        }
+        if ((sample.execCount ?? 0) >= 20 && (sample.avgLatencyMs ?? 0) < 50) {
+          recommendationParts.push(
+            "Review high-frequency workload shape before focusing only on single-query latency.",
+          );
+        }
+        return {
+          sqlHash: sample.sqlHash,
+          digestText: sample.digestText,
+          sampleSql: sample.sql,
+          avgLatencyMs: sample.avgLatencyMs,
+          totalLatencyMs:
+            sample.avgLatencyMs !== undefined
+              ? sample.avgLatencyMs * Math.max(sample.execCount ?? 1, 1)
+              : undefined,
+          execCount: sample.execCount,
+          avgLockTimeMs: sample.avgLockTimeMs,
+          avgRowsExamined: sample.avgRowsExamined,
+          evidenceSources: [sample.source],
+          recommendation: recommendationParts.join(" "),
+        };
+      });
+      const mergedTopSqls = [...digestTopSqls];
+      for (const externalSql of externalMappedSqls) {
+        const existingIndex = mergedTopSqls.findIndex(
+          (item) =>
+            (externalSql.sqlHash && item.sqlHash === externalSql.sqlHash) ||
+            (externalSql.digestText &&
+              item.digestText === externalSql.digestText) ||
+            (externalSql.sampleSql && item.sampleSql === externalSql.sampleSql),
+        );
+        if (existingIndex >= 0) {
+          const existing = mergedTopSqls[existingIndex];
+          mergedTopSqls[existingIndex] = {
+            ...existing,
+            sampleSql: existing.sampleSql ?? externalSql.sampleSql,
+            avgLatencyMs: existing.avgLatencyMs ?? externalSql.avgLatencyMs,
+            totalLatencyMs:
+              existing.totalLatencyMs ?? externalSql.totalLatencyMs,
+            execCount: existing.execCount ?? externalSql.execCount,
+            avgLockTimeMs:
+              existing.avgLockTimeMs ?? externalSql.avgLockTimeMs,
+            avgRowsExamined:
+              existing.avgRowsExamined ?? externalSql.avgRowsExamined,
+            evidenceSources: [
+              ...new Set([
+                ...existing.evidenceSources,
+                ...externalSql.evidenceSources,
+              ]),
+            ],
+          };
+        } else {
+          mergedTopSqls.push(externalSql);
+        }
+      }
+      const topSqls = mergedTopSqls
+        .sort((left, right) => {
+          const leftAvgLatency = left.avgLatencyMs ?? 0;
+          const rightAvgLatency = right.avgLatencyMs ?? 0;
+          const leftTotalLatency = left.totalLatencyMs ?? 0;
+          const rightTotalLatency = right.totalLatencyMs ?? 0;
+          const leftExecCount = left.execCount ?? 0;
+          const rightExecCount = right.execCount ?? 0;
+          const leftLockTime = left.avgLockTimeMs ?? 0;
+          const rightLockTime = right.avgLockTimeMs ?? 0;
+          switch (input.sortBy) {
+            case "avg_latency":
+              return (
+                rightAvgLatency - leftAvgLatency ||
+                rightTotalLatency - leftTotalLatency
+              );
+            case "exec_count":
+              return (
+                rightExecCount - leftExecCount ||
+                rightTotalLatency - leftTotalLatency
+              );
+            case "lock_time":
+              return (
+                rightLockTime - leftLockTime ||
+                rightTotalLatency - leftTotalLatency
+              );
+            default:
+              return (
+                rightTotalLatency - leftTotalLatency ||
+                rightAvgLatency - leftAvgLatency
+              );
+          }
+        })
+        .slice(0, clampInteger(input.topN, 5, 1, 20));
 
       return {
         tool: "find_top_slow_sql",
@@ -3007,15 +3391,37 @@ export class TaurusDBEngine {
         },
         topSqls,
         evidence: [
-          {
-            source: "statement_digest",
-            title: "Statement digest ranking",
-            summary: `Collected ${topSqls.length} ranked rows from performance_schema.events_statements_summary_by_digest ordered by ${input.sortBy ?? "total_latency"}.`,
-          },
+          ...(digestRows.length > 0
+            ? [
+                {
+                  source: "statement_digest",
+                  title: "Statement digest ranking",
+                  summary: `Collected ${digestRows.length} ranked rows from performance_schema.events_statements_summary_by_digest ordered by ${input.sortBy ?? "total_latency"}.`,
+                },
+              ]
+            : []),
+          ...(externalTopSqls.length > 0
+            ? [
+                {
+                  source: externalTopSqls[0].source,
+                  title: "External Taurus slow SQL ranking",
+                  summary: `Collected ${externalTopSqls.length} ranked rows from the configured Taurus slow-SQL source ordered by ${input.sortBy ?? "total_latency"}.`,
+                  rawRef: externalTopSqls[0].rawRef,
+                },
+              ]
+            : []),
         ],
         limitations: [
-          "The selected time_range is not yet enforced against cumulative digest counters; current ranking reflects retained digest summaries.",
-          "This discovery currently ranks digest summaries only and does not yet merge DAS, Top SQL, or external Taurus slow-log rankings.",
+          ...(digestRows.length > 0
+            ? [
+                "The selected time_range is not yet enforced against cumulative digest counters; current ranking reflects retained digest summaries.",
+              ]
+            : []),
+          ...(externalTopSqls.length > 0
+            ? [
+                "External Taurus slow-SQL ranking depends on the configured API retention window and may not cover every statement in the requested time range.",
+              ]
+            : []),
         ],
       };
     } catch (error) {
@@ -3433,18 +3839,37 @@ export class TaurusDBEngine {
     input: DiagnoseLockContentionInput,
     ctx: SessionContext,
   ): Promise<DiagnosticResult> {
-    const lockWaits = await this.showLockWaits(
-      {
-        table: input.table,
-        blockerSessionId: input.blockerSessionId,
-        includeSql: false,
-        maxRows: lockEvidenceRowLimit(input.evidenceLevel),
-      },
-      ctx,
-    );
+    const [lockWaits, metadataLockRows, latestDeadlock] = await Promise.all([
+      this.showLockWaits(
+        {
+          table: input.table,
+          blockerSessionId: input.blockerSessionId,
+          includeSql: false,
+          maxRows: lockEvidenceRowLimit(input.evidenceLevel),
+        },
+        ctx,
+      ),
+      this.findMetadataLockWaits(input, ctx),
+      this.findLatestDeadlock(ctx),
+    ]);
     const rows = parseLockWaitRows(lockWaits);
+    const metadataTables = countBy(metadataLockRows, (row) =>
+      row.objectSchema && row.objectName
+        ? `${row.objectSchema}.${row.objectName}`
+        : row.objectName,
+    );
+    const metadataBlockers = countBy(
+      metadataLockRows,
+      (row) => row.blockingSessionId,
+    );
+    const topMetadataTable = metadataTables[0];
+    const topMetadataBlocker = metadataBlockers[0];
 
-    if (rows.length === 0) {
+    if (
+      rows.length === 0 &&
+      metadataLockRows.length === 0 &&
+      latestDeadlock === undefined
+    ) {
       return {
         tool: "diagnose_lock_contention",
         status: "inconclusive",
@@ -3512,7 +3937,7 @@ export class TaurusDBEngine {
         ],
         limitations: [
           "This diagnostic currently uses a point-in-time InnoDB lock-wait snapshot only.",
-          "Metadata locks and deadlock history are not connected yet.",
+          "No metadata-lock or deadlock-history evidence was available for this run.",
         ],
       };
     }
@@ -3565,6 +3990,32 @@ export class TaurusDBEngine {
         rationale: `${topTable.key} appears in ${topTable.count} current lock waits.`,
       });
     }
+    if (topMetadataBlocker && topMetadataBlocker.count >= 1) {
+      rootCauseCandidates.push({
+        code: "lock_contention_metadata_lock_blocker",
+        title: "Metadata lock waits point to a blocker session",
+        confidence: topMetadataBlocker.count >= 2 ? "high" : "medium",
+        rationale: `Blocking session ${topMetadataBlocker.key} appears in ${topMetadataBlocker.count} current metadata-lock waits.`,
+      });
+    }
+    if (topMetadataTable) {
+      rootCauseCandidates.push({
+        code: "lock_contention_metadata_lock_hot_object",
+        title: "Metadata lock contention is concentrated on one object",
+        confidence: topMetadataTable.count >= 2 ? "medium" : "low",
+        rationale: `${topMetadataTable.key} appears in ${topMetadataTable.count} current metadata-lock waits.`,
+      });
+    }
+    if (latestDeadlock) {
+      rootCauseCandidates.push({
+        code: "lock_contention_recent_deadlock_detected",
+        title: "A recent deadlock was detected by InnoDB",
+        confidence: "medium",
+        rationale: latestDeadlock.detectedAt
+          ? `SHOW ENGINE INNODB STATUS reports a latest detected deadlock at ${latestDeadlock.detectedAt}.`
+          : "SHOW ENGINE INNODB STATUS reports a recent deadlock in the latest deadlock section.",
+      });
+    }
     if (rootCauseCandidates.length === 0) {
       rootCauseCandidates.push({
         code: "lock_contention_snapshot_collected",
@@ -3607,9 +4058,43 @@ export class TaurusDBEngine {
       table: entry.key,
       reason: `Observed in ${entry.count} current lock waits.`,
     }));
+    for (const row of metadataLockRows.slice(0, 2)) {
+      if (
+        row.blockingSessionId &&
+        !suspiciousSessions.some(
+          (item) => item.sessionId === row.blockingSessionId,
+        )
+      ) {
+        suspiciousSessions.push({
+          sessionId: row.blockingSessionId,
+          user: row.blockingUser,
+          state: row.blockingState,
+          reason: `Observed as a metadata-lock blocker${row.objectSchema || row.objectName ? ` on ${(row.objectSchema ? `${row.objectSchema}.` : "") + (row.objectName ?? "unknown")}` : ""}.`,
+        });
+      }
+    }
+    for (const entry of metadataTables.slice(0, 2)) {
+      if (!suspiciousTables.some((item) => item.table === entry.key)) {
+        suspiciousTables.push({
+          table: entry.key,
+          reason: `Observed in ${entry.count} current metadata-lock waits.`,
+        });
+      }
+    }
+    for (const table of latestDeadlock?.waitingTables.slice(0, 2) ?? []) {
+      if (!suspiciousTables.some((item) => item.table === table)) {
+        suspiciousTables.push({
+          table,
+          reason:
+            "Referenced in the latest deadlock section from SHOW ENGINE INNODB STATUS.",
+        });
+      }
+    }
 
     const keyFindings = [
-      `Collected ${rows.length} current InnoDB lock waits across ${blockerCounts.length} blocker sessions.`,
+      rows.length > 0
+        ? `Collected ${rows.length} current InnoDB lock waits across ${blockerCounts.length} blocker sessions.`
+        : "No current InnoDB row-lock waits were captured.",
     ];
     if (topBlocker) {
       keyFindings.push(
@@ -3631,6 +4116,18 @@ export class TaurusDBEngine {
         `Diagnosis was filtered to blocker session ${input.blockerSessionId}.`,
       );
     }
+    if (metadataLockRows.length > 0) {
+      keyFindings.push(
+        `Collected ${metadataLockRows.length} current metadata-lock waits.`,
+      );
+    }
+    if (latestDeadlock) {
+      keyFindings.push(
+        latestDeadlock.detectedAt
+          ? `Latest detected deadlock timestamp: ${latestDeadlock.detectedAt}.`
+          : "SHOW ENGINE INNODB STATUS returned a latest detected deadlock section.",
+      );
+    }
 
     const recommendedActions = [
       "Inspect the blocker session in show_processlist with include_info=true before terminating it.",
@@ -3646,12 +4143,25 @@ export class TaurusDBEngine {
         "Check for DDL or explicit table-lock operations because TABLE-level waits are present in the snapshot.",
       );
     }
+    if (metadataLockRows.length > 0) {
+      recommendedActions.push(
+        "Review DDL, online schema change tooling, and long-running transactions because metadata-lock waits are present.",
+      );
+    }
+    if (latestDeadlock) {
+      recommendedActions.push(
+        "Inspect the latest deadlock section in SHOW ENGINE INNODB STATUS and correlate the involved statements before changing only timeout or retry settings.",
+      );
+    }
 
     const evidence = [
       {
         source: "lock_waits",
         title: "Current InnoDB lock-wait snapshot",
-        summary: `${rows.length} waits observed across ${blockerCounts.length} blocker sessions and ${tableCounts.length} locked tables.`,
+        summary:
+          rows.length > 0
+            ? `${rows.length} waits observed across ${blockerCounts.length} blocker sessions and ${tableCounts.length} locked tables.`
+            : "No InnoDB row-lock waits were visible in the current snapshot.",
       },
     ];
     if (topBlocker) {
@@ -3666,6 +4176,20 @@ export class TaurusDBEngine {
         source: "lock_waits",
         title: "Hot locked table",
         summary: `${topTable.key} appears in ${topTable.count} current waits.`,
+      });
+    }
+    if (metadataLockRows.length > 0) {
+      evidence.push({
+        source: "metadata_locks",
+        title: "Current metadata-lock snapshot",
+        summary: `Collected ${metadataLockRows.length} pending metadata locks${topMetadataTable ? `; hottest object=${topMetadataTable.key}` : ""}${topMetadataBlocker ? `, dominant blocker=${topMetadataBlocker.key}` : ""}.`,
+      });
+    }
+    if (latestDeadlock) {
+      evidence.push({
+        source: "deadlock_history",
+        title: "Latest detected deadlock",
+        summary: latestDeadlock.summary,
       });
     }
 
@@ -3696,8 +4220,10 @@ export class TaurusDBEngine {
       evidence,
       recommendedActions: [...new Set(recommendedActions)],
       limitations: [
-        "This diagnostic currently relies on a point-in-time InnoDB lock-wait snapshot only.",
-        "Metadata locks and deadlock history are not connected yet.",
+        "Live lock evidence remains point-in-time; waits that finish before collection will not appear.",
+        latestDeadlock
+          ? "Deadlock history currently uses the latest deadlock section only and does not yet parse a longer deadlock archive."
+          : "Deadlock history was not available from SHOW ENGINE INNODB STATUS in this run.",
       ],
     };
   }
@@ -3741,6 +4267,8 @@ export class TaurusDBEngine {
       title: `CES ${metric.alias}`,
       summary: metricSummaryText(metric),
     }));
+    const recommendedNextTools = new Set<string>();
+    const nextToolInputs: DiagnosticNextToolInput[] = [];
 
     if (focusedRows.length === 0 && metrics.length === 0) {
       return {
@@ -3786,6 +4314,17 @@ export class TaurusDBEngine {
           "Run this diagnostic on a replica or read-only node with replication status access.",
           "Enable the CES metrics source to correlate replica lag with Cloud Eye lag, write IOPS, and long transaction metrics.",
         ],
+        recommendedNextTools: ["show_processlist"],
+        nextToolInputs: [
+          buildShowProcesslistNextToolInput(
+            {
+              includeIdle: false,
+              includeInfo: true,
+            },
+            input,
+            "Inspect live sessions on the replica or selected datasource to confirm whether replay is blocked by long-running or idle-in-transaction work.",
+          ),
+        ],
         limitations: [
           ...metricsSourceLimitation(this.metricsSource),
           "The selected account may not have access to replication status commands.",
@@ -3816,6 +4355,17 @@ export class TaurusDBEngine {
         confidence: "high",
         rationale: `Replica status returned ${stoppedRows.length} rows with stopped threads or IO/SQL errors.`,
       });
+      recommendedNextTools.add("show_processlist");
+      nextToolInputs.push(
+        buildShowProcesslistNextToolInput(
+          {
+            includeIdle: false,
+            includeInfo: true,
+          },
+          input,
+          "Inspect live sessions and statement text before restarting replica IO/SQL components.",
+        ),
+      );
     }
     if ((maxCesLag ?? 0) >= 60 || (maxStatusLag ?? 0) >= 60) {
       rootCauseCandidates.push({
@@ -3824,6 +4374,14 @@ export class TaurusDBEngine {
         confidence: (maxCesLag ?? maxStatusLag ?? 0) >= 300 ? "high" : "medium",
         rationale: `Replication lag exceeded the current threshold${maxCesLag !== undefined ? `; max_ces_lag=${roundMetric(maxCesLag)}` : ""}${maxStatusLag !== undefined ? `, max_status_lag=${roundMetric(maxStatusLag)}` : ""}.`,
       });
+      recommendedNextTools.add("diagnose_db_hotspot");
+      nextToolInputs.push(
+        buildDbHotspotNextToolInput(
+          { scope: "session" },
+          input,
+          "Correlate elevated replication delay with the hottest sessions on the datasource during the same window.",
+        ),
+      );
     }
     if (longTrxMetric && (longTrxMetric.max ?? 0) > 0) {
       rootCauseCandidates.push({
@@ -3832,6 +4390,17 @@ export class TaurusDBEngine {
         confidence: (longTrxMetric?.max ?? 0) >= 3 ? "medium" : "low",
         rationale: `CES long transaction count was non-zero; ${metricSummaryText(longTrxMetric)}.`,
       });
+      recommendedNextTools.add("show_processlist");
+      nextToolInputs.push(
+        buildShowProcesslistNextToolInput(
+          {
+            includeIdle: false,
+            includeInfo: true,
+          },
+          input,
+          "Inspect long-running sessions because open transactions can delay replica replay.",
+        ),
+      );
     }
     if (
       (writeIopsMetric?.max ?? 0) >= 1000 ||
@@ -3843,6 +4412,14 @@ export class TaurusDBEngine {
         confidence: "medium",
         rationale: `CES write workload metrics are elevated${writeIopsMetric?.max !== undefined ? `; max_write_iops=${roundMetric(writeIopsMetric.max)}` : ""}${writeThroughputMetric?.max !== undefined ? `, max_write_throughput=${roundMetric(writeThroughputMetric.max)}` : ""}.`,
       });
+      recommendedNextTools.add("find_top_slow_sql");
+      nextToolInputs.push(
+        buildFindTopSlowSqlNextToolInput(
+          { sortBy: "total_latency", topN: 5 },
+          input,
+          "Rank the heaviest SQL workload during the lag window to see whether primary-side write pressure is dominating replay.",
+        ),
+      );
     }
     if (rootCauseCandidates.length === 0) {
       rootCauseCandidates.push({
@@ -3929,6 +4506,8 @@ export class TaurusDBEngine {
         "Correlate replica lag with primary write spikes, long transactions, and DDL or bulk-load activity.",
         "If CES lag is high but SHOW REPLICA STATUS is unavailable, validate the command on the read-only node or use cloud console replica diagnostics.",
       ],
+      recommendedNextTools: [...recommendedNextTools],
+      nextToolInputs: dedupeNextToolInputs(nextToolInputs).slice(0, 5),
       limitations: [
         ...metricsSourceLimitation(this.metricsSource),
         "Replica status command availability depends on TaurusDB topology and account privileges.",
@@ -3977,6 +4556,8 @@ export class TaurusDBEngine {
       title: `CES ${metric.alias}`,
       summary: metricSummaryText(metric),
     }));
+    const recommendedNextTools = new Set<string>();
+    const nextToolInputs: DiagnosticNextToolInput[] = [];
 
     const focusedTableName = input.table?.includes(".")
       ? input.table.split(".").slice(1).join(".")
@@ -4190,6 +4771,50 @@ export class TaurusDBEngine {
       );
     }
 
+    const leadSlowQueryInput = buildSlowQueryNextToolInput(
+      {
+        sqlHash: leadDigest?.querySampleText
+          ? sqlHash(normalizeSql(leadDigest.querySampleText))
+          : undefined,
+        digestText: leadDigest?.digestText,
+        sampleSql: leadDigest?.querySampleText,
+      },
+      input,
+      "Inspect the lead storage-relevant digest with plan and runtime counters before tuning only table footprint or instance-level storage settings.",
+    );
+    if (leadSlowQueryInput) {
+      recommendedNextTools.add("diagnose_slow_query");
+      nextToolInputs.push(leadSlowQueryInput);
+    }
+    if (
+      relevantDigests.length > 1 ||
+      ((writeDelayMetric?.max ?? 0) >= 50 ||
+        (readDelayMetric?.max ?? 0) >= 50 ||
+        (writeIopsMetric?.max ?? 0) >= 1000 ||
+        (readIopsMetric?.max ?? 0) >= 1000 ||
+        (writeThroughputMetric?.max ?? 0) >= 50 * 1024 * 1024 ||
+        (readThroughputMetric?.max ?? 0) >= 50 * 1024 * 1024)
+    ) {
+      recommendedNextTools.add("find_top_slow_sql");
+      nextToolInputs.push(
+        buildFindTopSlowSqlNextToolInput(
+          { sortBy: "total_latency", topN: 5 },
+          input,
+          "Rank the broader slow-SQL set to confirm whether the lead digest is representative of overall storage pressure.",
+        ),
+      );
+    }
+    if (input.scope === "table" || input.table || largeTables.length > 0) {
+      recommendedNextTools.add("diagnose_db_hotspot");
+      nextToolInputs.push(
+        buildDbHotspotNextToolInput(
+          { scope: "table" },
+          input,
+          "Correlate the suspected table footprint with current table-level hotspots before changing only storage capacity or purge policy.",
+        ),
+      );
+    }
+
     const recommendedActions = [
       "Use diagnose_slow_query on the lead storage-relevant SQL digest to inspect plan shape and runtime counters.",
       "Review predicates, indexes, ORDER BY, and GROUP BY clauses for digests with scan, filesort, or temporary-table signals.",
@@ -4271,6 +4896,8 @@ export class TaurusDBEngine {
         ...metricEvidence,
       ],
       recommendedActions: [...new Set(recommendedActions)],
+      recommendedNextTools: [...recommendedNextTools],
+      nextToolInputs: dedupeNextToolInputs(nextToolInputs).slice(0, 5),
       limitations: [
         ...metricsSourceLimitation(this.metricsSource),
         "Statement digest counters are cumulative within performance_schema retention and are not yet filtered by the requested time_range.",

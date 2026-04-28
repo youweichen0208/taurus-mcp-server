@@ -31,6 +31,21 @@ const TaurusApiSlowSqlSourceSchema = z
   })
   .default({});
 
+const DasSlowSqlSourceSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    endpoint: z.string().min(1).optional(),
+    projectId: z.string().min(1).optional(),
+    instanceId: z.string().min(1).optional(),
+    authToken: z.string().min(1).optional(),
+    datastoreType: z.enum(["MySQL", "TaurusDB"]).default("TaurusDB"),
+    requestTimeoutMs: z.number().int().positive().default(5000),
+    defaultLookbackMinutes: z.number().int().positive().max(43_200).default(60),
+    maxRecords: z.number().int().positive().max(200).default(50),
+    maxPages: z.number().int().positive().max(10).default(2),
+  })
+  .default({});
+
 const CesMetricsSourceSchema = z
   .object({
     enabled: z.boolean().default(false),
@@ -62,6 +77,7 @@ export const ConfigSchema = z.object({
   slowSqlSource: z
     .object({
       taurusApi: TaurusApiSlowSqlSourceSchema,
+      das: DasSlowSqlSourceSchema,
     })
     .default({}),
   metricsSource: z
