@@ -2,22 +2,26 @@
 
 华为云 TaurusDB 数据面工具仓库。
 
-当前产品边界已经收敛为“两种前端，共享同一套 `core`”：
+当前产品边界已经收敛为“一个数据面 MCP Server + 一个 companion CLI”：
 
 - `@huaweicloud/taurusdb-mcp`
   面向 Claude Desktop、Cursor、VS Code 等 AI 客户端的 MCP Server
 - `@huaweicloud/taurusdb-cli`
-  面向 DBA、开发者、支持人员的 CLI。第一阶段只做命令模式，CLI 本体尚未实现完成
+  面向开发者、测试、DBA、运维和 CI 的 MCP companion。第一阶段用于安装、配置、验证、调试、runbook 和 context export，CLI 本体尚未实现完成
 
-核心链路保持一致：
+核心链路以 MCP 为主入口：
 
 ```text
-自然语言 / 命令
+自然语言 / MCP Tool 调用
 → schema 上下文
 → SQL
 → 风险校验
 → 数据面执行
 → 结构化结果
+
+CLI
+→ init / config doctor / mcp smoke / mcp call / runbook / context export
+→ 调用或验证真实 MCP 行为
 ```
 
 ## Current Status
@@ -162,8 +166,8 @@ npx @huaweicloud/taurusdb-mcp init --client vscode
 - 稳定 capability probe 与动态 Tool 注册
 - 在云端 TaurusDB 上验证 capability probe、enhanced explain、flashback query
 - 在云端 TaurusDB 上验证 CES / Cloud Eye 指标源、复制状态与 diagnostics 联合证据
-- 在 `core` 上实现 CLI 命令模式
-- history/binlog、CLI REPL/AI 属于后续阶段
+- 实现 MCP companion CLI：`config doctor`、`mcp tools`、`mcp call`、`mcp smoke`、`cloud validate`、`runbook`、`context export`
+- history/binlog、远程 MCP 调试、CLI TUI/AI 属于后续阶段
 
 当前 diagnostics Tool 已直接纳入默认 tool 集合。云侧 evidence source 现已支持以 `region + AK/SK` 为主路径的高层 cloud resolver，以及 `set_cloud_region`、`set_cloud_access_keys`、`list_cloud_taurus_instances`、`select_cloud_taurus_instance` 这组会话级 Tool；底层 `TAURUSDB_SLOW_SQL_SOURCE_DAS_*` / `TAURUSDB_METRICS_SOURCE_CES_*` 仍可作为 override 使用。详见 [docs/cloud-taurusdb-testing.md](./docs/cloud-taurusdb-testing.md) 和 [docs/taurusdb-mcp-implementation-plan.md](./docs/taurusdb-mcp-implementation-plan.md)。
 
@@ -171,5 +175,5 @@ npx @huaweicloud/taurusdb-mcp init --client vscode
 
 - 根目录 `package.json` 现在是 workspace 根配置，不再代表单包 MCP 包
 - `packages/core` 与 `packages/mcp` 已拆出
-- `packages/cli` 目前还是 scaffold
+- `packages/cli` 目前还是 scaffold，目标已调整为 MCP companion 而不是第二套数据面客户端
 - 产品和架构文档已经统一按“当前首阶段范围”收口

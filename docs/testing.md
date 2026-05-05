@@ -1433,7 +1433,7 @@ Follow-up: <next tool / config / evidence to check>
 
 这一阶段暂时不要做：
 
-- CLI diagnose 命令
+- CLI runbook 命令
 - DAS / Top SQL / 全量 SQL 的复杂 merge ranking
 - OS 级磁盘指标 collector
 

@@ -363,30 +363,33 @@
 
 ## 5. CLI 还差哪些
 
-CLI 当前仍未开始真实实现，第一阶段目标应控制在命令模式。
+CLI 当前仍未开始真实实现，第一阶段目标已从“任务型数据面命令”进一步调整为“MCP companion”。
+
+新的方向是：CLI 不重新实现 SQL / diagnose / TaurusDB 专属命令客户端，而是负责 MCP 的安装、配置、验证、调试、CI smoke、runbook 编排和 context export。
 
 待完成：
 
-- 命令模式
-- token-based 终端确认包装
-- 输出格式化（table / json / csv）
-- TaurusDB 专属命令：
-  - `features`
-  - `explain+`
-  - `flashback`
+- CLI companion 命令框架
+- `config doctor` / `config show` / `config profiles`
+- `mcp serve` / `mcp tools` / `mcp call` / `mcp smoke`
+- 嵌入式 stdio MCP client，用于通过 MCP 协议调用真实 Tool
+- `cloud validate` / `cloud instances`
+- `runbook latency|locks|connections|slow-query|storage|replication`
+- `context snapshot|schema|export`
+- Markdown / JSON 报告输出与默认脱敏
 
 当前状态：
 
 - 只有 `packages/cli` 包骨架
-- 设计文档已按首阶段范围收口
+- 设计文档已从“按 core/MCP 能力平铺”调整为“MCP companion 协同模型”
 - 代码未落地
 
 后续阶段再考虑：
 
-- REPL
+- 远程 MCP Server 调试
+- 交互式 TUI
 - `ask`
 - `agent`
-- `doctor`
 
 ---
 
@@ -445,10 +448,11 @@ CLI 当前仍未开始真实实现，第一阶段目标应控制在命令模式�
    - OS 级磁盘 / IOPS / throughput 指标，用于增强 `diagnose_storage_pressure`
    - 更完整的复制拓扑 / 只读节点信息，用于增强 `diagnose_replication_lag`
 
-8. 云端 MCP 主链路和 diagnostics 第一版稳定后，再开始 CLI 命令模式：
-   - 先做只读命令：`sources`、`databases`、`tables`、`describe`、`query`、`explain`
-   - 再做 `exec` + token-based terminal confirmation
-   - 再做 Taurus 专属命令：`features`、`explain+`、`flashback`
-   - 最后再考虑 CLI diagnose 命令
+8. 云端 MCP 主链路和 diagnostics 第一版稳定后，再开始 CLI companion：
+   - 先做命令框架、help、`config doctor`、`config show`
+   - 再做嵌入式 stdio MCP client、`mcp tools`、`mcp call`、`mcp smoke`
+   - 再把现有 `npm run cloud:validate` 收口为 `cloud validate`
+   - 再做 `runbook latency` / `runbook locks` / `runbook connections` 等 MCP Tool 编排
+   - 最后做 `context snapshot` / `context export`，输出给 AI 客户端或工单使用的脱敏证据包
 
-9. history/binlog、CLI REPL / ask / agent / doctor 继续放到后续阶段，不进入当前云端联调闭环
+9. history/binlog、CLI ask / agent、远程 MCP 调试、交互式 TUI 继续放到后续阶段，不进入当前云端联调闭环
