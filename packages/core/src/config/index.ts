@@ -129,10 +129,6 @@ function expandTildePath(inputPath: string | undefined): string | undefined {
 function buildRawConfigFromEnv(
   env: NodeJS.ProcessEnv,
 ): Record<string, unknown> {
-  const cloudEvidenceEnabled = parseBoolean(
-    env.TAURUSDB_CLOUD_ENABLE_EVIDENCE,
-    "TAURUSDB_CLOUD_ENABLE_EVIDENCE",
-  );
   const cloudDasEnabled = parseBoolean(
     env.TAURUSDB_CLOUD_ENABLE_DAS,
     "TAURUSDB_CLOUD_ENABLE_DAS",
@@ -276,7 +272,7 @@ function buildRawConfigFromEnv(
             "TAURUSDB_SLOW_SQL_SOURCE_DAS_ENABLED",
           ),
           cloudDasEnabled,
-          cloudEvidenceEnabled,
+          true,
         ),
         endpoint: pickFirstDefined(
           readString(env.TAURUSDB_SLOW_SQL_SOURCE_DAS_ENDPOINT),
@@ -323,7 +319,7 @@ function buildRawConfigFromEnv(
             "TAURUSDB_METRICS_SOURCE_CES_ENABLED",
           ),
           cloudCesEnabled,
-          cloudEvidenceEnabled,
+          true,
         ),
         endpoint: pickFirstDefined(
           readString(env.TAURUSDB_METRICS_SOURCE_CES_ENDPOINT),

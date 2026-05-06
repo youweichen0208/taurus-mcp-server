@@ -46,8 +46,12 @@ function encodeRfc3986(value: string): string {
 
 function buildCanonicalUri(pathname: string): string {
   const segments = pathname.split("/").map((segment) => encodeRfc3986(segment));
-  const normalized = segments.join("/");
-  return normalized.startsWith("/") ? normalized : `/${normalized}`;
+  let normalized = segments.join("/");
+  if (!normalized.startsWith("/")) {
+    normalized = `/${normalized}`;
+  }
+  // Huawei Cloud API signing requires the canonical URI to end with a slash.
+  return normalized.endsWith("/") ? normalized : `${normalized}/`;
 }
 
 function buildCanonicalQueryString(url: URL): string {

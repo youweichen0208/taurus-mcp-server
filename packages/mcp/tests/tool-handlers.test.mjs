@@ -506,7 +506,7 @@ test("describe_table validates required database context", async () => {
 
   const result = await describeTableTool.handler({ table: "orders" }, deps, context);
   assert.equal(result.ok, false);
-  assert.equal(result.error.code, ErrorCode.SQL_SYNTAX_ERROR);
+  assert.equal(result.error.code, ErrorCode.INVALID_INPUT);
   assert.match(result.error.message, /Missing database/);
 });
 
@@ -886,7 +886,7 @@ test("execute_sql returns confirmation_invalid when token validation fails", asy
 test("diagnose_slow_query validates that at least one SQL identifier is provided", async () => {
   const result = await diagnoseSlowQueryTool.handler({}, createDeps(), context);
   assert.equal(result.ok, false);
-  assert.equal(result.error.code, ErrorCode.SQL_SYNTAX_ERROR);
+  assert.equal(result.error.code, ErrorCode.INVALID_INPUT);
   assert.match(result.error.message, /sql, sql_hash, or digest_text/);
 });
 

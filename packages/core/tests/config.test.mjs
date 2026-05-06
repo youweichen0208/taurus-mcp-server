@@ -36,13 +36,13 @@ test("config uses documented defaults when env is empty", () => {
   assert.equal(config.slowSqlSource.taurusApi.requestTimeoutMs, 5000);
   assert.equal(config.slowSqlSource.taurusApi.defaultLookbackMinutes, 60);
   assert.equal(config.slowSqlSource.taurusApi.maxRecords, 20);
-  assert.equal(config.slowSqlSource.das.enabled, false);
+  assert.equal(config.slowSqlSource.das.enabled, true);
   assert.equal(config.slowSqlSource.das.datastoreType, "TaurusDB");
   assert.equal(config.slowSqlSource.das.requestTimeoutMs, 5000);
   assert.equal(config.slowSqlSource.das.defaultLookbackMinutes, 60);
   assert.equal(config.slowSqlSource.das.maxRecords, 50);
   assert.equal(config.slowSqlSource.das.maxPages, 2);
-  assert.equal(config.metricsSource.ces.enabled, false);
+  assert.equal(config.metricsSource.ces.enabled, true);
   assert.equal(config.metricsSource.ces.namespace, "SYS.GAUSSDB");
   assert.equal(
     config.metricsSource.ces.instanceDimension,
@@ -179,7 +179,6 @@ test("config resolves shared cloud env into DAS and CES sources", () => {
     TAURUSDB_CLOUD_INSTANCE_ID: "instance-shared",
     TAURUSDB_CLOUD_NODE_ID: "node-shared",
     TAURUSDB_CLOUD_AUTH_TOKEN: "token-shared",
-    TAURUSDB_CLOUD_ENABLE_EVIDENCE: "true",
     TAURUSDB_CLOUD_ENABLE_TAURUS_API: "true",
   });
 
@@ -237,7 +236,6 @@ test("config supports AK/SK-only cloud discovery inputs", () => {
     TAURUSDB_CLOUD_REGION: "cn-east-3",
     TAURUSDB_CLOUD_ACCESS_KEY_ID: "ak-only",
     TAURUSDB_CLOUD_SECRET_ACCESS_KEY: "sk-only",
-    TAURUSDB_CLOUD_ENABLE_EVIDENCE: "true",
   });
 
   assert.equal(config.cloud.region, "cn-east-3");
@@ -261,7 +259,6 @@ test("explicit per-source env values override shared cloud defaults", () => {
     TAURUSDB_CLOUD_PROJECT_ID: "project-shared",
     TAURUSDB_CLOUD_INSTANCE_ID: "instance-shared",
     TAURUSDB_CLOUD_AUTH_TOKEN: "token-shared",
-    TAURUSDB_CLOUD_ENABLE_EVIDENCE: "true",
     TAURUSDB_SLOW_SQL_SOURCE_DAS_ENDPOINT:
       "https://das.custom.example.com",
     TAURUSDB_METRICS_SOURCE_CES_PROJECT_ID: "project-explicit",

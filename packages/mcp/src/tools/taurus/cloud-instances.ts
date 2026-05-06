@@ -40,14 +40,6 @@ export const listCloudTaurusInstancesTool: ToolDefinition = {
     offset: z.number().int().min(0).optional().describe("Pagination offset. Defaults to 0."),
     limit: z.number().int().positive().max(100).optional().describe("Maximum number of instances to return. Defaults to 50."),
   },
-  exposeWhen: (config) =>
-    Boolean(
-      config.cloud?.apiEndpoint &&
-        (config.cloud?.authToken ||
-          (config.cloud?.region &&
-            config.cloud?.accessKeyId &&
-            config.cloud?.secretAccessKey)),
-    ),
   async handler(input, deps, context): Promise<ToolResponse> {
     try {
       const client = createCloudTaurusInstanceClient(deps.config);

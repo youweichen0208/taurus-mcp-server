@@ -104,7 +104,6 @@ export TAURUSDB_DEFAULT_DATASOURCE=cloud_taurus
 export TAURUSDB_CLOUD_REGION='<region>'
 export TAURUSDB_CLOUD_ACCESS_KEY_ID='<access-key-id>'
 export TAURUSDB_CLOUD_SECRET_ACCESS_KEY='<secret-access-key>'
-export TAURUSDB_CLOUD_ENABLE_EVIDENCE=true
 ```
 
 可选补充：
@@ -168,7 +167,6 @@ export TAURUSDB_METRICS_SOURCE_CES_AUTH_TOKEN='<iam-token>'
 export TAURUSDB_CLOUD_REGION='<region>'
 export TAURUSDB_CLOUD_ACCESS_KEY_ID='<access-key-id>'
 export TAURUSDB_CLOUD_SECRET_ACCESS_KEY='<secret-access-key>'
-export TAURUSDB_CLOUD_ENABLE_EVIDENCE=true
 ```
 
 如果使用临时 AK/SK，再补：
@@ -193,6 +191,7 @@ export TAURUSDB_CLOUD_SECURITY_TOKEN='<session-token>'
 
 - 该 Tool 不会回显 `AK/SK` 原文，也不会返回完整凭证信息。
 - 如果 `AK/SK` 缺失、错误、过期或权限不足，通常会返回明确的鉴权或 project lookup 错误。
+- 云侧 evidence 默认启用；如果只想单独关闭某一类云源，优先使用 `TAURUSDB_CLOUD_ENABLE_DAS=false` 或 `TAURUSDB_CLOUD_ENABLE_CES=false` 这类更细粒度开关。
 
 如果你需要在不重启 server 的情况下临时切换 region 或凭证，再使用下面这组会话级 Tool：
 

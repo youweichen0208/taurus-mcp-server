@@ -53,6 +53,8 @@ test("tool registry registers default MCP tools through legacy tool API", async 
       "list_taurus_features",
       "set_cloud_region",
       "set_cloud_access_keys",
+      "list_cloud_taurus_instances",
+      "select_cloud_taurus_instance",
       "diagnose_service_latency",
       "diagnose_db_hotspot",
       "find_top_slow_sql",
@@ -100,7 +102,18 @@ test("tool registry registers diagnostics tools by default", () => {
   );
 });
 
-test("tool registry registers cloud instance discovery when cloud config is present", () => {
+test("tool registry registers cloud instance discovery tools even when cloud config is absent", () => {
+  const disabled = createLegacyToolServerRecorder();
+  registerTools(disabled.server, { pingResponse: "pong" }, createConfigFromEnv({}));
+  assert.equal(
+    disabled.calls.some((call) => call.name === "list_cloud_taurus_instances"),
+    true,
+  );
+  assert.equal(
+    disabled.calls.some((call) => call.name === "select_cloud_taurus_instance"),
+    true,
+  );
+
   const enabled = createLegacyToolServerRecorder();
   registerTools(
     enabled.server,

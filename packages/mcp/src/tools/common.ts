@@ -243,7 +243,7 @@ export function invalidInputResponse(
   summary = "Tool call failed due to invalid input.",
 ): ToolResponse {
   return formatError({
-    code: ErrorCode.SQL_SYNTAX_ERROR,
+    code: ErrorCode.INVALID_INPUT,
     message,
     summary,
     metadata: metadata(taskId),

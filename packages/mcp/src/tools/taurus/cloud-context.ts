@@ -143,14 +143,6 @@ export const selectCloudTaurusInstanceTool: ToolDefinition = {
   inputSchema: {
     instance_id: z.string().trim().min(1).describe("Exact TaurusDB instance id to bind into the current session."),
   },
-  exposeWhen: (config) =>
-    Boolean(
-      config.cloud?.apiEndpoint &&
-        (config.cloud?.authToken ||
-          (config.cloud?.region &&
-            config.cloud?.accessKeyId &&
-            config.cloud?.secretAccessKey)),
-    ),
   async handler(input, deps, context): Promise<ToolResponse> {
     try {
       const instanceId =

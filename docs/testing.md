@@ -579,7 +579,6 @@ node packages/mcp/dist/index.js
 export TAURUSDB_CLOUD_REGION=...
 export TAURUSDB_CLOUD_ACCESS_KEY_ID=...
 export TAURUSDB_CLOUD_SECRET_ACCESS_KEY=...
-export TAURUSDB_CLOUD_ENABLE_EVIDENCE=true
 ```
 
 说明：
@@ -589,6 +588,7 @@ export TAURUSDB_CLOUD_ENABLE_EVIDENCE=true
 - 如果自动解析失败或出现多实例歧义，先调用 `list_cloud_taurus_instances`，再通过 `select_cloud_taurus_instance` 固定当前会话的默认 `instance_id`。
 - `instance_name` 只用于展示和人工选择，不应作为唯一键。
 - `set_cloud_region` 和 `set_cloud_access_keys` 适合在 MCP 会话内切换云侧上下文，避免反复改 `export`。
+- 云侧 evidence 默认启用；如果只想关闭某一类云源，优先使用 `TAURUSDB_CLOUD_ENABLE_DAS=false` 或 `TAURUSDB_CLOUD_ENABLE_CES=false`。
 
 如果使用临时 AK/SK，再补：
 

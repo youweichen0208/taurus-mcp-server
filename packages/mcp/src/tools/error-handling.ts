@@ -38,7 +38,7 @@ function cancelledLikely(error: unknown): boolean {
 export function formatToolError(error: unknown, context: ToolErrorContext): ToolResponse {
   if (error instanceof ToolInputError) {
     return formatError({
-      code: ErrorCode.SQL_SYNTAX_ERROR,
+      code: ErrorCode.INVALID_INPUT,
       message: error.message,
       summary: `${context.action} failed due to invalid input.`,
       metadata: context.metadata,
@@ -55,7 +55,7 @@ export function formatToolError(error: unknown, context: ToolErrorContext): Tool
       });
     }
     return formatError({
-      code: ErrorCode.SQL_SYNTAX_ERROR,
+      code: ErrorCode.INVALID_INPUT,
       message: error.message,
       summary: `${context.action} failed due to invalid input.`,
       metadata: context.metadata,
@@ -65,7 +65,7 @@ export function formatToolError(error: unknown, context: ToolErrorContext): Tool
   if (error instanceof SchemaIntrospectionError) {
     if (error.code === "INVALID_INTROSPECTION_INPUT") {
       return formatError({
-        code: ErrorCode.SQL_SYNTAX_ERROR,
+        code: ErrorCode.INVALID_INPUT,
         message: error.message,
         summary: `${context.action} failed due to invalid schema input.`,
         metadata: context.metadata,
