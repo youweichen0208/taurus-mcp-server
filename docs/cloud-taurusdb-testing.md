@@ -158,9 +158,43 @@ export TAURUSDB_METRICS_SOURCE_CES_AUTH_TOKEN='<iam-token>'
 
 如果云端返回空数据，优先排查 endpoint、region、project_id、instance_id、node_id、dimension name 和时间窗口，不要直接判定 MCP 代码失败。
 
-### 3.1 推荐会话内选择流程
+### 3.1 推荐控制面配置方式
 
-如果你是通过 MCP 客户端而不是 shell 脚本联调，推荐直接用下面这组 Tool，而不是频繁改 `export`：
+默认推荐先在启动 MCP Server 的进程环境里通过 `export` 注入 `region + AK/SK`，再在 MCP 客户端里调用 `list_cloud_taurus_instances` 验证控制面是否连通。这样更符合最终用户的实际使用方式，也避免把会话内临时调试配置当成默认主路径。
+
+最小控制面配置：
+
+```bash
+export TAURUSDB_CLOUD_REGION='<region>'
+export TAURUSDB_CLOUD_ACCESS_KEY_ID='<access-key-id>'
+export TAURUSDB_CLOUD_SECRET_ACCESS_KEY='<secret-access-key>'
+export TAURUSDB_CLOUD_ENABLE_EVIDENCE=true
+```
+
+如果使用临时 AK/SK，再补：
+
+```bash
+export TAURUSDB_CLOUD_SECURITY_TOKEN='<session-token>'
+```
+
+然后在 MCP 客户端里调用：
+
+1. `list_cloud_taurus_instances`
+2. 可选：`select_cloud_taurus_instance`
+
+`list_cloud_taurus_instances` 成功时，说明当前 MCP 会话已经拿着环境变量中的凭证成功访问华为云控制面。重点观察：
+
+- 返回成功
+- `cloud.region` 有值
+- `cloud.project_id` 有值
+- `items` 返回当前账号在该 region / project 下可见的 TaurusDB 实例列表
+
+注意：
+
+- 该 Tool 不会回显 `AK/SK` 原文，也不会返回完整凭证信息。
+- 如果 `AK/SK` 缺失、错误、过期或权限不足，通常会返回明确的鉴权或 project lookup 错误。
+
+如果你需要在不重启 server 的情况下临时切换 region 或凭证，再使用下面这组会话级 Tool：
 
 1. `set_cloud_region`
 2. `set_cloud_access_keys`
@@ -184,6 +218,48 @@ npm run build
 ```bash
 npm run cloud:validate
 ```
+
+建议先按“控制面 -> 数据面”的顺序做最小验证，不要一开始就把云账号鉴权、数据库连通性、DAS/CES 证据源混在一步里。
+
+### 4.1 最小验证顺序
+
+第一步：只验证控制面。
+
+先通过环境变量配置 `TAURUSDB_CLOUD_REGION`、`TAURUSDB_CLOUD_ACCESS_KEY_ID`、`TAURUSDB_CLOUD_SECRET_ACCESS_KEY`，然后在 MCP 客户端里调用：
+
+1. `list_cloud_taurus_instances`
+2. 可选：`select_cloud_taurus_instance`
+
+通过标准：
+
+- `list_cloud_taurus_instances` 返回成功
+- 返回结果里的 `cloud.project_id` 有值
+- `items` 返回实例列表
+
+这一步通过，说明当前 MCP 会话已经连上目标华为云账号，并且至少具备实例查看能力。
+
+第二步：再验证数据面。
+
+先配置 datasource，然后在 MCP 客户端里调用：
+
+1. `list_data_sources`
+2. `execute_readonly_sql`，执行 `SELECT 1 AS ok`
+
+通过标准：
+
+- `list_data_sources` 能看到目标 datasource
+- `execute_readonly_sql` 成功返回
+- 查询结果中返回 `1`
+
+第三步：可选增强。
+
+在上面两步都通过后，再执行：
+
+```bash
+npm run cloud:validate
+```
+
+这个脚本适合做整体验证，因为它会同时检查 datasource、readonly SQL、capability probe、实例自动解析，以及启用时的 DAS / CES 连通性。
 
 默认检查：
 
@@ -265,14 +341,13 @@ node /path/to/taurus-mcp-server/packages/mcp/dist/index.js
 
 1. `get_kernel_info`
 2. `list_taurus_features`
-3. `set_cloud_region`
-4. `set_cloud_access_keys`
-5. `list_cloud_taurus_instances`，确认当前云账号和 project 下的实例 `name/id/default_node_id`
-6. `select_cloud_taurus_instance`，把当前会话默认 `instance_id/node_id` 固定下来
-4. `explain_sql_enhanced`，仅在 capability probe 暴露该 Tool 时验证
-5. `flashback_query`，仅在 capability probe 暴露该 Tool 时验证
-6. `list_recycle_bin`，仅在 capability probe 暴露该 Tool 时验证
-7. `restore_recycle_bin_table`，只在 disposable test table 上验证，且必须经过 confirmation token
+3. `list_cloud_taurus_instances`，确认当前云账号和 project 下的实例 `name/id/default_node_id`
+4. `select_cloud_taurus_instance`，把当前会话默认 `instance_id/node_id` 固定下来
+5. 如果需要临时切换 region 或凭证，再调用 `set_cloud_region` / `set_cloud_access_keys`
+6. `explain_sql_enhanced`，仅在 capability probe 暴露该 Tool 时验证
+7. `flashback_query`，仅在 capability probe 暴露该 Tool 时验证
+8. `list_recycle_bin`，仅在 capability probe 暴露该 Tool 时验证
+9. `restore_recycle_bin_table`，只在 disposable test table 上验证，且必须经过 confirmation token
 
 `restore_recycle_bin_table` 的最小确认流是：
 
