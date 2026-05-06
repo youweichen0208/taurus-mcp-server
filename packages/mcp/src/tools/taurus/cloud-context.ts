@@ -24,15 +24,47 @@ function clearCloudSelection(deps: ToolDeps): void {
   deps.config.metricsSource.ces.projectId = undefined;
   deps.config.metricsSource.ces.instanceId = undefined;
   deps.config.metricsSource.ces.nodeId = undefined;
+  deps.profileLoader.clearAllRuntimeTargets();
 }
 
 async function reloadEngine(deps: ToolDeps): Promise<void> {
-  const nextEngine = await TaurusDBEngine.create({ config: deps.config });
+  const nextEngine = await TaurusDBEngine.create({
+    config: deps.config,
+    profileLoader: deps.profileLoader,
+  });
   const previousEngine = deps.engine;
   deps.engine = nextEngine;
   if (previousEngine?.close) {
     await previousEngine.close();
   }
+}
+
+async function resolveBindingDatasource(
+  deps: ToolDeps,
+  explicit: string | undefined,
+): Promise<string | undefined> {
+  const trimmed = typeof explicit === "string" ? explicit.trim() : "";
+  if (trimmed) {
+    return trimmed;
+  }
+  return deps.engine.getDefaultDataSource();
+}
+
+function selectInstanceAddress(input: {
+  privateIps: string[];
+  hostnames: string[];
+}): string | undefined {
+  return input.privateIps[0] ?? input.hostnames[0];
+}
+
+function normalizePort(port: string | number | undefined): number | undefined {
+  if (typeof port === "number" && Number.isFinite(port)) {
+    return port;
+  }
+  if (typeof port === "string" && /^\d+$/.test(port.trim())) {
+    return Number.parseInt(port, 10);
+  }
+  return undefined;
 }
 
 export const setCloudRegionTool: ToolDefinition = {
@@ -142,6 +174,12 @@ export const selectCloudTaurusInstanceTool: ToolDefinition = {
     "Select the default TaurusDB cloud instance for the current session so diagnostics can reuse its instance id and default node id.",
   inputSchema: {
     instance_id: z.string().trim().min(1).describe("Exact TaurusDB instance id to bind into the current session."),
+    datasource: z
+      .string()
+      .trim()
+      .min(1)
+      .optional()
+      .describe("Optional datasource template to bind to this cloud instance. Defaults to the current default datasource."),
   },
   async handler(input, deps, context): Promise<ToolResponse> {
     try {
@@ -179,6 +217,21 @@ export const selectCloudTaurusInstanceTool: ToolDefinition = {
       deps.config.metricsSource.ces.instanceId = matched.id;
       deps.config.metricsSource.ces.nodeId = matched.primaryNodeId;
 
+      const boundDatasource = await resolveBindingDatasource(
+        deps,
+        typeof input.datasource === "string" ? input.datasource : undefined,
+      );
+      const selectedHost = selectInstanceAddress(matched);
+      const selectedPort = normalizePort(matched.port);
+      if (boundDatasource && selectedHost) {
+        deps.profileLoader.setRuntimeTarget(boundDatasource, {
+          host: selectedHost,
+          port: selectedPort,
+          instanceId: matched.id,
+          nodeId: matched.primaryNodeId,
+        });
+      }
+
       await reloadEngine(deps);
 
       return formatSuccess(
@@ -191,6 +244,9 @@ export const selectCloudTaurusInstanceTool: ToolDefinition = {
           public_ips: matched.publicIps,
           hostnames: matched.hostnames,
           port: matched.port,
+          bound_datasource: boundDatasource,
+          bound_host: selectedHost,
+          bound_port: selectedPort,
         },
         {
           summary: `Selected cloud instance ${matched.name} (${matched.id}).`,

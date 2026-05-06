@@ -107,11 +107,9 @@ claude mcp get huaweicloud-taurusdb
 
 - `list_cloud_taurus_instances`
 
-如果返回成功，并且结果中有：
+查询成功时，通常会看到类似下面这样的结果：
 
-- `cloud.region`
-- `cloud.project_id`
-- `items`
+![Successful instance list screenshot](docs/assets/readme/claude-instance-list-success.png)
 
 说明当前 MCP 会话已经能使用这组凭证访问华为云控制面，并且能看见实例列表。
 
@@ -123,6 +121,88 @@ claude mcp get huaweicloud-taurusdb
 - `execute_readonly_sql` with `SELECT 1 AS ok`
 
 如果 `SELECT 1` 成功，说明数据库数据面也已连通。
+
+## Cloud Datasource Template
+
+当前版本已经支持一种更适合云上多实例切换的用法：
+
+- 只把 datasource 当作模板
+- 不要求模板里预先写死 `host`
+- 通过 `select_cloud_taurus_instance` 在运行时把当前实例的 `host/port` 绑定到这个模板
+
+这意味着客户不需要每切一个实例就重新改一遍：
+
+- `TAURUSDB_SQL_HOST`
+- `TAURUSDB_SQL_PORT`
+- `TAURUSDB_SQL_ENGINE`
+- `TAURUSDB_SQL_DATASOURCE`
+
+更推荐的方式是：
+
+1. 先配一次云控制面凭证
+2. 再配一次数据面模板
+3. 后续切实例时只调用：
+   - `list_cloud_taurus_instances`
+   - `select_cloud_taurus_instance`
+
+### Minimal Template
+
+如果你使用环境变量，可以只保留模板字段：
+
+```bash
+export TAURUSDB_SQL_ENGINE=mysql
+export TAURUSDB_SQL_DATASOURCE=cloud_taurus
+export TAURUSDB_SQL_DATABASE=<default-database>
+export TAURUSDB_SQL_USER=<readonly-user>
+export TAURUSDB_SQL_PASSWORD=<readonly-password>
+export TAURUSDB_DEFAULT_DATASOURCE=cloud_taurus
+```
+
+这里的关键点是：
+
+- `database / user / password` 来自模板
+- `host / port` 来自当前选中的云实例
+
+### Recommended Flow
+
+推荐的实际使用顺序：
+
+1. 在 Claude Code 里调用 `list_cloud_taurus_instances`
+2. 调用 `select_cloud_taurus_instance`
+3. 再调用 `list_data_sources`
+4. 再调用 `execute_readonly_sql`，例如：
+
+```json
+{
+  "sql": "SELECT 1 AS ok"
+}
+```
+
+### What `select_cloud_taurus_instance` Does Now
+
+除了设置当前会话的：
+
+- `project_id`
+- `instance_id`
+- `node_id`
+
+它现在还会尝试把当前实例的：
+
+- `private_ips[0]`
+- 或 `hostnames[0]`
+- 以及 `port`
+
+绑定到当前 datasource 模板，然后重建 engine，避免连接池继续复用旧实例。
+
+### DBA-Friendly Model
+
+这套模型更适合 DBA 统一兜底：
+
+- DBA 维护模板中的 `database / readonly user / password / tls`
+- 用户只需要选实例
+- MCP 自动把实例地址绑定到模板
+
+如果不同实例共用同一套只读账号和默认库名，这种方式会明显比“每次切实例都重新 export 一组 SQL env”更顺畅。
 
 ## Common Issues
 

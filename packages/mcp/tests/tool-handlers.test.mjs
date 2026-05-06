@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { createConfigFromEnv } from "@huaweicloud/taurusdb-core";
 import { ErrorCode } from "../dist/utils/formatter.js";
 import {
   executeReadonlySqlTool,
@@ -29,23 +30,60 @@ import {
 } from "../dist/tools/taurus/diagnostics.js";
 import { explainSqlEnhancedTool } from "../dist/tools/taurus/explain.js";
 import { flashbackQueryTool } from "../dist/tools/taurus/flashback.js";
+import { selectCloudTaurusInstanceTool } from "../dist/tools/taurus/cloud-context.js";
 import {
   listRecycleBinTool,
   restoreRecycleBinTableTool,
 } from "../dist/tools/taurus/recycle-bin.js";
 
 function createDeps(engineOverrides = {}) {
+  const runtimeTargets = new Map();
+  const profiles = new Map([
+    [
+      "cloud_taurus",
+      {
+        name: "cloud_taurus",
+        engine: "mysql",
+        host: undefined,
+        port: 3306,
+        database: "app",
+        readonlyUser: {
+          username: "ro",
+          password: { type: "plain", value: "pwd" },
+        },
+        toString() {
+          return "{}";
+        },
+      },
+    ],
+  ]);
   return {
-    config: {
-      enableMutations: true,
-      cloud: {
-        provider: "huaweicloud",
-        region: "cn-north-4",
-        projectId: "project-1",
-        authToken: "token-1",
-        apiEndpoint: "https://gaussdb.cn-north-4.myhuaweicloud.com",
-        domainSuffix: "myhuaweicloud.com",
-        language: "zh-cn",
+    config: createConfigFromEnv({
+      TAURUSDB_MCP_ENABLE_MUTATIONS: "true",
+      TAURUSDB_CLOUD_REGION: "cn-north-4",
+      TAURUSDB_CLOUD_AUTH_TOKEN: "token-1",
+    }),
+    profileLoader: {
+      async load() {
+        return new Map(profiles);
+      },
+      async getDefault() {
+        return "cloud_taurus";
+      },
+      async get(name) {
+        return profiles.get(name);
+      },
+      setRuntimeTarget(name, target) {
+        runtimeTargets.set(name, target);
+      },
+      clearRuntimeTarget(name) {
+        runtimeTargets.delete(name);
+      },
+      clearAllRuntimeTargets() {
+        runtimeTargets.clear();
+      },
+      getRuntimeTarget(name) {
+        return runtimeTargets.get(name);
       },
     },
     pingResponse: "pong",
@@ -780,8 +818,17 @@ test("list_recycle_bin returns structured readonly result", async () => {
 test("list_cloud_taurus_instances returns structured cloud instance list", async () => {
   const deps = createDeps();
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () =>
-    new Response(
+  globalThis.fetch = async (url) => {
+    const target = String(url);
+    if (target.includes("/v3/auth/projects")) {
+      return new Response(
+        JSON.stringify({
+          projects: [{ id: "project-1", name: "cn-north-4" }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(
       JSON.stringify({
         instances: [
           {
@@ -800,6 +847,7 @@ test("list_cloud_taurus_instances returns structured cloud instance list", async
       }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
+  };
 
   try {
     const result = await listCloudTaurusInstancesTool.handler({}, deps, context);
@@ -808,6 +856,60 @@ test("list_cloud_taurus_instances returns structured cloud instance list", async
     assert.equal(result.data.total, 1);
     assert.equal(result.data.items[0].id, "instance-1");
     assert.equal(result.data.items[0].name, "prod-taurus");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("select_cloud_taurus_instance binds runtime host to the active datasource", async () => {
+  const deps = createDeps({
+    getDefaultDataSource: async () => "cloud_taurus",
+    close: async () => {},
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const target = String(url);
+    if (target.includes("/v3/auth/projects")) {
+      return new Response(
+        JSON.stringify({
+          projects: [{ id: "project-1", name: "cn-north-4" }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        instances: [
+          {
+            id: "instance-1",
+            name: "prod-taurus",
+            private_ips: ["10.0.0.8"],
+            public_ips: ["1.2.3.4"],
+            port: "3306",
+            nodes: [{ id: "node-1", role: "master", private_ip: "10.0.0.8" }],
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  try {
+    const result = await selectCloudTaurusInstanceTool.handler(
+      { instance_id: "instance-1" },
+      deps,
+      context,
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.data.bound_datasource, "cloud_taurus");
+    assert.equal(result.data.bound_host, "10.0.0.8");
+    assert.deepEqual(deps.profileLoader.getRuntimeTarget("cloud_taurus"), {
+      host: "10.0.0.8",
+      port: 3306,
+      instanceId: "instance-1",
+      nodeId: "node-1",
+    });
   } finally {
     globalThis.fetch = originalFetch;
   }

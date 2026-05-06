@@ -114,7 +114,7 @@ import { normalizeSql, sqlHash } from "./utils/hash.js";
 export interface DataSourceInfo {
   name: string;
   engine: DatabaseEngine;
-  host: string;
+  host?: string;
   port: number;
   database?: string;
   hasMutationUser: boolean;

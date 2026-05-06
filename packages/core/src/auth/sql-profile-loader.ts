@@ -28,7 +28,7 @@ export interface TlsOptions {
 export interface DataSourceProfile {
   name: string;
   engine: DatabaseEngine;
-  host: string;
+  host?: string;
   port: number;
   database?: string;
   readonlyUser: UserCredential;
@@ -42,6 +42,20 @@ export interface ProfileLoader {
   load(): Promise<Map<string, DataSourceProfile>>;
   getDefault(): Promise<string | undefined>;
   get(name: string): Promise<DataSourceProfile | undefined>;
+}
+
+export interface RuntimeDataSourceTarget {
+  host: string;
+  port?: number;
+  instanceId?: string;
+  nodeId?: string;
+}
+
+export interface RuntimeTargetProfileLoader extends ProfileLoader {
+  setRuntimeTarget(name: string, target: RuntimeDataSourceTarget): void;
+  clearRuntimeTarget(name: string): void;
+  clearAllRuntimeTargets(): void;
+  getRuntimeTarget(name: string): RuntimeDataSourceTarget | undefined;
 }
 
 export type SqlProfileLoaderOptions = {
@@ -263,9 +277,6 @@ function parseProfileRecord(name: string, value: unknown, context: string): Data
 
   const engine = parseEngine(value.engine ?? "mysql", `${context}.${name}.engine`);
   const host = asString(value.host ?? value.hostname);
-  if (!host) {
-    throw new Error(`Invalid datasource profile ${name} in ${context}: missing host.`);
-  }
 
   const parsedPort = asInteger(value.port);
   const port = parsedPort ?? defaultPortForEngine(engine);
@@ -370,12 +381,8 @@ function parseEnvProfile(env: NodeJS.ProcessEnv): DataSourceProfile | undefined 
   const explicitHost = asString(env.TAURUSDB_SQL_HOST);
   const profileName = asString(env.TAURUSDB_SQL_DATASOURCE) ?? "env_default";
 
-  if (!dsn && !explicitHost) {
-    return undefined;
-  }
-
   let engine: DatabaseEngine;
-  let host: string;
+  let host: string | undefined;
   let port: number;
   let database: string | undefined;
   let readonlyUsername: string | undefined;
@@ -394,15 +401,27 @@ function parseEnvProfile(env: NodeJS.ProcessEnv): DataSourceProfile | undefined 
     }
   } else {
     engine = parseEngine(asString(env.TAURUSDB_SQL_ENGINE) ?? "mysql", "TAURUSDB_SQL_ENGINE");
-    host = explicitHost!;
+    host = explicitHost;
     const explicitPort = asInteger(env.TAURUSDB_SQL_PORT);
     port = explicitPort ?? defaultPortForEngine(engine);
     database = asString(env.TAURUSDB_SQL_DATABASE);
   }
 
-  if (!host) {
-    throw new Error("Failed to resolve SQL host from environment.");
+  const mutationUserName = asString(env.TAURUSDB_SQL_MUTATION_USER);
+  const mutationPasswordRaw = asString(env.TAURUSDB_SQL_MUTATION_PASSWORD);
+
+  if (
+    !dsn &&
+    !explicitHost &&
+    !asString(env.TAURUSDB_SQL_USER) &&
+    !asString(env.TAURUSDB_SQL_PASSWORD) &&
+    !database &&
+    !mutationUserName &&
+    !mutationPasswordRaw
+  ) {
+    return undefined;
   }
+
   if (!port || !Number.isFinite(port) || port <= 0) {
     throw new Error("Failed to resolve SQL port from environment.");
   }
@@ -422,8 +441,6 @@ function parseEnvProfile(env: NodeJS.ProcessEnv): DataSourceProfile | undefined 
     throw new Error("Missing readonly password in environment. Set TAURUSDB_SQL_PASSWORD or include it in DSN.");
   }
 
-  const mutationUserName = asString(env.TAURUSDB_SQL_MUTATION_USER);
-  const mutationPasswordRaw = asString(env.TAURUSDB_SQL_MUTATION_PASSWORD);
   let mutationUser: UserCredential | undefined;
   if (mutationUserName || mutationPasswordRaw) {
     if (!mutationUserName || !mutationPasswordRaw) {
@@ -540,6 +557,72 @@ export class SqlProfileLoader implements ProfileLoader {
       profiles: mergedProfiles,
       defaultDatasource,
     };
+  }
+}
+
+function applyRuntimeTarget(
+  profile: DataSourceProfile,
+  target: RuntimeDataSourceTarget | undefined,
+): DataSourceProfile {
+  if (!target) {
+    return profile;
+  }
+  return withRedactedToString({
+    ...profile,
+    host: target.host,
+    port: target.port ?? profile.port,
+  });
+}
+
+export class RuntimeOverrideProfileLoader implements RuntimeTargetProfileLoader {
+  private readonly base: ProfileLoader;
+  private readonly runtimeTargets = new Map<string, RuntimeDataSourceTarget>();
+
+  constructor(base: ProfileLoader) {
+    this.base = base;
+  }
+
+  setRuntimeTarget(name: string, target: RuntimeDataSourceTarget): void {
+    this.runtimeTargets.set(name, {
+      host: target.host,
+      port: target.port,
+      instanceId: target.instanceId,
+      nodeId: target.nodeId,
+    });
+  }
+
+  clearRuntimeTarget(name: string): void {
+    this.runtimeTargets.delete(name);
+  }
+
+  clearAllRuntimeTargets(): void {
+    this.runtimeTargets.clear();
+  }
+
+  getRuntimeTarget(name: string): RuntimeDataSourceTarget | undefined {
+    return this.runtimeTargets.get(name);
+  }
+
+  async load(): Promise<Map<string, DataSourceProfile>> {
+    const loaded = await this.base.load();
+    return new Map(
+      [...loaded.entries()].map(([name, profile]) => [
+        name,
+        applyRuntimeTarget(profile, this.runtimeTargets.get(name)),
+      ]),
+    );
+  }
+
+  async getDefault(): Promise<string | undefined> {
+    return this.base.getDefault();
+  }
+
+  async get(name: string): Promise<DataSourceProfile | undefined> {
+    const profile = await this.base.get(name);
+    if (!profile) {
+      return undefined;
+    }
+    return applyRuntimeTarget(profile, this.runtimeTargets.get(name));
   }
 }
 

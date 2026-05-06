@@ -5,7 +5,10 @@ import path from "node:path";
 import test from "node:test";
 
 import { createConfigFromEnv } from "../dist/config/index.js";
-import { SqlProfileLoader } from "../dist/auth/sql-profile-loader.js";
+import {
+  RuntimeOverrideProfileLoader,
+  SqlProfileLoader,
+} from "../dist/auth/sql-profile-loader.js";
 
 async function createTempProfilesFile(contentObject) {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "taurus-profiles-"));
@@ -143,4 +146,54 @@ test("env mutation user requires username and password together", async () => {
     async () => loader.load(),
     /TAURUSDB_SQL_MUTATION_USER and TAURUSDB_SQL_MUTATION_PASSWORD must be set together/,
   );
+});
+
+test("profile loader supports env datasource templates without host", async () => {
+  const loader = new SqlProfileLoader({
+    config: makeConfig({ profilesPath: "/path/that/does/not/exist.json" }),
+    env: {
+      TAURUSDB_SQL_DATASOURCE: "cloud_taurus",
+      TAURUSDB_SQL_ENGINE: "mysql",
+      TAURUSDB_SQL_DATABASE: "app",
+      TAURUSDB_SQL_USER: "ro",
+      TAURUSDB_SQL_PASSWORD: "env:MYSQL_RO_PASSWORD",
+    },
+  });
+
+  const profile = await loader.get("cloud_taurus");
+  assert.ok(profile);
+  assert.equal(profile.host, undefined);
+  assert.equal(profile.port, 3306);
+  assert.equal(profile.database, "app");
+  assert.equal(profile.readonlyUser.username, "ro");
+});
+
+test("runtime override profile loader applies host and port bindings", async () => {
+  const base = new SqlProfileLoader({
+    config: makeConfig({ profilesPath: "/path/that/does/not/exist.json" }),
+    env: {
+      TAURUSDB_SQL_DATASOURCE: "cloud_taurus",
+      TAURUSDB_SQL_DATABASE: "app",
+      TAURUSDB_SQL_USER: "ro",
+      TAURUSDB_SQL_PASSWORD: "env:MYSQL_RO_PASSWORD",
+    },
+  });
+  const loader = new RuntimeOverrideProfileLoader(base);
+
+  loader.setRuntimeTarget("cloud_taurus", {
+    host: "10.0.0.8",
+    port: 3307,
+    instanceId: "instance-1",
+  });
+
+  const profile = await loader.get("cloud_taurus");
+  assert.ok(profile);
+  assert.equal(profile.host, "10.0.0.8");
+  assert.equal(profile.port, 3307);
+  assert.deepEqual(loader.getRuntimeTarget("cloud_taurus"), {
+    host: "10.0.0.8",
+    port: 3307,
+    instanceId: "instance-1",
+    nodeId: undefined,
+  });
 });

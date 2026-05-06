@@ -346,6 +346,11 @@ export class ConnectionPoolManager implements ConnectionPool {
     if (!adapter) {
       throw new ConnectionPoolError(`No driver adapter registered for engine "${profile.engine}".`);
     }
+    if (!profile.host) {
+      throw new ConnectionPoolError(
+        `Datasource "${profile.name}" does not define a host. Select a cloud instance or configure host in the datasource profile.`,
+      );
+    }
 
     const credential = selectCredential(profile, mode);
     const password = await resolveCredentialValue(

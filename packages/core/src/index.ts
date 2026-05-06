@@ -15,6 +15,18 @@ export {
   resetConfigForTests,
 } from "./config/index.js";
 export type { Config } from "./config/index.js";
+export {
+  createSqlProfileLoader,
+  RuntimeOverrideProfileLoader,
+} from "./auth/sql-profile-loader.js";
+export type {
+  DataSourceProfile,
+  DatabaseEngine,
+  ProfileLoader,
+  RuntimeDataSourceTarget,
+  RuntimeTargetProfileLoader,
+  TlsOptions,
+} from "./auth/sql-profile-loader.js";
 
 export { DatasourceResolutionError } from "./context/datasource-resolver.js";
 export type {

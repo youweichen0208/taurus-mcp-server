@@ -1,11 +1,14 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
+  createSqlProfileLoader,
   getConfig,
+  RuntimeOverrideProfileLoader,
   redactConfigForLog,
   TaurusDBEngine,
   type CapabilitySnapshot,
   type Config,
+  type RuntimeTargetProfileLoader,
 } from "@huaweicloud/taurusdb-core";
 import { registerTools } from "./tools/registry.js";
 import { logger } from "@huaweicloud/taurusdb-core";
@@ -13,6 +16,7 @@ import { VERSION } from "./version.js";
 
 export interface ServerDeps {
   config: Config;
+  profileLoader: RuntimeTargetProfileLoader;
   engine: TaurusDBEngine;
   pingResponse: string;
   startupProbe?: CapabilitySnapshot;
@@ -20,7 +24,10 @@ export interface ServerDeps {
 
 export async function bootstrapDependencies(): Promise<ServerDeps> {
   const config = getConfig();
-  const engine = await TaurusDBEngine.create({ config });
+  const profileLoader = new RuntimeOverrideProfileLoader(
+    createSqlProfileLoader({ config }),
+  );
+  const engine = await TaurusDBEngine.create({ config, profileLoader });
   const defaultDatasource = await engine.getDefaultDataSource();
   let startupProbe: CapabilitySnapshot | undefined;
 
@@ -47,6 +54,7 @@ export async function bootstrapDependencies(): Promise<ServerDeps> {
 
   return {
     config,
+    profileLoader,
     engine,
     pingResponse: "pong",
     startupProbe,
