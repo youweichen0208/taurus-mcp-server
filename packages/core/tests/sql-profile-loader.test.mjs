@@ -79,7 +79,7 @@ test("profile loader uses env profile when file is absent", async () => {
   const profiles = await loader.load();
   assert.equal(profiles.size, 1);
 
-  const profile = profiles.get("env_default");
+  const profile = profiles.get("cloud_taurus");
   assert.ok(profile);
   assert.equal(profile.engine, "mysql");
   assert.equal(profile.host, "localhost");
@@ -87,7 +87,7 @@ test("profile loader uses env profile when file is absent", async () => {
   assert.equal(profile.readonlyUser.password.type, "env");
   assert.equal(profile.readonlyUser.password.key, "MYSQL_ROOT_PASSWORD");
 
-  assert.equal(await loader.getDefault(), "env_default");
+  assert.equal(await loader.getDefault(), "cloud_taurus");
 });
 
 test("profiles.json overrides env profile with same datasource name", async () => {
@@ -123,7 +123,7 @@ test("profile toString redacts password fields", async () => {
     },
   });
 
-  const profile = await loader.get("env_default");
+  const profile = await loader.get("cloud_taurus");
   assert.ok(profile);
 
   const rendered = profile.toString();

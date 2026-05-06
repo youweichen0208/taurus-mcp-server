@@ -379,7 +379,7 @@ function parseEngineFromDsnProtocol(protocol: string): DatabaseEngine {
 function parseEnvProfile(env: NodeJS.ProcessEnv): DataSourceProfile | undefined {
   const dsn = asString(env.TAURUSDB_SQL_DSN);
   const explicitHost = asString(env.TAURUSDB_SQL_HOST);
-  const profileName = asString(env.TAURUSDB_SQL_DATASOURCE) ?? "env_default";
+  const profileName = asString(env.TAURUSDB_SQL_DATASOURCE) ?? "cloud_taurus";
 
   let engine: DatabaseEngine;
   let host: string | undefined;

@@ -73,6 +73,16 @@ function pickFirstDefined<T>(...values: (T | undefined)[]): T | undefined {
   return undefined;
 }
 
+function hasSqlTemplateInputs(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(
+    readString(env.TAURUSDB_SQL_DSN) ||
+      readString(env.TAURUSDB_SQL_HOST) ||
+      readString(env.TAURUSDB_SQL_DATABASE) ||
+      readString(env.TAURUSDB_SQL_USER) ||
+      readString(env.TAURUSDB_SQL_PASSWORD),
+  );
+}
+
 function inferRegionFromValue(value: MaybeString): string | undefined {
   const normalized = readString(value);
   if (!normalized) {
@@ -167,9 +177,13 @@ function buildRawConfigFromEnv(
     readString(env.TAURUSDB_CLOUD_SECURITY_TOKEN),
     readString(env.TAURUSDB_CLOUD_SESSION_TOKEN),
   );
+  const inferredDatasourceName = hasSqlTemplateInputs(env)
+    ? readString(env.TAURUSDB_SQL_DATASOURCE) ?? "cloud_taurus"
+    : undefined;
 
   return {
-    defaultDatasource: readString(env.TAURUSDB_DEFAULT_DATASOURCE),
+    defaultDatasource:
+      readString(env.TAURUSDB_DEFAULT_DATASOURCE) ?? inferredDatasourceName,
     profilesPath: expandTildePath(readString(env.TAURUSDB_SQL_PROFILES)),
     enableMutations: parseBoolean(
       env.TAURUSDB_MCP_ENABLE_MUTATIONS,

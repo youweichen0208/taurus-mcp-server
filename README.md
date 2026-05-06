@@ -147,21 +147,26 @@ claude mcp get huaweicloud-taurusdb
 
 ### Minimal Template
 
-如果你使用环境变量，可以只保留模板字段：
+当前版本已经把这几个默认值内置好了：
+
+- 默认 `engine = mysql`
+- 默认 `datasource = cloud_taurus`
+- 只要检测到最小 SQL 模板输入，就会自动把 `cloud_taurus` 作为默认 datasource
+
+所以如果你使用环境变量，客户侧最小只需要：
 
 ```bash
-export TAURUSDB_SQL_ENGINE=mysql
-export TAURUSDB_SQL_DATASOURCE=cloud_taurus
 export TAURUSDB_SQL_DATABASE=<default-database>
 export TAURUSDB_SQL_USER=<readonly-user>
 export TAURUSDB_SQL_PASSWORD=<readonly-password>
-export TAURUSDB_DEFAULT_DATASOURCE=cloud_taurus
 ```
 
 这里的关键点是：
 
 - `database / user / password` 来自模板
 - `host / port` 来自当前选中的云实例
+- `engine` 默认按 `mysql` 处理，因为 TaurusDB for MySQL 走的是 MySQL 协议
+- `datasource` 默认使用 `cloud_taurus`
 
 ### Recommended Flow
 
@@ -203,6 +208,12 @@ export TAURUSDB_DEFAULT_DATASOURCE=cloud_taurus
 - MCP 自动把实例地址绑定到模板
 
 如果不同实例共用同一套只读账号和默认库名，这种方式会明显比“每次切实例都重新 export 一组 SQL env”更顺畅。
+
+如果你需要覆盖默认值，仍然可以显式设置：
+
+- `TAURUSDB_SQL_ENGINE`
+- `TAURUSDB_SQL_DATASOURCE`
+- `TAURUSDB_DEFAULT_DATASOURCE`
 
 ## Common Issues
 

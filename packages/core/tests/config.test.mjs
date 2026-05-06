@@ -253,6 +253,16 @@ test("config supports AK/SK-only cloud discovery inputs", () => {
   );
 });
 
+test("config infers default datasource from minimal SQL template inputs", () => {
+  const config = createConfigFromEnv({
+    TAURUSDB_SQL_DATABASE: "app",
+    TAURUSDB_SQL_USER: "ro",
+    TAURUSDB_SQL_PASSWORD: "env:MYSQL_RO_PASSWORD",
+  });
+
+  assert.equal(config.defaultDatasource, "cloud_taurus");
+});
+
 test("explicit per-source env values override shared cloud defaults", () => {
   const config = createConfigFromEnv({
     TAURUSDB_CLOUD_REGION: "cn-north-4",
