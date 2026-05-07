@@ -115,9 +115,8 @@ claude mcp get huaweicloud-taurusdb
 
 ### 5. Verify Database Data Plane
 
-控制面通过后，再补 datasource 相关配置，然后在 Claude Code 里调用：
+控制面通过后，再补最小数据面模板，然后在 Claude Code 里直接调用：
 
-- `list_data_sources`
 - `execute_readonly_sql` with `SELECT 1 AS ok`
 
 如果 `SELECT 1` 成功，说明数据库数据面也已连通。
@@ -150,8 +149,8 @@ claude mcp get huaweicloud-taurusdb
 当前版本已经把这几个默认值内置好了：
 
 - 默认 `engine = mysql`
-- 默认 `datasource = cloud_taurus`
-- 只要检测到最小 SQL 模板输入，就会自动把 `cloud_taurus` 作为默认 datasource
+- 默认 `datasource = taurus_mcp`
+- 只要检测到最小 SQL 模板输入，就会自动把 `taurus_mcp` 作为默认 datasource
 
 所以如果你使用环境变量，客户侧最小只需要：
 
@@ -166,22 +165,79 @@ export TAURUSDB_SQL_PASSWORD=<readonly-password>
 - `database / user / password` 来自模板
 - `host / port` 来自当前选中的云实例
 - `engine` 默认按 `mysql` 处理，因为 TaurusDB for MySQL 走的是 MySQL 协议
-- `datasource` 默认使用 `cloud_taurus`
+- `datasource` 默认使用 `taurus_mcp`
+
+### Connectivity Options
+
+在执行下面的推荐流程之前，先确认你的客户端是通过公网还是私网访问 TaurusDB。
+
+#### Option A: No ECS and Not in the Same VPC
+
+如果本机不在和 TaurusDB 相同的 VPC 内，也没有可用的 ECS / VPN / 专线中转，通常需要通过数据库的读写公网地址访问实例。
+
+建议配置：
+
+- 为 TaurusDB 实例开通读写公网地址
+- 在实例对应的安全组里放通你当前本机公网出口 IP，例如 `124.70.231.48/32`
+- 优先只放通数据库端口 `3306`
+
+可以先在本机终端获取当前公网出口 IP：
+
+```bash
+curl ifconfig.me; echo
+```
+
+例如返回：
+
+```text
+124.70.231.48
+```
+
+下图展示了一个将本机公网 IP 加入安全组规则的示例：
+
+![TaurusDB 安全组放通本机公网 IP 的示例](image-1.png)
+
+说明：
+
+- 常见情况下，安全组重点是入方向规则；如果你的环境对出方向也做了限制，再补充对应的出方向规则
+- 本机公网 IP 变化后，需要同步更新安全组规则
+- 这种方式适合本地开发、临时调试或从办公室网络直连云上数据库
+
+#### Option B: Use ECS in the Same VPC
+
+如果你有和 TaurusDB 位于同一 VPC 内的 ECS，或已经通过 VPN / 专线打通到该私网，优先使用读写内网地址连接实例，不必依赖公网地址。
+
+建议配置：
+
+- 在 ECS 或已打通私网的运行环境中部署 Claude Code / MCP Server / 业务程序
+- 使用 TaurusDB 的读写内网地址，例如 `192.168.x.x:3306`
+- 在安全组里只放通 ECS 所在网段、ECS 安全组，或最小必要来源
+
+说明：
+
+- 这是更推荐的长期方案，安全性和稳定性通常都更好
+- 一般不需要为数据库额外购买读写公网地址
+- 适合生产环境、固定云上开发机和长期运行的自动化任务
 
 ### Recommended Flow
 
-推荐的实际使用顺序：
+完成上面的网络打通后，推荐的实际使用顺序：
 
 1. 在 Claude Code 里调用 `list_cloud_taurus_instances`
 2. 调用 `select_cloud_taurus_instance`
-3. 再调用 `list_data_sources`
-4. 再调用 `execute_readonly_sql`，例如：
+3. 再调用 `execute_readonly_sql`，例如：
 
 ```json
 {
   "sql": "SELECT 1 AS ok"
 }
 ```
+
+下图展示了按上述顺序执行后的实际调用效果：
+
+![Claude Code 中的 TaurusDB MCP 调用示例](image.png)
+
+<p style="color: green;">Connected to TaurusDB instance successfully!</p>
 
 ### What `select_cloud_taurus_instance` Does Now
 
@@ -246,14 +302,16 @@ claude mcp get huaweicloud-taurusdb
 如果 `env` 为空，直接重配：
 
 ```bash
-claude mcp remove huaweicloud-taurusdb
-
-claude mcp add huaweicloud-taurusdb \
-  --transport stdio \
-  -e TAURUSDB_CLOUD_REGION=<your-region> \
-  -e TAURUSDB_CLOUD_ACCESS_KEY_ID=<your-ak> \
-  -e TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk> \
-  -- node /Users/youweichen/projects/taurus-mcp-server/packages/mcp/dist/index.js
+  claude mcp add "huaweicloud-taurusdb" \
+    --transport stdio \
+    -s local \
+    -e TAURUSDB_CLOUD_REGION=cn-east-3 \
+    -e TAURUSDB_CLOUD_ACCESS_KEY_ID=<your-ak> \
+    -e TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk> \
+    -e TAURUSDB_SQL_DATABASE=<your-database> \
+    -e TAURUSDB_SQL_USER=<your-readonly-user> \
+    -e TAURUSDB_SQL_PASSWORD=<your-readonly-password> \
+    -- node /Users/youweichen/projects/taurus-mcp-server/packages/mcp/dist/index.js
 ```
 
 如果是临时凭证，再补：
