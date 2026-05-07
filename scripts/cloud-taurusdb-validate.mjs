@@ -9,15 +9,13 @@ import {
   resolveHuaweiCloudProjectId,
 } from "@huaweicloud/taurusdb-core";
 
-const TRUE_PATTERN = /^(true|1|yes|on)$/i;
-
-function isEnabled(name) {
-  return TRUE_PATTERN.test(process.env[name] || "");
-}
-
 function optional(name, fallback = undefined) {
   const value = process.env[name]?.trim();
   return value || fallback;
+}
+
+function formatUnixSeconds(date) {
+  return String(Math.floor(date.getTime() / 1000));
 }
 
 function required(name) {
@@ -32,6 +30,30 @@ function safeJsonKeys(value) {
   return value && typeof value === "object" && !Array.isArray(value)
     ? Object.keys(value).join(",") || "<none>"
     : "<non-object>";
+}
+
+function formatCloudError(status, body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return `status=${status} body_type=${Array.isArray(body) ? "array" : typeof body}`;
+  }
+
+  const parts = [`status=${status}`, `keys=${safeJsonKeys(body)}`];
+  if (typeof body.error_code === "string" && body.error_code) {
+    parts.push(`error_code=${body.error_code}`);
+  }
+  if (typeof body.error_msg === "string" && body.error_msg) {
+    parts.push(`error_msg=${body.error_msg}`);
+  }
+  if (typeof body.code === "string" && body.code) {
+    parts.push(`code=${body.code}`);
+  }
+  if (typeof body.message === "string" && body.message) {
+    parts.push(`message=${body.message}`);
+  }
+  if (typeof body.raw === "string" && body.raw) {
+    parts.push(`raw=${body.raw}`);
+  }
+  return parts.join(" ");
 }
 
 async function readJson(response) {
@@ -184,44 +206,36 @@ async function validateMcpDataPlane(config) {
     });
     failed ||= !capabilityResult.ok;
 
-    if (isEnabled("TAURUSDB_CLOUD_VALIDATE_DIAGNOSTICS")) {
-      const topSlowResult = await runCheck("Diagnostics find_top_slow_sql", async () => {
-        const result = await engine.findTopSlowSql(
-          {
-            datasource: validationDatasource,
-            database: validationDatabase,
-            timeRange: { relative: optional("TAURUSDB_CLOUD_VALIDATE_TIME_RANGE", "30m") },
-            topN: Number(optional("TAURUSDB_CLOUD_VALIDATE_TOP_N", "5")),
-            sortBy: "total_latency",
-            evidenceLevel: "standard",
-          },
-          ctx,
-        );
-        return `status=${result.status} top_sqls=${result.topSqls.length} evidence=${result.evidence.map((item) => item.source).join(",") || "<none>"}`;
-      });
-      failed ||= !topSlowResult.ok;
-
-      const latencyResult = await runCheck("Diagnostics service latency", async () => {
-        const result = await engine.diagnoseServiceLatency(
-          {
-            datasource: validationDatasource,
-            database: validationDatabase,
-            symptom: "latency",
-            timeRange: { relative: optional("TAURUSDB_CLOUD_VALIDATE_TIME_RANGE", "30m") },
-            evidenceLevel: "standard",
-          },
-          ctx,
-        );
-        return `status=${result.status} candidates=${result.topCandidates.length} evidence=${result.evidence.map((item) => item.source).join(",") || "<none>"}`;
-      });
-      failed ||= !latencyResult.ok;
-    } else {
-      printCheck(
-        "Diagnostics validation",
-        true,
-        "skipped; set TAURUSDB_CLOUD_VALIDATE_DIAGNOSTICS=true to run read-only diagnostic checks",
+    const topSlowResult = await runCheck("Diagnostics find_top_slow_sql", async () => {
+      const result = await engine.findTopSlowSql(
+        {
+          datasource: validationDatasource,
+          database: validationDatabase,
+          timeRange: { relative: optional("TAURUSDB_CLOUD_VALIDATE_TIME_RANGE", "30m") },
+          topN: Number(optional("TAURUSDB_CLOUD_VALIDATE_TOP_N", "5")),
+          sortBy: "total_latency",
+          evidenceLevel: "standard",
+        },
+        ctx,
       );
-    }
+      return `status=${result.status} top_sqls=${result.topSqls.length} evidence=${result.evidence.map((item) => item.source).join(",") || "<none>"}`;
+    });
+    failed ||= !topSlowResult.ok;
+
+    const latencyResult = await runCheck("Diagnostics service latency", async () => {
+      const result = await engine.diagnoseServiceLatency(
+        {
+          datasource: validationDatasource,
+          database: validationDatabase,
+          symptom: "latency",
+          timeRange: { relative: optional("TAURUSDB_CLOUD_VALIDATE_TIME_RANGE", "30m") },
+          evidenceLevel: "standard",
+        },
+        ctx,
+      );
+      return `status=${result.status} candidates=${result.topCandidates.length} evidence=${result.evidence.map((item) => item.source).join(",") || "<none>"}`;
+    });
+    failed ||= !latencyResult.ok;
 
     return {
       failed,
@@ -358,12 +372,16 @@ async function validateDas(config) {
   const projectId = das.projectId;
   const instanceId = das.instanceId;
   const datastoreType = das.datastoreType;
+  const switchType = "DAS Slow Query Log";
+  const now = Date.now();
+  const endAt = formatUnixSeconds(new Date(now));
+  const startAt = formatUnixSeconds(new Date(now - 60 * 60 * 1000));
 
   let failed = false;
 
   const switchResult = await runCheck("DAS sql/switch", async () => {
     const response = await fetchHuaweiCloud({
-      url: `${endpoint}/v3/${projectId}/instances/${instanceId}/sql/switch`,
+      url: `${endpoint}/v3/${projectId}/instances/${instanceId}/sql/switch?type=${encodeURIComponent(switchType)}&datastore_type=${encodeURIComponent(datastoreType)}`,
       headers: {
         "content-type": "application/json",
       },
@@ -375,7 +393,10 @@ async function validateDas(config) {
     });
     const body = await readJson(response);
     if (!response.ok) {
-      throw new Error(`status=${response.status} keys=${safeJsonKeys(body)}`);
+      if (response.status === 400 && body?.error_code === "DAS.200114") {
+        return "skipped; DAS sql/switch returned DAS.200114 (Invalid parameter instance_id). Most likely causes: the current instance is on the basic/free DAS tier and does not support this paid-instance switch-management API, or this API expects a different DAS-side instance identifier than the TaurusDB instance_id. top-slow-log can still succeed in this case.";
+      }
+      throw new Error(formatCloudError(response.status, body));
     }
     return `status=${response.status} keys=${safeJsonKeys(body)}`;
   });
@@ -383,7 +404,7 @@ async function validateDas(config) {
 
   const topSlowResult = await runCheck("DAS top-slow-log", async () => {
     const response = await fetchHuaweiCloud({
-      url: `${endpoint}/v3/${projectId}/instances/${instanceId}/top-slow-log?datastore_type=${encodeURIComponent(datastoreType)}&num=1`,
+      url: `${endpoint}/v3/${projectId}/instances/${instanceId}/top-slow-log?datastore_type=${encodeURIComponent(datastoreType)}&start_at=${encodeURIComponent(startAt)}&end_at=${encodeURIComponent(endAt)}&num=1`,
       headers: {
         "content-type": "application/json",
       },
@@ -395,7 +416,7 @@ async function validateDas(config) {
     });
     const body = await readJson(response);
     if (!response.ok) {
-      throw new Error(`status=${response.status} keys=${safeJsonKeys(body)}`);
+      throw new Error(formatCloudError(response.status, body));
     }
     return `status=${response.status} keys=${safeJsonKeys(body)}`;
   });
@@ -459,7 +480,7 @@ async function validateCes(config) {
     });
     const payload = await readJson(response);
     if (!response.ok) {
-      throw new Error(`status=${response.status} keys=${safeJsonKeys(payload)}`);
+      throw new Error(formatCloudError(response.status, payload));
     }
     return `status=${response.status} keys=${safeJsonKeys(payload)}`;
   });

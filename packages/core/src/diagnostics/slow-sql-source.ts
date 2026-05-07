@@ -693,10 +693,16 @@ export class DasSlowSqlSource implements SlowSqlSource {
     input: FindTopSlowSqlInput,
     _ctx: SessionContext,
   ): Promise<ExternalSlowSqlSample[]> {
+    const timeWindow = normalizeTimeRange(
+      input.timeRange,
+      this.defaultLookbackMinutes,
+    );
     const payload = await this.getJson(
       `/v3/${this.projectId}/instances/${this.instanceId}/top-slow-log`,
       {
         datastore_type: this.datastoreType,
+        start_at: formatUnixSeconds(new Date(timeWindow.startTime)),
+        end_at: formatUnixSeconds(new Date(timeWindow.endTime)),
         num: Math.min(input.topN ?? 5, this.maxRecords),
       },
     );
