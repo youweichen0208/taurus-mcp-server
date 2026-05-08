@@ -17,7 +17,6 @@ import {
 import {
   describeTableTool,
   listDatabasesTool,
-  listDataSourcesTool,
   listTablesTool,
 } from "./discovery.js";
 import { showProcesslistTool } from "./processlist.js";
@@ -140,7 +139,6 @@ function registerOneTool(
 
 export const commonToolDefinitions: ToolDefinition[] = [
   pingTool,
-  listDataSourcesTool,
   listDatabasesTool,
   listTablesTool,
   describeTableTool,

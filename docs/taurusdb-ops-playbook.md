@@ -52,7 +52,7 @@
 
 ```json
 {
-  "datasource": "cloud_taurus",
+  "datasource": "taurus_mcp",
   "database": "app",
   "symptom": "latency",
   "time_range": { "relative": "30m" },
@@ -64,7 +64,7 @@
 
 ```json
 {
-  "datasource": "cloud_taurus",
+  "datasource": "taurus_mcp",
   "database": "app",
   "time_range": { "relative": "30m" },
   "top_n": 5,
@@ -76,7 +76,7 @@
 
 ```json
 {
-  "datasource": "cloud_taurus",
+  "datasource": "taurus_mcp",
   "database": "app",
   "sql": "SELECT ...",
   "time_range": { "relative": "30m" },
@@ -126,7 +126,7 @@ TaurusDB 特性怎么参与：
 
 ```json
 {
-  "datasource": "cloud_taurus",
+  "datasource": "taurus_mcp",
   "database": "app",
   "time_range": { "relative": "15m" },
   "compare_baseline": true,
@@ -138,7 +138,7 @@ TaurusDB 特性怎么参与：
 
 ```json
 {
-  "datasource": "cloud_taurus",
+  "datasource": "taurus_mcp",
   "database": "app",
   "user": "app_user",
   "client_host": "10.0.",
@@ -186,7 +186,7 @@ TaurusDB 特性怎么参与：
 
 ```json
 {
-  "datasource": "cloud_taurus",
+  "datasource": "taurus_mcp",
   "database": "app",
   "time_range": { "relative": "15m" },
   "evidence_level": "full",
@@ -198,7 +198,7 @@ TaurusDB 特性怎么参与：
 
 ```json
 {
-  "datasource": "cloud_taurus",
+  "datasource": "taurus_mcp",
   "database": "app",
   "table": "orders",
   "evidence_level": "full"
@@ -246,7 +246,7 @@ TaurusDB 特性怎么参与：
 
 ```json
 {
-  "datasource": "cloud_taurus",
+  "datasource": "taurus_mcp",
   "database": "app",
   "time_range": { "relative": "30m" },
   "evidence_level": "full",
@@ -295,7 +295,7 @@ TaurusDB 特性怎么参与：
 
 ```json
 {
-  "datasource": "cloud_taurus",
+  "datasource": "taurus_mcp",
   "database": "app",
   "scope": "instance",
   "time_range": { "relative": "30m" },
@@ -307,7 +307,7 @@ TaurusDB 特性怎么参与：
 
 ```json
 {
-  "datasource": "cloud_taurus",
+  "datasource": "taurus_mcp",
   "database": "app",
   "scope": "table",
   "table": "orders",

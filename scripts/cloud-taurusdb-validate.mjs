@@ -480,7 +480,26 @@ async function validateCes(config) {
     });
     const payload = await readJson(response);
     if (!response.ok) {
-      throw new Error(formatCloudError(response.status, payload));
+      const context = [
+        `project_id=${projectId}`,
+        `instance_id=${instanceId}`,
+        `node_id=${nodeId || "<none>"}`,
+        `namespace=${namespace}`,
+        `instance_dimension=${instanceDimension}`,
+        `node_dimension=${nodeDimension}`,
+      ].join(" ");
+      if (
+        response.status === 400 &&
+        payload &&
+        typeof payload === "object" &&
+        !Array.isArray(payload) &&
+        typeof payload.encoded_authorization_message === "string"
+      ) {
+        throw new Error(
+          `${formatCloudError(response.status, payload)} ${context} hint=CES authorization or scope mismatch; verify IAM/CES query permission and confirm the project_id / instance_id / node_id dimensions match this instance.`,
+        );
+      }
+      throw new Error(`${formatCloudError(response.status, payload)} ${context}`);
     }
     return `status=${response.status} keys=${safeJsonKeys(payload)}`;
   });

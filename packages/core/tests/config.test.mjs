@@ -260,7 +260,7 @@ test("config infers default datasource from minimal SQL template inputs", () => 
     TAURUSDB_SQL_PASSWORD: "env:MYSQL_RO_PASSWORD",
   });
 
-  assert.equal(config.defaultDatasource, "cloud_taurus");
+  assert.equal(config.defaultDatasource, "taurus_mcp");
 });
 
 test("explicit per-source env values override shared cloud defaults", () => {

@@ -178,7 +178,7 @@ function buildRawConfigFromEnv(
     readString(env.TAURUSDB_CLOUD_SESSION_TOKEN),
   );
   const inferredDatasourceName = hasSqlTemplateInputs(env)
-    ? readString(env.TAURUSDB_SQL_DATASOURCE) ?? "cloud_taurus"
+    ? readString(env.TAURUSDB_SQL_DATASOURCE) ?? "taurus_mcp"
     : undefined;
 
   return {

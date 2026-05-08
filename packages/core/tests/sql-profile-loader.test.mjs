@@ -79,7 +79,7 @@ test("profile loader uses env profile when file is absent", async () => {
   const profiles = await loader.load();
   assert.equal(profiles.size, 1);
 
-  const profile = profiles.get("cloud_taurus");
+  const profile = profiles.get("taurus_mcp");
   assert.ok(profile);
   assert.equal(profile.engine, "mysql");
   assert.equal(profile.host, "localhost");
@@ -87,7 +87,7 @@ test("profile loader uses env profile when file is absent", async () => {
   assert.equal(profile.readonlyUser.password.type, "env");
   assert.equal(profile.readonlyUser.password.key, "MYSQL_ROOT_PASSWORD");
 
-  assert.equal(await loader.getDefault(), "cloud_taurus");
+  assert.equal(await loader.getDefault(), "taurus_mcp");
 });
 
 test("profiles.json overrides env profile with same datasource name", async () => {
@@ -123,7 +123,7 @@ test("profile toString redacts password fields", async () => {
     },
   });
 
-  const profile = await loader.get("cloud_taurus");
+  const profile = await loader.get("taurus_mcp");
   assert.ok(profile);
 
   const rendered = profile.toString();
@@ -152,7 +152,7 @@ test("profile loader supports env datasource templates without host", async () =
   const loader = new SqlProfileLoader({
     config: makeConfig({ profilesPath: "/path/that/does/not/exist.json" }),
     env: {
-      TAURUSDB_SQL_DATASOURCE: "cloud_taurus",
+      TAURUSDB_SQL_DATASOURCE: "taurus_mcp",
       TAURUSDB_SQL_ENGINE: "mysql",
       TAURUSDB_SQL_DATABASE: "app",
       TAURUSDB_SQL_USER: "ro",
@@ -160,7 +160,7 @@ test("profile loader supports env datasource templates without host", async () =
     },
   });
 
-  const profile = await loader.get("cloud_taurus");
+  const profile = await loader.get("taurus_mcp");
   assert.ok(profile);
   assert.equal(profile.host, undefined);
   assert.equal(profile.port, 3306);
@@ -172,7 +172,7 @@ test("runtime override profile loader applies host and port bindings", async () 
   const base = new SqlProfileLoader({
     config: makeConfig({ profilesPath: "/path/that/does/not/exist.json" }),
     env: {
-      TAURUSDB_SQL_DATASOURCE: "cloud_taurus",
+      TAURUSDB_SQL_DATASOURCE: "taurus_mcp",
       TAURUSDB_SQL_DATABASE: "app",
       TAURUSDB_SQL_USER: "ro",
       TAURUSDB_SQL_PASSWORD: "env:MYSQL_RO_PASSWORD",
@@ -180,17 +180,17 @@ test("runtime override profile loader applies host and port bindings", async () 
   });
   const loader = new RuntimeOverrideProfileLoader(base);
 
-  loader.setRuntimeTarget("cloud_taurus", {
+  loader.setRuntimeTarget("taurus_mcp", {
     host: "10.0.0.8",
     port: 3307,
     instanceId: "instance-1",
   });
 
-  const profile = await loader.get("cloud_taurus");
+  const profile = await loader.get("taurus_mcp");
   assert.ok(profile);
   assert.equal(profile.host, "10.0.0.8");
   assert.equal(profile.port, 3307);
-  assert.deepEqual(loader.getRuntimeTarget("cloud_taurus"), {
+  assert.deepEqual(loader.getRuntimeTarget("taurus_mcp"), {
     host: "10.0.0.8",
     port: 3307,
     instanceId: "instance-1",

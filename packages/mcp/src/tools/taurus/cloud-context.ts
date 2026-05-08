@@ -51,10 +51,11 @@ async function resolveBindingDatasource(
 }
 
 function selectInstanceAddress(input: {
+  publicIps: string[];
   privateIps: string[];
   hostnames: string[];
 }): string | undefined {
-  return input.privateIps[0] ?? input.hostnames[0];
+  return input.publicIps[0] ?? input.privateIps[0] ?? input.hostnames[0];
 }
 
 function normalizePort(port: string | number | undefined): number | undefined {

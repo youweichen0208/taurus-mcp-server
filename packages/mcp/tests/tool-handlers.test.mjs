@@ -10,7 +10,6 @@ import {
 } from "../dist/tools/query.js";
 import {
   describeTableTool,
-  listDataSourcesTool,
 } from "../dist/tools/discovery.js";
 import { showProcesslistTool } from "../dist/tools/processlist.js";
 import {
@@ -40,9 +39,9 @@ function createDeps(engineOverrides = {}) {
   const runtimeTargets = new Map();
   const profiles = new Map([
     [
-      "cloud_taurus",
+      "taurus_mcp",
       {
-        name: "cloud_taurus",
+        name: "taurus_mcp",
         engine: "mysql",
         host: undefined,
         port: 3306,
@@ -68,7 +67,7 @@ function createDeps(engineOverrides = {}) {
         return new Map(profiles);
       },
       async getDefault() {
-        return "cloud_taurus";
+        return "taurus_mcp";
       },
       async get(name) {
         return profiles.get(name);
@@ -494,38 +493,6 @@ function createDeps(engineOverrides = {}) {
 
 const context = { taskId: "task_test_1" };
 
-test("list_data_sources returns public datasource metadata", async () => {
-  const deps = createDeps({
-    listDataSources: async () => [
-      {
-        name: "main",
-        engine: "mysql",
-        host: "127.0.0.1",
-        port: 3306,
-        database: "app",
-        hasMutationUser: true,
-        poolSize: 8,
-        isDefault: true,
-      },
-    ],
-    getDefaultDataSource: async () => "main",
-  });
-
-  const result = await listDataSourcesTool.handler({}, deps, context);
-  assert.equal(result.ok, true);
-  assert.equal(result.data.default_datasource, "main");
-  assert.deepEqual(result.data.items[0], {
-    name: "main",
-    engine: "mysql",
-    host: "127.0.0.1",
-    port: 3306,
-    database: "app",
-    has_mutation_user: true,
-    pool_size: 8,
-    is_default: true,
-  });
-});
-
 test("describe_table validates required database context", async () => {
   const deps = createDeps({
     resolveContext: async (_input, taskId) => ({
@@ -861,9 +828,9 @@ test("list_cloud_taurus_instances returns structured cloud instance list", async
   }
 });
 
-test("select_cloud_taurus_instance binds runtime host to the active datasource", async () => {
+test("select_cloud_taurus_instance prefers public host when binding runtime datasource", async () => {
   const deps = createDeps({
-    getDefaultDataSource: async () => "cloud_taurus",
+    getDefaultDataSource: async () => "taurus_mcp",
     close: async () => {},
   });
   const originalFetch = globalThis.fetch;
@@ -902,10 +869,10 @@ test("select_cloud_taurus_instance binds runtime host to the active datasource",
     );
 
     assert.equal(result.ok, true);
-    assert.equal(result.data.bound_datasource, "cloud_taurus");
-    assert.equal(result.data.bound_host, "10.0.0.8");
-    assert.deepEqual(deps.profileLoader.getRuntimeTarget("cloud_taurus"), {
-      host: "10.0.0.8",
+    assert.equal(result.data.bound_datasource, "taurus_mcp");
+    assert.equal(result.data.bound_host, "1.2.3.4");
+    assert.deepEqual(deps.profileLoader.getRuntimeTarget("taurus_mcp"), {
+      host: "1.2.3.4",
       port: 3306,
       instanceId: "instance-1",
       nodeId: "node-1",

@@ -1956,6 +1956,33 @@ export class TaurusDBEngine {
     return parseStatementDigestRows(result);
   }
 
+  async isPerformanceSchemaEnabled(
+    ctx: SessionContext,
+  ): Promise<boolean | undefined> {
+    try {
+      const result = await this.executor.executeReadonly(
+        "SELECT @@performance_schema AS performance_schema_enabled",
+        ctx,
+        {
+          maxRows: 1,
+          maxColumns: 1,
+          maxFieldChars: 64,
+          timeoutMs: ctx.limits.timeoutMs,
+        },
+      );
+      const value = result.rows?.[0]?.[0];
+      if (typeof value === "number") {
+        return value === 1;
+      }
+      if (typeof value === "string") {
+        return value === "1" || value.toLowerCase() === "on";
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   async findStorageStatementDigests(
     input: DiagnoseStoragePressureInput,
     ctx: SessionContext,
@@ -3219,11 +3246,15 @@ export class TaurusDBEngine {
       ]);
 
       if (digestRows.length === 0 && externalTopSqls.length === 0) {
+        const performanceSchemaEnabled =
+          await this.isPerformanceSchemaEnabled(ctx);
         return {
           tool: "find_top_slow_sql",
           status: "inconclusive",
           summary: withDatasourceSummary(
-            "No statement digest ranking evidence was available for top slow SQL discovery",
+            performanceSchemaEnabled === false
+              ? "Top slow SQL discovery could not collect local digest evidence because performance_schema is disabled"
+              : "No statement digest ranking evidence was available for top slow SQL discovery",
             ctx.datasource,
           ),
           diagnosisWindow: {
@@ -3237,13 +3268,17 @@ export class TaurusDBEngine {
               source: "statement_digest",
               title: "Statement digest ranking",
               summary:
-                "No matching rows were returned from performance_schema.events_statements_summary_by_digest, and no external Taurus slow-SQL ranking was available.",
+                performanceSchemaEnabled === false
+                  ? "performance_schema is disabled on the selected datasource. performance_schema.events_statements_summary_by_digest is therefore unavailable for local slow-SQL digest discovery."
+                  : "No matching rows were returned from performance_schema.events_statements_summary_by_digest, and no external Taurus slow-SQL ranking was available.",
             },
           ],
           limitations: [
-            this.slowSqlSource?.findTop
-              ? "Neither performance_schema digest ranking nor the configured external Taurus slow-SQL ranking returned usable rows."
-              : "This discovery currently depends on performance_schema digest summaries being enabled and populated.",
+            performanceSchemaEnabled === false
+              ? "performance_schema is currently disabled. Enable it and repopulate statement activity if you want local digest-based slow SQL discovery."
+              : this.slowSqlSource?.findTop
+                ? "Neither performance_schema digest ranking nor the configured external Taurus slow-SQL ranking returned usable rows."
+                : "This discovery currently depends on performance_schema digest summaries being enabled and populated.",
             "The selected time_range is not yet enforced against cumulative digest counters; current ranking reflects retained digest summaries.",
           ],
         };

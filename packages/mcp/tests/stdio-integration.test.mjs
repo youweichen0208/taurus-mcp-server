@@ -48,7 +48,6 @@ test("stdio transport exposes expected tools and keeps logs on stderr", async ()
     const toolNames = tools.tools.map((tool) => tool.name);
     assert.deepEqual(toolNames, [
       "ping",
-      "list_data_sources",
       "list_databases",
       "list_tables",
       "describe_table",
@@ -80,14 +79,6 @@ test("stdio transport exposes expected tools and keeps logs on stderr", async ()
     assert.equal(ping.structuredContent.summary, "pong");
     assert.equal(ping.structuredContent.data.value, "pong");
     assert.match(ping.structuredContent.metadata.task_id, /^task_/);
-
-    const listDataSources = await client.callTool({
-      name: "list_data_sources",
-      arguments: {},
-    });
-    assert.equal(listDataSources.isError, false);
-    assert.equal(listDataSources.structuredContent.ok, true);
-    assert.deepEqual(listDataSources.structuredContent.data.items, []);
 
     const stderrOutput = stderr.read();
     assert.match(stderrOutput, /Starting MCP server/);

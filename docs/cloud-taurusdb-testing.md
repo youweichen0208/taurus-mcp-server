@@ -33,13 +33,13 @@
 
 ```bash
 export TAURUSDB_SQL_ENGINE=mysql
-export TAURUSDB_SQL_DATASOURCE=cloud_taurus
+export TAURUSDB_SQL_DATASOURCE=taurus_mcp
 export TAURUSDB_SQL_HOST='<taurusdb-private-host>'
 export TAURUSDB_SQL_PORT=3306
 export TAURUSDB_SQL_DATABASE='<database>'
 export TAURUSDB_SQL_USER='<readonly-user>'
 export TAURUSDB_SQL_PASSWORD='<readonly-password>'
-export TAURUSDB_DEFAULT_DATASOURCE=cloud_taurus
+export TAURUSDB_DEFAULT_DATASOURCE=taurus_mcp
 ```
 
 如果要验证写操作确认流，再补：
@@ -59,9 +59,9 @@ export TAURUSDB_SQL_MUTATION_PASSWORD='<mutation-password>'
 
 ```json
 {
-  "defaultDatasource": "cloud_taurus",
+  "defaultDatasource": "taurus_mcp",
   "dataSources": {
-    "cloud_taurus": {
+    "taurus_mcp": {
       "engine": "mysql",
       "host": "<taurusdb-private-host>",
       "port": 3306,
@@ -89,7 +89,7 @@ export TAURUSDB_SQL_MUTATION_PASSWORD='<mutation-password>'
 
 ```bash
 export TAURUSDB_SQL_PROFILES=/path/to/profiles.json
-export TAURUSDB_DEFAULT_DATASOURCE=cloud_taurus
+export TAURUSDB_DEFAULT_DATASOURCE=taurus_mcp
 ```
 
 ---
@@ -239,14 +239,12 @@ npm run cloud:validate
 
 第二步：再验证数据面。
 
-先配置 datasource，然后在 MCP 客户端里调用：
+先配置 datasource，然后在 MCP 客户端里直接调用：
 
-1. `list_data_sources`
-2. `execute_readonly_sql`，执行 `SELECT 1 AS ok`
+1. `execute_readonly_sql`，执行 `SELECT 1 AS ok`
 
 通过标准：
 
-- `list_data_sources` 能看到目标 datasource
 - `execute_readonly_sql` 成功返回
 - 查询结果中返回 `1`
 
@@ -275,7 +273,7 @@ npm run cloud:validate
 可选增强项：
 
 ```bash
-export TAURUSDB_CLOUD_VALIDATE_DATASOURCE=cloud_taurus
+export TAURUSDB_CLOUD_VALIDATE_DATASOURCE=taurus_mcp
 export TAURUSDB_CLOUD_VALIDATE_DATABASE='<database>'
 export TAURUSDB_CLOUD_VALIDATE_TABLE='<table>'
 export TAURUSDB_CLOUD_VALIDATE_EXPLAIN_SQL='SELECT * FROM <table> WHERE id = 1'
@@ -328,13 +326,12 @@ node /path/to/taurus-mcp-server/packages/mcp/dist/index.js
 
 第一轮：通用主链路。
 
-1. `list_data_sources`
-2. `list_databases`
-3. `list_tables`
-4. `describe_table`
-5. `execute_readonly_sql`
-6. `explain_sql`
-7. `execute_sql` 首次返回 `CONFIRMATION_REQUIRED`，第二次带 `confirmation_token` 执行
+1. `list_databases`
+2. `list_tables`
+3. `describe_table`
+4. `execute_readonly_sql`
+5. `explain_sql`
+6. `execute_sql` 首次返回 `CONFIRMATION_REQUIRED`，第二次带 `confirmation_token` 执行
 
 第二轮：Taurus 专属能力。
 

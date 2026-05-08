@@ -49,7 +49,7 @@ export function formatToolError(error: unknown, context: ToolErrorContext): Tool
     if (error.code === "DATASOURCE_NOT_FOUND") {
       return formatError({
         code: ErrorCode.DATASOURCE_NOT_FOUND,
-        message: `${error.message} Call list_data_sources to inspect available datasources.`,
+        message: `${error.message} Verify the active datasource template or pass an explicit datasource name.`,
         summary: `${context.action} failed because datasource could not be resolved.`,
         metadata: context.metadata,
       });

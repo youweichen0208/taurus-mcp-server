@@ -42,7 +42,6 @@ test("tool registry registers default MCP tools through legacy tool API", async 
     calls.map((call) => call.name),
     [
       "ping",
-      "list_data_sources",
       "list_databases",
       "list_tables",
       "describe_table",

@@ -237,8 +237,6 @@ curl ifconfig.me; echo
 
 ![Claude Code 中的 TaurusDB MCP 调用示例](image.png)
 
-<p style="color: green;">Connected to TaurusDB instance successfully!</p>
-
 ### What `select_cloud_taurus_instance` Does Now
 
 除了设置当前会话的：
