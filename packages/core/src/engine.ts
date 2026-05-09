@@ -442,6 +442,14 @@ function parseLockWaitRows(result: QueryResult): LockWaitRow[] {
   });
 }
 
+function isIdleTransactionBlocker(row: LockWaitRow): boolean {
+  return (
+    row.blockingSessionId !== undefined &&
+    row.blockingTrxState !== undefined &&
+    (row.blockingState === undefined || row.blockingState === "Sleep")
+  );
+}
+
 function parseOptionalNumber(value: unknown): number | undefined {
   return typeof value === "number"
     ? value
@@ -3995,10 +4003,19 @@ export class TaurusDBEngine {
       (row) =>
         row.waitingLockType === "TABLE" || row.blockingLockType === "TABLE",
     );
+    const idleTransactionBlockers = rows.filter(isIdleTransactionBlocker);
     const topBlocker = blockerCounts[0];
     const topTable = tableCounts[0];
 
     const rootCauseCandidates: DiagnosticRootCauseCandidate[] = [];
+    if (idleTransactionBlockers.length > 0) {
+      rootCauseCandidates.push({
+        code: "lock_contention_idle_transaction_blocker",
+        title: "Idle transaction blocker is holding locks",
+        confidence: idleTransactionBlockers.length >= 2 ? "high" : "medium",
+        rationale: `${idleTransactionBlockers.length} current waits are blocked by sessions with no active processlist state while their transaction is still active; an idle session can continue holding row locks until COMMIT or ROLLBACK.`,
+      });
+    }
     if (topBlocker && topBlocker.count >= 2) {
       rootCauseCandidates.push({
         code: "lock_contention_single_blocker_hotspot",
@@ -4092,9 +4109,11 @@ export class TaurusDBEngine {
       user: row.blockingUser,
       state: row.blockingState ?? row.blockingTrxState,
       reason:
-        topBlocker && row.blockingSessionId === topBlocker.key
-          ? `Top blocker in the current snapshot with ${topBlocker.count} waiting sessions.`
-          : `Observed as a blocker in the current lock-wait snapshot${row.blockingTrxAgeSeconds !== undefined ? `; transaction age ${row.blockingTrxAgeSeconds}s` : ""}.`,
+        isIdleTransactionBlocker(row)
+          ? `Observed as a blocker with no active processlist state; the transaction is still ${row.blockingTrxState}${row.blockingTrxAgeSeconds !== undefined ? ` and has been open for ${row.blockingTrxAgeSeconds}s` : ""}, so it can keep row locks until COMMIT or ROLLBACK.`
+          : topBlocker && row.blockingSessionId === topBlocker.key
+            ? `Top blocker in the current snapshot with ${topBlocker.count} waiting sessions.`
+            : `Observed as a blocker in the current lock-wait snapshot${row.blockingTrxAgeSeconds !== undefined ? `; transaction age ${row.blockingTrxAgeSeconds}s` : ""}.`,
     }));
     const suspiciousTables = tableCounts.slice(0, 3).map((entry) => ({
       table: entry.key,
@@ -4143,6 +4162,11 @@ export class TaurusDBEngine {
         `Blocking session ${topBlocker.key} accounts for ${topBlocker.count} waits in the current snapshot.`,
       );
     }
+    if (idleTransactionBlockers.length > 0) {
+      keyFindings.push(
+        `${idleTransactionBlockers.length} waits are blocked by idle sessions with active transactions; an idle processlist state does not imply locks are released when the transaction remains uncommitted.`,
+      );
+    }
     if (topTable) {
       keyFindings.push(
         `Most waits are concentrated on ${topTable.key} (${topTable.count} waits).`,
@@ -4175,6 +4199,11 @@ export class TaurusDBEngine {
       "Inspect the blocker session in show_processlist with include_info=true before terminating it.",
       "Review transaction scope and commit timing in the blocking application path to reduce lock hold time.",
     ];
+    if (idleTransactionBlockers.length > 0) {
+      recommendedActions.push(
+        "For idle blocker sessions (Sleep or no active processlist state), verify whether the application left a transaction uncommitted; prefer COMMIT or ROLLBACK from the owning client before considering KILL.",
+      );
+    }
     if (topTable) {
       recommendedActions.push(
         `Review the access pattern and indexing on ${topTable.key} to reduce hot-row or hot-table conflicts.`,
@@ -4207,10 +4236,17 @@ export class TaurusDBEngine {
       },
     ];
     if (topBlocker) {
+      const idleBlocker = rows.find(
+        (row) =>
+          row.blockingSessionId === topBlocker.key &&
+          isIdleTransactionBlocker(row),
+      );
       evidence.push({
         source: "lock_waits",
         title: "Dominant blocker session",
-        summary: `Session ${topBlocker.key} is blocking ${topBlocker.count} current waits.`,
+        summary: idleBlocker
+          ? `Session ${topBlocker.key} is blocking ${topBlocker.count} current waits while it has no active processlist state; its transaction is still ${idleBlocker.blockingTrxState}, so an uncommitted transaction can continue holding locks.`
+          : `Session ${topBlocker.key} is blocking ${topBlocker.count} current waits.`,
       });
     }
     if (topTable) {

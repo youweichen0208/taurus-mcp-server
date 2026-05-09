@@ -462,6 +462,11 @@ LIMIT 200 OFFSET 20000;
 
 如果需要更多活跃连接，再额外开会话 D、E 执行同类慢 SQL。
 
+![alt text](image-1.png)
+
+无ces指标：
+![alt text](image-4.png)
+
 #### 4.3.4 MCP 调用
 
 先调用：
@@ -523,11 +528,14 @@ LIMIT 200 OFFSET 20000;
 
 - 验证工具是否能识别 blocker / waiter
 - 验证工具是否能识别行锁竞争
+- 验证工具是否能识别 `Sleep` 或无活跃 SQL 但事务未提交的 blocker
+- 验证多 waiter 被同一个 blocker 阻塞时的聚合诊断能力
+- 验证无锁基线和解锁后复测结果
 - 验证 `diagnose_lock_contention` 是否返回结构化证据和根因方向
 
 #### 4.4.2 前置准备
 
-确保热点表和测试数据已存在：
+确保热点表和测试数据已存在。建议在 DBeaver / DataGrip 中执行写 SQL，因为 MCP 默认只读工具不执行 DDL / DML。
 
 ```sql
 INSERT INTO t_hot_counter_test (counter_key, counter_value, updated_at)
@@ -535,9 +543,38 @@ VALUES ('global', 0, NOW())
 ON DUPLICATE KEY UPDATE updated_at = NOW();
 ```
 
-#### 4.4.3 触发步骤
+建议至少准备 3 到 4 个数据库会话：
 
-1. 会话 A：
+- 会话 A：持有事务不提交，作为 blocker
+- 会话 B：更新同一行，作为 waiter
+- 会话 C：可选，更新同一行，制造多 waiter
+- 会话 D：可选，用于执行 `ALTER TABLE` 验证 metadata lock / 表级锁方向
+
+#### 4.4.3 场景 0：无锁竞争基线
+
+在没有任何未提交事务和阻塞 SQL 时，先调用锁竞争诊断，作为正常状态对照。
+
+自然语言触发：
+
+```text
+帮我分析 taurusdb_test 当前是否存在锁竞争，使用完整证据级别，并返回原始证据。
+```
+
+预期结果：
+
+- 当前锁等待数为 0，或返回无明显锁竞争
+- 当前实现通常返回 `status=inconclusive`、`severity=info`，表示当前快照没有捕获到锁等待，不代表工具失败
+- 这张图用于证明工具在无问题时不会误报
+
+截图点：
+
+1. 无锁竞争时的 `diagnose_lock_contention` 结果截图
+
+#### 4.4.4 场景 1：单 blocker / 单 waiter 行锁竞争
+
+这个场景建议按“先看 blocker，再看 waiter，然后看 processlist，最后看诊断结果”的顺序阅读截图。
+
+会话 A 执行：
 
 ```sql
 BEGIN;
@@ -546,13 +583,11 @@ SET counter_value = counter_value + 1, updated_at = NOW()
 WHERE counter_key = 'global';
 ```
 
-2. 不提交会话 A
-3. 会话 B 对同一行执行相同 `UPDATE`
-4. 保持会话 B 挂起，制造锁等待窗口
-5. 在阻塞窗口内调用 `show_processlist`
-6. 再调用 `diagnose_lock_contention`
+执行后不要提交，让会话 A 持有 `global` 这一行的行锁。
 
-会话 B：
+![场景 1：会话 A 开启事务并持有热点行锁](image-7.png)
+
+会话 B 执行：
 
 ```sql
 UPDATE t_hot_counter_test
@@ -560,59 +595,183 @@ SET counter_value = counter_value + 1, updated_at = NOW()
 WHERE counter_key = 'global';
 ```
 
-#### 4.4.4 MCP 调用
+会话 B 会被挂起，保持这个阻塞窗口，不要中断。
 
-先调用：
+![场景 1：会话 B 更新同一行后进入锁等待](image-11.png)
 
-```json
-{
-  "datasource": "taurus_mcp",
-  "database": "taurusdb_test",
-  "include_idle": true,
-  "include_info": true,
-  "max_rows": 20
-}
+到这里，前两张 SQL 客户端截图已经建立了最基本的角色对应关系：
+
+1. 第一张图先证明会话 A 未提交事务，是 blocker。
+2. 第二张图再证明会话 B 更新同一行后进入等待，是 waiter。
+3. 后续的 `show_processlist` 截图用于把 blocker / waiter 的 session id 固定下来。
+4. 最后的 `diagnose_lock_contention` 截图用于把现场现象收口成结构化结论。
+
+先看现场：
+
+```text
+帮我查看 taurusdb_test 当前的数据库会话，包含空闲连接和 SQL 文本，最多返回 20 条。
 ```
 
-对应工具：
+![场景 1：show_processlist 捕获锁等待现场](image-16.png)
 
-- `show_processlist`
+再做锁竞争诊断：
 
-再调用：
-
-```json
-{
-  "datasource": "taurus_mcp",
-  "database": "taurusdb_test",
-  "time_range": { "relative": "15m" },
-  "evidence_level": "full",
-  "include_raw_evidence": true
-}
+```text
+帮我分析 taurusdb_test 当前是否存在锁竞争，使用完整证据级别，并返回原始证据。
 ```
 
-对应工具：
+![场景 1：diagnose_lock_contention 识别 blocker 和 waiter](image-13.png)
 
-- `diagnose_lock_contention`
+推荐排版顺序：
 
-#### 4.4.5 需要截图的结果
+1. 第一排先放会话 A 和会话 B 两张 SQL 客户端截图，标题分别标成“图 1 blocker”“图 2 waiter”。
+2. 第二排放 `show_processlist`，图注里重复标出会话 A / B 的 session id，对齐第一排角色。
+3. 第三排放 `diagnose_lock_contention`，图注里直接写“已识别 blocker 与 waiter”，让读者在最后一张图完成结论闭环。
+4. 如果版面有限，优先保证 `show_processlist` 和 `diagnose_lock_contention` 中的 session id 与关键信息可读，不要把证据图压缩到无法对照。
 
-锁竞争场景至少保留 4 张图：
+场景 1 结论：会话 A 未提交事务并持有热点行锁，会话 B 更新同一行进入等待，`show_processlist` 和 `diagnose_lock_contention` 能共同证明当前存在行锁竞争。
 
-1. 会话 A 持锁 SQL 截图
-2. 会话 B 阻塞 SQL 截图
-3. `show_processlist` 截图
-4. `diagnose_lock_contention` 结果截图
+#### 4.4.5 场景 2：单 blocker / 多 waiter
 
-#### 4.4.6 验收点
+保持场景 1 中的会话 A 不提交，再额外打开会话 C 和会话 D，对同一行执行相同更新。这个场景建议按“先看 blocker，再看两个 waiter，最后看诊断结果”的顺序阅读截图。
 
-- 会话 A 未提交事务并持有目标行锁
-- 会话 B 对同一行的 `UPDATE` 出现等待
-- `show_processlist` 能看到阻塞会话
-- `diagnose_lock_contention` 能返回 blocker / waiter 或锁等待证据
+步骤 1：确认 blocker 仍在持锁。
 
-#### 4.4.7 场景结论模板
+会话 A（blocker，持续持有 `counter_key = 'global'` 的行锁）：
+![场景 2 - 图 1：会话 A 未提交事务，继续作为单个 blocker 持锁](image-23.png)
 
-锁竞争场景结论：会话 A 持有热点行锁，会话 B 进入等待，`show_processlist` 已捕获阻塞窗口，`diagnose_lock_contention` 已返回锁等待相关证据和 blocker 方向。
+步骤 2：制造第一个 waiter。
+
+会话 C（waiter 1，对同一行发起更新并进入等待）：
+
+```sql
+UPDATE t_hot_counter_test
+SET counter_value = counter_value + 1, updated_at = NOW()
+WHERE counter_key = 'global';
+```
+
+![场景 2 - 图 2：会话 C 更新同一行后进入等待，证明 blocker 已影响第一个 waiter](image-17.png)
+
+步骤 3：制造第二个 waiter。
+
+会话 D（waiter 2，对同一行发起相同更新并进入等待）：
+
+```sql
+UPDATE t_hot_counter_test
+SET counter_value = counter_value + 1, updated_at = NOW()
+WHERE counter_key = 'global';
+```
+
+![场景 2 - 图 3：会话 D 更新同一行后进入等待，证明同一个 blocker 已影响第二个 waiter](image-18.png)
+
+到这里，三张 SQL 客户端截图已经能建立最基本的时间线和角色对应关系：
+
+1. 图 1 先证明会话 A 没有提交，是唯一 blocker。
+2. 图 2 再证明会话 C 被同一热点行阻塞，是 waiter 1。
+3. 图 3 最后证明会话 D 也被同一热点行阻塞，是 waiter 2。
+4. 后续的 `show_processlist` 和 `diagnose_lock_contention` 截图，应分别用来做“现场证据补强”和“结构化结论收口”。
+
+自然语言触发：
+
+```text
+帮我分析 taurusdb_test 当前是否存在锁竞争，重点看是否有单个 blocker 阻塞多个 waiter，使用完整证据级别，并返回原始证据。
+```
+
+预期结果：
+
+- `diagnose_lock_contention` 能看到同一个 blocker 关联多个等待会话
+- 根因候选应指向单 blocker 热点、热点行或长事务持锁
+- 可疑会话中应出现 blocker session id
+
+截图点：
+
+1. SQL 客户端时间线截图：按“blocker A -> waiter C -> waiter D”的顺序摆放，证明单个 blocker 先后阻塞两个 waiter
+2. `show_processlist` 结果截图：把会话 A / C / D 的 session id 放在同一张图里，作为 SQL 客户端截图与诊断结果之间的映射桥梁
+3. `diagnose_lock_contention` 结果截图：高亮同一个 blocker 关联多个 waiter，作为该场景的最终结论图
+
+![场景 2 - 图 4：show_processlist 同时捕获两个 waiter 会话正在执行同一条 UPDATE，作为多 waiter 现场的桥梁证据](image-21.png)
+
+![场景 2 - 图 5：diagnose_lock_contention 识别单个 blocker 关联多个 waiter，完成该场景的结构化结论收口](image-22.png)
+
+推荐排版顺序：
+
+1. 第一排先放 3 张 SQL 客户端截图，标题分别标成“图 1 blocker”“图 2 waiter 1”“图 3 waiter 2”。
+2. 第二排放 `show_processlist`，对应图 4，在图注里重复标出会话 A / C / D 的 session id，对齐第一排角色。
+3. 第三排放 `diagnose_lock_contention`，对应图 5，图注里直接写“同一个 blocker 关联多个 waiter”，让读者在最后一张图完成结论闭环。
+4. 如果版面有限，宁可把图 4 和图 5 放大，也不要压缩第一排三张图到看不清 session id。
+
+#### 4.4.6 场景 3：表级锁 / Metadata Lock 方向
+
+该场景用于验证 DDL 或 metadata lock 相关的诊断方向。执行前确认这是测试库，避免影响真实业务。
+
+步骤 1：先让会话 A 持有事务上下文，作为后续 DDL 等待的前置条件。
+
+会话 A（保持事务不提交，用于制造后续 DDL 等待窗口）：
+
+```sql
+BEGIN;
+SELECT * FROM t_hot_counter_test WHERE counter_key = 'global' FOR UPDATE;
+```
+
+会话 A 不提交。
+
+![alt text](image-24.png)
+
+步骤 2：再让会话 D 执行 DDL，观察是否进入 metadata lock 或表级锁等待。
+
+会话 D（执行 `ALTER TABLE`，如果出现挂起即说明已进入等待窗口）：
+
+```sql
+ALTER TABLE t_hot_counter_test ADD COLUMN mdl_test_col INT NULL;
+```
+
+如果列已经存在，先换一个临时列名，例如 `mdl_test_col_2`。保持会话 D 等待时立即调用诊断。
+
+![alt text](image-25.png)
+
+这个场景也建议按“先看 DDL 等待，再看 processlist 现场，最后看诊断结论”的顺序组织截图：
+
+1. 第一张图先证明 `ALTER TABLE` 已经挂起，说明等待窗口已经形成。
+2. 第二张图再用 `show_processlist` 把等待中的 DDL 会话和对应 session id 固定下来。
+3. 第三张图最后用 `diagnose_lock_contention` 判断这是 metadata lock、表级锁，还是更宽泛的 DDL 被阻塞方向。
+
+自然语言触发：
+
+```text
+帮我分析 taurusdb_test 当前是否存在表级锁或 metadata lock 等待，使用完整证据级别，并返回原始证据。
+```
+
+![alt text](image-26.png)
+
+![alt text](image-27.png)
+
+预期结果：
+
+- `show_processlist` 可能看到 `ALTER TABLE` 等待
+- `diagnose_lock_contention` 可能返回 metadata lock、表级锁或 DDL 被阻塞方向
+- 如果当前内核或权限无法暴露 metadata lock 细节，报告中应记录为“未获取到 metadata lock 明细，但 processlist 已捕获 DDL 等待”
+
+清理 SQL：
+
+```sql
+ROLLBACK;
+ALTER TABLE t_hot_counter_test DROP COLUMN mdl_test_col;
+```
+
+如果使用了其他临时列名，清理对应列名。
+
+截图点：
+
+1. SQL 客户端时间线截图：会话 D 的 `ALTER TABLE` 等待截图，作为 DDL 被阻塞的起点证据
+2. `show_processlist` 结果截图：把等待中的 `ALTER TABLE`、对应 session id 和等待时长放在同一张图里，作为客户端截图与诊断结果之间的映射桥梁
+3. `diagnose_lock_contention` 结果截图：高亮 metadata lock、表级锁或 DDL 被阻塞方向，作为该场景的最终结论图
+
+推荐排版顺序：
+
+1. 第一排放会话 D 的 `ALTER TABLE` 等待截图，图注里直接写“DDL 已进入等待窗口”。
+2. 第二排放 `show_processlist`，图注里重复标出 `ALTER TABLE` 对应 session id，和第一排对齐。
+3. 第三排放 `diagnose_lock_contention`，图注里明确写“诊断已指向 metadata lock / 表级锁 / DDL 被阻塞方向”。
+4. 如果诊断结果没有直接给出 metadata lock 明细，就在图注里明确说明“未拿到 metadata lock 明细，但 processlist 已证实 DDL 正在等待”，避免读者误判为场景失败。
 
 ### 4.5 造存储压力样本
 
@@ -620,22 +779,90 @@ WHERE counter_key = 'global';
 
 方案：
 
-1. 往 `t_storage_test` 插入大量大字段文本
-2. 执行较重排序或聚合
+1. 向 `t_storage_test` 插入约 1000 行长文本数据，制造表存储占用
+2. 执行 `GROUP BY + ORDER BY` 查询，制造临时表和排序压力
+3. 可选：对比 `Created_tmp_disk_tables` 前后值，确认查询触发了磁盘临时表
+4. 调用 `diagnose_storage_pressure`，确认返回 `statement_digest` 和 `table_storage` 证据
 
-示例：
+造数 SQL：
 
 ```sql
-SELECT category, COUNT(*)
-FROM t_storage_test
-GROUP BY category
-ORDER BY COUNT(*) DESC;
+TRUNCATE TABLE t_storage_test;
+
+INSERT INTO t_storage_test(category, payload, created_at)
+SELECT
+  CONCAT('cat-', MOD(a.n + b.n * 10 + c.n * 100, 20)),
+  RPAD(CONCAT('payload-', a.n, '-', b.n, '-', c.n), 4096, 'x'),
+  TIMESTAMP('2026-01-01') + INTERVAL (a.n + b.n * 10 + c.n * 100) SECOND
+FROM
+  (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+   UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) a
+CROSS JOIN
+  (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+   UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) b
+CROSS JOIN
+  (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+   UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) c;
 ```
+
+如果想更稳定地触发临时表落盘，可以先设置：
+
+```sql
+SET SESSION internal_tmp_mem_storage_engine = MEMORY;
+SET SESSION tmp_table_size = 1024;
+SET SESSION max_heap_table_size = 1024;
+```
+
+压力查询 SQL：
+
+```sql
+SHOW SESSION STATUS LIKE 'Created_tmp_disk_tables';
+
+SELECT category, payload, COUNT(*) AS row_count
+FROM t_storage_test
+GROUP BY category, payload
+ORDER BY payload
+LIMIT 20;
+
+SHOW SESSION STATUS LIKE 'Created_tmp_disk_tables';
+```
+
+重点确认：
+
+- 第二次 `Created_tmp_disk_tables` 比第一次大
+- 上面的查询执行成功
+
+`diagnose_storage_pressure` 推荐输入：
+
+```json
+{
+  "datasource": "taurus_mcp",
+  "database": "taurusdb_test",
+  "scope": "table",
+  "table": "t_storage_test",
+  "evidence_level": "full",
+  "include_raw_evidence": true,
+  "max_candidates": 5
+}
+```
+
+![alt text](image-28.png)
+
+预期结果：
+
+- 返回 `tool=diagnose_storage_pressure`
+- 返回 `status=ok`
+- `root_cause_candidates` 出现 `storage_pressure_tmp_disk_spill` 或 `storage_pressure_scan_heavy_sql`
+- `evidence` 同时包含 `statement_digest` 和 `table_storage`
+- `suspicious_entities.tables` 包含 `t_storage_test`
+
+如果这一组没有稳定触发，可以把 `RPAD(..., 4096, 'x')` 提高到 `8192`，或把同一条压力查询连续执行 2 到 3 次。
 
 截图点：
 
-- 表数据量
-- `diagnose_storage_pressure` 的 `evidence`
+- `t_storage_test` 造数后的记录数或样本数据截图
+- `Created_tmp_disk_tables` 前后对比截图
+- `diagnose_storage_pressure` 返回 `statement_digest` / `table_storage` 证据的截图
 
 ### 4.6 回收站验证样本
 
@@ -645,15 +872,291 @@ ORDER BY COUNT(*) DESC;
 - tools 已暴露 `list_recycle_bin` / `restore_recycle_bin_table`
 - mutation 已启用
 
-方案：
+推荐先确认：
 
-1. 往 `t_recycle_bin_test` 插入少量数据
-2. `DROP TABLE t_recycle_bin_test`
+1. `list_taurus_features`
+2. `list_recycle_bin`
+3. `restore_recycle_bin_table`
+
+最小造景步骤：
+
+1. 建一个可丢弃测试表并插入少量数据
+2. `DROP TABLE`，让目标表进入 TaurusDB recycle bin
 3. 调用 `list_recycle_bin`
-4. 第一次调用 `restore_recycle_bin_table`，确认返回 `CONFIRMATION_REQUIRED`
-5. 第二次带 `confirmation_token` 执行恢复
+4. 第一次调用 `restore_recycle_bin_table`，不带 `confirmation_token`
+5. 记录返回的 `confirmation_token`
+6. 用完全相同的参数重试恢复
+
+准备 SQL：
+
+```sql
+CREATE TABLE t_recycle_bin_test (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  name VARCHAR(64) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+INSERT INTO t_recycle_bin_test(name) VALUES ('a'), ('b'), ('c');
+
+DROP TABLE t_recycle_bin_test;
+```
+
+`list_recycle_bin` 推荐输入：
+
+```json
+{
+  "datasource": "taurus_mcp"
+}
+```
+
+重点是从返回结果里找到目标 `recycle_table` 名称，后续恢复必须使用这里返回的名字，而不是原表名。
+
+恢复有两种模式。
+
+模式一：`native_restore`
+
+适合直接恢复回原表，或者在恢复时顺带改名。
+
+第一次调用：
+
+```json
+{
+  "datasource": "taurus_mcp",
+  "recycle_table": "paste_recycle_table_here",
+  "method": "native_restore"
+}
+```
+
+预期：
+
+- 本次不会直接恢复
+- 返回 `CONFIRMATION_REQUIRED`
+- 返回 `confirmation_token`
+
+第二次调用：
+
+```json
+{
+  "datasource": "taurus_mcp",
+  "recycle_table": "paste_recycle_table_here",
+  "method": "native_restore",
+  "confirmation_token": "paste_confirmation_token_here"
+}
+```
+
+如果需要恢复到新名字，也可以在 `native_restore` 下同时带：
+
+```json
+{
+  "datasource": "taurus_mcp",
+  "recycle_table": "paste_recycle_table_here",
+  "method": "native_restore",
+  "destination_database": "taurusdb_test",
+  "destination_table": "t_recycle_bin_test_restore"
+}
+```
+
+模式二：`insert_select`
+
+适合希望恢复动作对 Binlog / DRS 更友好时使用，但要求先建好兼容结构的目标表。
+
+先准备目标表：
+
+```sql
+CREATE TABLE t_recycle_bin_test_restore (
+  id BIGINT PRIMARY KEY,
+  name VARCHAR(64) NOT NULL,
+  created_at TIMESTAMP NOT NULL
+) ENGINE=InnoDB;
+```
+
+第一次调用：
+
+```json
+{
+  "datasource": "taurus_mcp",
+  "recycle_table": "paste_recycle_table_here",
+  "method": "insert_select",
+  "destination_database": "taurusdb_test",
+  "destination_table": "t_recycle_bin_test_restore"
+}
+```
+
+第二次调用：
+
+```json
+{
+  "datasource": "taurus_mcp",
+  "recycle_table": "paste_recycle_table_here",
+  "method": "insert_select",
+  "destination_database": "taurusdb_test",
+  "destination_table": "t_recycle_bin_test_restore",
+  "confirmation_token": "paste_confirmation_token_here"
+}
+```
+
+验收点：
+
+- `list_recycle_bin` 返回只读结果，不应要求 confirmation
+- 第一次 restore 返回 `CONFIRMATION_REQUIRED`
+- 第一次 restore 返回 `confirmation_token`
+- 第二次带 token 才真正执行
+- 第二次必须使用与第一次完全相同的 `recycle_table`、`method`、`destination_database`、`destination_table`
+- `native_restore` 适合直接恢复或恢复时改名
+- `insert_select` 需要目标表已存在且结构兼容
+- 恢复完成后，应能查询到恢复后的表和样本数据
+
+截图点：
+
+- 回收站列表
+- 第一次 restore 返回 confirmation
+- 第二次 restore 成功
+- 恢复后表数据查询结果
 
 如果当前实例 `is_taurusdb=false` 或 feature 不支持，这一组直接记为 `SKIP`。
+
+### 4.7 复制延迟验证样本
+
+前提：
+
+- 这一项不能在单实例上伪造，必须有主从或只读节点复制链路
+- 如果当前实例没有 replica，`diagnose_replication_lag` 返回 `not_applicable` 是合理结果
+- 更适合在主库制造写入压力，在只读节点或可见复制状态的连接上观察 `SHOW REPLICA STATUS`
+
+推荐输入：
+
+```json
+{
+  "datasource": "taurus_mcp",
+  "database": "taurusdb_test",
+  "time_range": {
+    "relative": "30m"
+  },
+  "evidence_level": "full",
+  "include_raw_evidence": true
+}
+```
+
+如果知道 replica 或 channel：
+
+```json
+{
+  "datasource": "taurus_mcp",
+  "database": "taurusdb_test",
+  "replica_id": "your_replica_id",
+  "channel": "your_channel",
+  "time_range": {
+    "relative": "30m"
+  },
+  "evidence_level": "full",
+  "include_raw_evidence": true
+}
+```
+
+工具当前主要关注四类证据：
+
+- `SHOW REPLICA STATUS` 或 `SHOW SLAVE STATUS`
+- CES `replication_delay`
+- CES `long_trx_count`
+- CES `write_iops` / `write_throughput`
+
+更容易稳定命中的构造方式有两类。
+
+方案一：长事务 + 大批量写入
+
+适合优先验证，因为既容易触发 `long_trx_count`，也更接近真实业务里的大事务回放滞后。
+
+准备表：
+
+```sql
+CREATE TABLE IF NOT EXISTS t_replica_lag_test (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  k INT NOT NULL,
+  payload LONGTEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+```
+
+会话 A，在主库执行：
+
+```sql
+SET autocommit = 0;
+BEGIN;
+
+INSERT INTO t_replica_lag_test(k, payload)
+SELECT
+  a.n + b.n * 10 + c.n * 100,
+  RPAD(CONCAT('lag-', a.n, '-', b.n, '-', c.n), 8192, 'x')
+FROM
+  (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+   UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) a
+CROSS JOIN
+  (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+   UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) b
+CROSS JOIN
+  (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
+   UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) c;
+```
+
+执行后先不要提交，保持事务打开 2 到 5 分钟。
+
+观察 SQL：
+
+```sql
+SHOW REPLICA STATUS;
+```
+
+重点看下面几个字段是否开始抬升或异常：
+
+- `Seconds_Behind_Master` 或 `Seconds_Behind_Source`
+- `Replica_IO_Running`
+- `Replica_SQL_Running`
+- `Last_IO_Error`
+- `Last_SQL_Error`
+
+方案二：连续小事务高频写
+
+如果不方便长时间持有大事务，可以持续做高频写入 2 到 10 分钟。
+
+```sql
+INSERT INTO t_replica_lag_test(k, payload)
+SELECT
+  FLOOR(RAND() * 100000),
+  RPAD(UUID(), 4096, 'x')
+FROM
+  (SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5
+   UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9 UNION ALL SELECT 10) t;
+```
+
+必要时再配合：
+
+```sql
+UPDATE t_replica_lag_test
+SET payload = RPAD(UUID(), 4096, 'y')
+WHERE id % 10 = 0;
+```
+
+这一类更容易把结果导向主库写压过高，而不是长事务。
+
+实现阈值说明：
+
+- 复制延迟达到 `60s` 以上，预期命中 `replication_lag_delay_confirmed`
+- 复制延迟达到 `300s` 以上，严重度更容易到 `high`
+- `long_trx_count > 0` 时，预期命中 `replication_lag_long_transaction_pressure`
+- `write_iops >= 1000` 或 `write_throughput >= 50 MB/s` 时，预期命中 `replication_lag_write_pressure`
+
+验收点：
+
+- 有复制链路且 lag 明显升高时，应返回 `replication_status`，并尽量看到 `ces_metrics`
+- 长事务场景下，优先期望出现 `replication_lag_long_transaction_pressure`
+- 写压场景下，优先期望出现 `replication_lag_write_pressure`
+- `Seconds_Behind_Master` 或 `Seconds_Behind_Source` 超过 60 秒时，预期出现 `replication_lag_delay_confirmed`
+
+截图点：
+
+- `diagnose_replication_lag`
+- `SHOW REPLICA STATUS`
+- 长事务或高频写入执行中的会话
 
 ---
 
@@ -902,20 +1405,64 @@ npm run cloud:validate
 
 ### 5.10 复制延迟诊断
 
+前置样本：
+
+- 先按 [4.7 复制延迟验证样本](#47-复制延迟验证样本) 构造复制延迟现场
+
 调用：
 
 1. `diagnose_replication_lag`
 
+推荐输入：
+
+```json
+{
+  "datasource": "taurus_mcp",
+  "database": "taurusdb_test",
+  "time_range": {
+    "relative": "30m"
+  },
+  "evidence_level": "full",
+  "include_raw_evidence": true
+}
+```
+
+如果知道 replica 或 channel：
+
+```json
+{
+  "datasource": "taurus_mcp",
+  "database": "taurusdb_test",
+  "replica_id": "your_replica_id",
+  "channel": "your_channel",
+  "time_range": {
+    "relative": "30m"
+  },
+  "evidence_level": "full",
+  "include_raw_evidence": true
+}
+```
+
 验收：
 
+- 有复制链路且 lag 明显升高时，应返回 `replication_status`，并尽量看到 `ces_metrics`
+- 长事务场景下，优先期望出现 `replication_lag_long_transaction_pressure`
+- 写压场景下，优先期望出现 `replication_lag_write_pressure`
+- `Seconds_Behind_Master` 或 `Seconds_Behind_Source` 超过 60 秒时，预期出现 `replication_lag_delay_confirmed`
 - 有复制链路时，应返回复制相关证据
 - 单实例或无复制链路时，`not_applicable` 可接受
 
 截图：
 
 - `diagnose_replication_lag`
+- `SHOW REPLICA STATUS`
+- 长事务或高频写入执行中的会话
 
 ### 5.11 回收站恢复
+
+前置样本：
+
+- 先按 [4.6 回收站验证样本](#46-回收站验证样本) 构造回收站对象
 
 只在支持时执行：
 
@@ -924,14 +1471,28 @@ npm run cloud:validate
 
 验收：
 
+- `list_recycle_bin` 返回只读结果，不应要求 confirmation
 - 第一次 restore 返回 `CONFIRMATION_REQUIRED`
+- 第一次 restore 返回 `confirmation_token`
 - 第二次带 token 才真正执行
+- 第二次必须使用与第一次完全相同的 `recycle_table`、`method`、`destination_database`、`destination_table`
+- `native_restore` 适合直接恢复或恢复时改名
+- `insert_select` 需要目标表已存在且结构兼容
+- 恢复完成后，应能查询到恢复后的表和样本数据
+
+注意：
+
+- 如果当前实例不支持 recycle bin，或者 tool 没有暴露，直接记 `SKIP`
+- `recycle_table` 要使用 `list_recycle_bin` 返回值，不要自己猜测
+- token 绑定的是同一条恢复语义；只要参数变化，`confirmation_token` 就可能失效
+- `insert_select` 更适合验证恢复链路和 Binlog 可见性；单纯做最小 smoke 时优先 `native_restore`
 
 截图：
 
 - 回收站列表
 - 第一次 restore 返回 confirmation
 - 第二次 restore 成功
+- 恢复后表数据查询结果
 
 ---
 

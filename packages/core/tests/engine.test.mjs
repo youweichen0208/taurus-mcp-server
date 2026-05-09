@@ -360,7 +360,7 @@ test("engine exposes evidence-backed slow/connection/lock diagnosis plus stable 
                 95,
                 201,
                 "app_user",
-                "updating",
+                null,
                 "RUNNING",
                 240,
                 "demo",
@@ -379,7 +379,7 @@ test("engine exposes evidence-backed slow/connection/lock diagnosis plus stable 
                 72,
                 201,
                 "app_user",
-                "updating",
+                null,
                 "RUNNING",
                 240,
                 "demo",
@@ -713,9 +713,29 @@ RECORD LOCKS space id 1 page no 1 index PRIMARY of table \`demo\`.\`orders\`
   assert.equal(lockContention.status, "ok");
   assert.equal(lockContention.severity, "warning");
   assert.equal(lockContention.suspiciousEntities.sessions[0].sessionId, "201");
+  assert.match(
+    lockContention.suspiciousEntities.sessions[0].reason,
+    /no active processlist state.*COMMIT or ROLLBACK/i,
+  );
   assert.equal(
     lockContention.suspiciousEntities.tables[0].table,
     "demo.orders",
+  );
+  assert.ok(
+    lockContention.keyFindings.some((finding) =>
+      /idle sessions with active transactions/i.test(finding),
+    ),
+  );
+  assert.ok(
+    lockContention.rootCauseCandidates.some(
+      (candidate) =>
+        candidate.code === "lock_contention_idle_transaction_blocker",
+    ),
+  );
+  assert.ok(
+    lockContention.recommendedActions.some((action) =>
+      /left a transaction uncommitted/i.test(action),
+    ),
   );
   assert.equal(lockContention.evidence[0].source, "lock_waits");
   assert.equal(

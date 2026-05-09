@@ -16,6 +16,17 @@ export interface CapabilityProbeOptions {
 
 type ProbeVariables = Partial<Record<string, string>>;
 
+const TAURUS_VARIABLE_NAMES = [
+  "innodb_rds_backquery_enable",
+  "force_parallel_execute",
+  "rds_ndp_mode",
+  "taurus_ndp_mode",
+  "ndp_pushdown_mode",
+  "ndp_pushdown",
+  "rds_multi_tenant",
+  "multi_tenant_mode",
+] as const;
+
 function mysqlCompatFromVersion(rawVersion: string): KernelInfo["mysqlCompat"] {
   if (/8\.0/i.test(rawVersion)) {
     return "8.0";
@@ -87,15 +98,8 @@ async function readVariable(session: Session, name: string): Promise<string | un
 async function collectVariables(session: Session): Promise<ProbeVariables> {
   const names = [
     "version_comment",
-    "innodb_rds_backquery_enable",
-    "force_parallel_execute",
+    ...TAURUS_VARIABLE_NAMES,
     "optimizer_switch",
-    "rds_ndp_mode",
-    "taurus_ndp_mode",
-    "ndp_pushdown_mode",
-    "ndp_pushdown",
-    "rds_multi_tenant",
-    "multi_tenant_mode",
   ];
 
   const entries = await Promise.all(
@@ -103,6 +107,12 @@ async function collectVariables(session: Session): Promise<ProbeVariables> {
   );
 
   return Object.fromEntries(entries.filter(([, value]) => value !== undefined));
+}
+
+function hasTaurusSpecificVariables(variables: ProbeVariables): boolean {
+  return TAURUS_VARIABLE_NAMES.some((name) =>
+    Object.prototype.hasOwnProperty.call(variables, name),
+  );
 }
 
 async function detectKernelInfo(session: Session, variables: ProbeVariables): Promise<KernelInfo> {
@@ -113,9 +123,12 @@ async function detectKernelInfo(session: Session, variables: ProbeVariables): Pr
   const taurusSignals = [combined, variables.force_parallel_execute, variables.innodb_rds_backquery_enable]
     .filter((value): value is string => typeof value === "string")
     .join(" ");
+  const hasTaurusSignals =
+    /taurus|huawei|gaussdb/i.test(taurusSignals) ||
+    hasTaurusSpecificVariables(variables);
 
   return {
-    isTaurusDB: /taurus|huawei|gaussdb/i.test(taurusSignals),
+    isTaurusDB: hasTaurusSignals,
     kernelVersion,
     mysqlCompat: mysqlCompatFromVersion(rawVersion),
     instanceSpecHint: inferInstanceSpecHint(variables),
