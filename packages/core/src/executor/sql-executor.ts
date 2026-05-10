@@ -1,16 +1,11 @@
 import { generateQueryId } from "../utils/id.js";
-import type {
-  ConnectionPool,
-  RawResult,
-  Session,
-} from "./connection-pool.js";
+import type { ConnectionPool, Session } from "./connection-pool.js";
 import {
   buildExplainRecommendations,
   normalizeExplainRows,
   summarizeExplainRows,
 } from "./explain.js";
 import type { SessionContext } from "../context/session-context.js";
-import type { ExplainRiskSummary } from "../safety/sql-validator.js";
 import {
   createQueryTracker,
   type QueryTracker,
@@ -18,90 +13,29 @@ import {
 import {
   createResultRedactor,
   type ResultRedactor,
-  type SensitiveStrategy,
 } from "../safety/redaction.js";
-
-export interface ColumnMeta {
-  name: string;
-  type?: string;
-}
-
-export interface ReadonlyOptions {
-  maxRows?: number;
-  maxColumns?: number;
-  maxFieldChars?: number;
-  timeoutMs?: number;
-  sensitiveColumns?: Iterable<string>;
-  sensitiveStrategy?: SensitiveStrategy;
-}
-
-export interface MutationOptions {
-  timeoutMs?: number;
-}
-
-export interface QueryResult {
-  queryId: string;
-  columns: ColumnMeta[];
-  rows: unknown[][];
-  rowCount: number;
-  originalRowCount: number;
-  truncated: boolean;
-  rowTruncated: boolean;
-  columnTruncated: boolean;
-  fieldTruncated: boolean;
-  redactedColumns: string[];
-  droppedColumns: string[];
-  truncatedColumns: string[];
-  durationMs: number;
-}
-
-export interface MutationResult {
-  queryId: string;
-  affectedRows: number;
-  durationMs: number;
-}
-
-export interface ExplainResult {
-  queryId: string;
-  plan: Record<string, unknown>[];
-  riskSummary: ExplainRiskSummary;
-  recommendations: string[];
-  durationMs: number;
-}
-
-export interface QueryStatus {
-  queryId: string;
-  status: "running" | "completed" | "failed" | "cancelled" | "not_found";
-  taskId?: string;
-  datasource?: string;
-  mode?: "ro" | "rw";
-  startedAt?: number;
-  endedAt?: number;
-  durationMs?: number;
-  error?: string;
-}
-
-export interface CancelResult {
-  queryId: string;
-  status: "cancelled" | "not_found" | "completed" | "failed";
-  message?: string;
-}
-
-export interface SqlExecutor {
-  explain(sql: string, ctx: SessionContext): Promise<ExplainResult>;
-  executeReadonly(
-    sql: string,
-    ctx: SessionContext,
-    opts?: ReadonlyOptions,
-  ): Promise<QueryResult>;
-  executeMutation(
-    sql: string,
-    ctx: SessionContext,
-    opts?: MutationOptions,
-  ): Promise<MutationResult>;
-  getQueryStatus(queryId: string): Promise<QueryStatus>;
-  cancelQuery(queryId: string): Promise<CancelResult>;
-}
+import { asFiniteNumber, inferColumns, normalizeRows } from "./result-normalizer.js";
+import type {
+  CancelResult,
+  ExplainResult,
+  MutationOptions,
+  MutationResult,
+  QueryResult,
+  QueryStatus,
+  ReadonlyOptions,
+  SqlExecutor,
+} from "./types.js";
+export type {
+  CancelResult,
+  ColumnMeta,
+  ExplainResult,
+  MutationOptions,
+  MutationResult,
+  QueryResult,
+  QueryStatus,
+  ReadonlyOptions,
+  SqlExecutor,
+} from "./types.js";
 
 type ActiveSession = {
   queryId: string;
@@ -118,59 +52,6 @@ export type SqlExecutorOptions = {
   queryTracker?: QueryTracker;
   resultRedactor?: ResultRedactor;
 };
-
-function asFiniteNumber(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function inferColumns(raw: RawResult, rows: unknown[]): ColumnMeta[] {
-  if (Array.isArray(raw.fields) && raw.fields.length > 0) {
-    return raw.fields.map((field) => ({
-      name: field.name,
-      type: field.type,
-    }));
-  }
-
-  const first = rows[0];
-  if (isObject(first)) {
-    return Object.keys(first).map((name) => ({ name }));
-  }
-  if (Array.isArray(first)) {
-    return first.map((_, index) => ({ name: `col_${index + 1}` }));
-  }
-  return [];
-}
-
-function normalizeRows(rows: unknown[], columns: ColumnMeta[]): unknown[][] {
-  if (rows.length === 0) {
-    return [];
-  }
-  const first = rows[0];
-  if (Array.isArray(first)) {
-    return rows.map((row) => (Array.isArray(row) ? row : [row]));
-  }
-  if (isObject(first)) {
-    return rows.map((row) => {
-      if (!isObject(row)) {
-        return [row];
-      }
-      return columns.map((column) => row[column.name]);
-    });
-  }
-  return rows.map((row) => [row]);
-}
-
 
 export class SqlExecutorImpl implements SqlExecutor {
   private readonly connectionPool: ConnectionPool;

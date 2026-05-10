@@ -1,0 +1,111 @@
+import type { CredentialRef, DataSourceProfile, DatabaseEngine, UserCredential } from "./types.js";
+import { asInteger, asString, defaultPortForEngine, parseCredentialRef, parseEngine, withRedactedToString } from "./parsing.js";
+
+export function parseEngineFromDsnProtocol(protocol: string): DatabaseEngine {
+  const normalized = protocol.replace(/:$/, "").toLowerCase();
+  if (normalized === "mysql" || normalized === "mysql2") {
+    return "mysql";
+  }
+  if (normalized === "postgres" || normalized === "postgresql") {
+    return "postgresql";
+  }
+  throw new Error(`Unsupported DSN protocol: ${protocol}`);
+}
+
+export function parseEnvProfile(env: NodeJS.ProcessEnv): DataSourceProfile | undefined {
+  const dsn = asString(env.TAURUSDB_SQL_DSN);
+  const explicitHost = asString(env.TAURUSDB_SQL_HOST);
+  const profileName = asString(env.TAURUSDB_SQL_DATASOURCE) ?? "taurus_mcp";
+
+  let engine: DatabaseEngine;
+  let host: string | undefined;
+  let port: number;
+  let database: string | undefined;
+  let readonlyUsername: string | undefined;
+  let readonlyPasswordRef: CredentialRef | undefined;
+
+  if (dsn) {
+    const url = new URL(dsn);
+    engine = parseEngineFromDsnProtocol(url.protocol);
+    host = url.hostname;
+    port = url.port ? Number.parseInt(url.port, 10) : defaultPortForEngine(engine);
+    database = asString(url.pathname.replace(/^\//, ""));
+    readonlyUsername = asString(decodeURIComponent(url.username));
+    const dsnPassword = asString(decodeURIComponent(url.password));
+    if (dsnPassword) {
+      readonlyPasswordRef = parseCredentialRef(dsnPassword, "TAURUSDB_SQL_DSN.password");
+    }
+  } else {
+    engine = parseEngine(asString(env.TAURUSDB_SQL_ENGINE) ?? "mysql", "TAURUSDB_SQL_ENGINE");
+    host = explicitHost;
+    const explicitPort = asInteger(env.TAURUSDB_SQL_PORT);
+    port = explicitPort ?? defaultPortForEngine(engine);
+    database = asString(env.TAURUSDB_SQL_DATABASE);
+  }
+
+  const mutationUserName = asString(env.TAURUSDB_SQL_MUTATION_USER);
+  const mutationPasswordRaw = asString(env.TAURUSDB_SQL_MUTATION_PASSWORD);
+
+  if (
+    !dsn &&
+    !explicitHost &&
+    !asString(env.TAURUSDB_SQL_USER) &&
+    !asString(env.TAURUSDB_SQL_PASSWORD) &&
+    !database &&
+    !mutationUserName &&
+    !mutationPasswordRaw
+  ) {
+    return undefined;
+  }
+
+  if (!port || !Number.isFinite(port) || port <= 0) {
+    throw new Error("Failed to resolve SQL port from environment.");
+  }
+
+  readonlyUsername = readonlyUsername ?? asString(env.TAURUSDB_SQL_USER);
+  if (!readonlyUsername) {
+    throw new Error("Missing readonly username in environment. Set TAURUSDB_SQL_USER or include it in DSN.");
+  }
+
+  readonlyPasswordRef =
+    readonlyPasswordRef ??
+    (Object.hasOwn(env, "TAURUSDB_SQL_PASSWORD")
+      ? parseCredentialRef(env.TAURUSDB_SQL_PASSWORD, "TAURUSDB_SQL_PASSWORD")
+      : undefined);
+
+  if (!readonlyPasswordRef) {
+    throw new Error("Missing readonly password in environment. Set TAURUSDB_SQL_PASSWORD or include it in DSN.");
+  }
+
+  let mutationUser: UserCredential | undefined;
+  if (mutationUserName || mutationPasswordRaw) {
+    if (!mutationUserName || !mutationPasswordRaw) {
+      throw new Error(
+        "Invalid mutation credentials in environment: TAURUSDB_SQL_MUTATION_USER and TAURUSDB_SQL_MUTATION_PASSWORD must be set together.",
+      );
+    }
+    mutationUser = {
+      username: mutationUserName,
+      password: parseCredentialRef(mutationPasswordRaw, "TAURUSDB_SQL_MUTATION_PASSWORD"),
+    };
+  }
+
+  const poolSize = asInteger(env.TAURUSDB_SQL_POOL_SIZE);
+  if (poolSize !== undefined && poolSize <= 0) {
+    throw new Error("Invalid TAURUSDB_SQL_POOL_SIZE: must be positive.");
+  }
+
+  return withRedactedToString({
+    name: profileName,
+    engine,
+    host,
+    port,
+    database,
+    readonlyUser: {
+      username: readonlyUsername,
+      password: readonlyPasswordRef,
+    },
+    mutationUser,
+    poolSize,
+  });
+}
