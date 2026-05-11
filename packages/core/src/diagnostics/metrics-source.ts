@@ -289,9 +289,11 @@ export class CesMetricsSource implements MetricsSource {
     }
 
     const payload = {
-      namespace: this.namespace,
-      metric_name: uniqueAliases.map((alias) => TAURUS_CES_METRICS[alias]),
-      dimensions,
+      metrics: uniqueAliases.map((alias) => ({
+        namespace: this.namespace,
+        metric_name: TAURUS_CES_METRICS[alias],
+        dimensions,
+      })),
       from: timeRange.from,
       to: timeRange.to,
       period: this.period,

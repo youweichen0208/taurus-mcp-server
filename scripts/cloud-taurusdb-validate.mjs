@@ -50,6 +50,14 @@ function formatCloudError(status, body) {
   if (typeof body.message === "string" && body.message) {
     parts.push(`message=${body.message}`);
   }
+  if (
+    typeof body.encoded_authorization_message === "string" &&
+    body.encoded_authorization_message
+  ) {
+    parts.push(
+      `encoded_authorization_message=${body.encoded_authorization_message}`,
+    );
+  }
   if (typeof body.raw === "string" && body.raw) {
     parts.push(`raw=${body.raw}`);
   }
@@ -451,17 +459,27 @@ async function validateCes(config) {
   const nodeDimension = ces.nodeDimension;
   const period = ces.period;
   const now = Date.now();
+  const dimensions = [
+    { name: instanceDimension, value: instanceId },
+    ...(nodeId ? [{ name: nodeDimension, value: nodeId }] : []),
+  ];
   const body = {
-    namespace,
-    metric_name: ["gaussdb_mysql001_cpu_util", "gaussdb_mysql048_disk_used_size"],
+    metrics: [
+      {
+        namespace,
+        metric_name: "gaussdb_mysql001_cpu_util",
+        dimensions,
+      },
+      {
+        namespace,
+        metric_name: "gaussdb_mysql048_disk_used_size",
+        dimensions,
+      },
+    ],
     from: now - 60 * 60 * 1000,
     to: now,
     period,
     filter: ces.filter,
-    dimensions: [
-      { name: instanceDimension, value: instanceId },
-      ...(nodeId ? [{ name: nodeDimension, value: nodeId }] : []),
-    ],
   };
 
   const result = await runCheck("CES batch-query-metric-data", async () => {
