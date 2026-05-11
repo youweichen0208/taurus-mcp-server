@@ -253,7 +253,11 @@ export async function restoreRecycleBinTable(
     return engine.executor.executeMutation(
       buildRestoreRecycleBinTableSql(input),
       ctx,
-      recycleBinMutationOptions(opts),
+      {
+        ...recycleBinMutationOptions(opts),
+        allowWithoutGlobalMutations: true,
+        allowReadonlyFallbackForMutations: true,
+      },
     );
   }
 

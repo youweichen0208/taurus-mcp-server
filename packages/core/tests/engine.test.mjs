@@ -575,10 +575,6 @@ RECORD LOCKS space id 1 page no 1 index PRIMARY of table \`demo\`.\`orders\`
     { user: "app_user" },
     ctx,
   );
-  const replicationLag = await engine.diagnoseReplicationLag(
-    { replicaId: "replica-1" },
-    ctx,
-  );
   const storagePressure = await engine.diagnoseStoragePressure(
     { scope: "table", table: "orders" },
     ctx,
@@ -759,19 +755,6 @@ RECORD LOCKS space id 1 page no 1 index PRIMARY of table \`demo\`.\`orders\`
   assert.equal(connectionSpike.suspiciousEntities.users[0].user, "app_user");
   assert.equal(connectionSpike.evidence[0].source, "processlist");
   assert.match(connectionSpike.recommendedActions[0], /show_processlist/);
-
-  assert.equal(replicationLag.tool, "diagnose_replication_lag");
-  assert.equal(replicationLag.status, "not_applicable");
-  assert.equal(
-    replicationLag.rootCauseCandidates[0].code,
-    "replication_lag_no_evidence",
-  );
-  assert.equal(
-    replicationLag.recommendedNextTools.includes("show_processlist"),
-    true,
-  );
-  assert.equal(replicationLag.nextToolInputs[0].tool, "show_processlist");
-  assert.equal(replicationLag.nextToolInputs[0].input.include_idle, false);
 
   assert.equal(storagePressure.tool, "diagnose_storage_pressure");
   assert.equal(storagePressure.status, "ok");
@@ -1706,37 +1689,31 @@ test("engine merges CES metrics into TaurusDB diagnostics", async () => {
             {
               timestamp: 2,
               value:
-                alias === "replication_delay"
-                  ? 180
-                  : alias === "connection_usage"
-                    ? 91
-                    : alias === "storage_write_delay"
-                      ? 120
-                      : alias === "cpu_util"
-                        ? 88
-                        : 20,
+                alias === "connection_usage"
+                  ? 91
+                  : alias === "storage_write_delay"
+                    ? 120
+                    : alias === "cpu_util"
+                      ? 88
+                      : 20,
             },
           ],
           latest:
-            alias === "replication_delay"
-              ? 180
-              : alias === "connection_usage"
-                ? 91
-                : alias === "storage_write_delay"
-                  ? 120
-                  : alias === "cpu_util"
-                    ? 88
-                    : 20,
+            alias === "connection_usage"
+              ? 91
+              : alias === "storage_write_delay"
+                ? 120
+                : alias === "cpu_util"
+                  ? 88
+                  : 20,
           max:
-            alias === "replication_delay"
-              ? 180
-              : alias === "connection_usage"
-                ? 91
-                : alias === "storage_write_delay"
-                  ? 120
-                  : alias === "cpu_util"
-                    ? 88
-                    : 20,
+            alias === "connection_usage"
+              ? 91
+              : alias === "storage_write_delay"
+                ? 120
+                : alias === "cpu_util"
+                  ? 88
+                  : 20,
           min: 10,
           avg: 55,
         }));
@@ -1744,10 +1721,6 @@ test("engine merges CES metrics into TaurusDB diagnostics", async () => {
     },
   });
 
-  const replicationLag = await engine.diagnoseReplicationLag(
-    { timeRange: { relative: "30m" } },
-    ctx,
-  );
   const connectionSpike = await engine.diagnoseConnectionSpike(
     { compareBaseline: true },
     ctx,
@@ -1759,30 +1732,6 @@ test("engine merges CES metrics into TaurusDB diagnostics", async () => {
   const serviceLatency = await engine.diagnoseServiceLatency(
     { symptom: "cpu" },
     ctx,
-  );
-
-  assert.equal(replicationLag.status, "ok");
-  assert.equal(
-    replicationLag.rootCauseCandidates.some(
-      (candidate) => candidate.code === "replication_lag_delay_confirmed",
-    ),
-    true,
-  );
-  assert.equal(
-    replicationLag.evidence.some((item) => item.source === "ces_metrics"),
-    true,
-  );
-  assert.equal(
-    replicationLag.recommendedNextTools.includes("diagnose_db_hotspot"),
-    true,
-  );
-  assert.equal(
-    replicationLag.nextToolInputs.some(
-      (item) =>
-        item.tool === "diagnose_db_hotspot" &&
-        item.input.scope === "session",
-    ),
-    true,
   );
 
   assert.equal(
@@ -1826,7 +1775,7 @@ test("engine merges CES metrics into TaurusDB diagnostics", async () => {
     serviceLatency.evidence.some((item) => item.source === "ces_metrics"),
     true,
   );
-  assert.equal(metricCalls.length >= 4, true);
+  assert.equal(metricCalls.length >= 3, true);
 });
 
 test("engine delegates context, schema, guardrail, and executor methods", async () => {

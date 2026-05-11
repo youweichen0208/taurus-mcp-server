@@ -23,7 +23,6 @@ import {
   findTopSlowSqlTool,
   diagnoseConnectionSpikeTool,
   diagnoseLockContentionTool,
-  diagnoseReplicationLagTool,
   diagnoseSlowQueryTool,
   diagnoseStoragePressureTool,
 } from "../dist/tools/taurus/diagnostics.js";
@@ -445,24 +444,6 @@ function createDeps(engineOverrides = {}) {
         suspiciousEntities: input.table ? { tables: [{ table: input.table, reason: "focus" }] } : undefined,
         evidence: [{ source: "diagnostics_scaffold", title: "pending", summary: "pending" }],
         recommendedActions: ["implement it"],
-        limitations: ["pending"],
-      }),
-      diagnoseReplicationLag: async (input) => ({
-        tool: "diagnose_replication_lag",
-        status: "not_applicable",
-        severity: "info",
-        summary: "replication placeholder",
-        diagnosisWindow: { relative: "15m" },
-        rootCauseCandidates: [{ code: "pending", title: "pending", confidence: "low", rationale: "pending" }],
-        keyFindings: [input.replicaId ?? "pending"],
-        evidence: [{ source: "diagnostics_scaffold", title: "pending", summary: "pending" }],
-        recommendedActions: ["implement it"],
-        recommendedNextTools: ["show_processlist"],
-        nextToolInputs: [{
-          tool: "show_processlist",
-          input: { include_idle: false, include_info: true },
-          rationale: "inspect replica-side sessions",
-        }],
         limitations: ["pending"],
       }),
       diagnoseStoragePressure: async (input) => ({
@@ -1030,17 +1011,6 @@ test("diagnostic tool handlers return structured diagnostic payloads", async () 
   assert.equal(lockContention.ok, true);
   assert.equal(lockContention.data.tool, "diagnose_lock_contention");
   assert.equal(lockContention.data.suspicious_entities.tables[0].table, "orders");
-
-  const replicationLag = await diagnoseReplicationLagTool.handler(
-    { replica_id: "replica-1", channel: "default" },
-    deps,
-    context,
-  );
-  assert.equal(replicationLag.ok, true);
-  assert.equal(replicationLag.data.tool, "diagnose_replication_lag");
-  assert.equal(replicationLag.data.status, "not_applicable");
-  assert.equal(replicationLag.data.recommended_next_tools[0], "show_processlist");
-  assert.equal(replicationLag.data.next_tool_inputs[0].input.include_idle, false);
 
   const storagePressure = await diagnoseStoragePressureTool.handler(
     { scope: "table", table: "orders" },

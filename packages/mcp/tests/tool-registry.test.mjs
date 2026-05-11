@@ -60,7 +60,6 @@ test("tool registry registers default MCP tools through legacy tool API", async 
       "diagnose_slow_query",
       "diagnose_connection_spike",
       "diagnose_lock_contention",
-      "diagnose_replication_lag",
       "diagnose_storage_pressure",
     ],
   );
@@ -167,7 +166,7 @@ test("tool registry registers TaurusDB-specific tools based on startup probe", (
   assert.equal(calls.some((call) => call.name === "explain_sql_enhanced"), true);
   assert.equal(calls.some((call) => call.name === "flashback_query"), true);
   assert.equal(calls.some((call) => call.name === "list_recycle_bin"), true);
-  assert.equal(calls.some((call) => call.name === "restore_recycle_bin_table"), false);
+  assert.equal(calls.some((call) => call.name === "restore_recycle_bin_table"), true);
 
   const mutationEnabled = createLegacyToolServerRecorder();
   registerTools(

@@ -169,7 +169,6 @@ export type {
   DiagnosisWindow,
   DiagnoseConnectionSpikeInput,
   DiagnoseLockContentionInput,
-  DiagnoseReplicationLagInput,
   DiagnoseSlowQueryInput,
   DiagnoseStoragePressureInput,
   PlaceholderDiagnosticOptions,

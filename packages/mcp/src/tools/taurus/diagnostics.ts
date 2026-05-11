@@ -7,7 +7,6 @@ import type {
   DiagnoseConnectionSpikeInput,
   DiagnoseDbHotspotInput,
   DiagnoseLockContentionInput,
-  DiagnoseReplicationLagInput,
   DiagnoseServiceLatencyInput,
   DiagnoseSlowQueryInput,
   DiagnoseStoragePressureInput,
@@ -335,37 +334,6 @@ export const diagnoseLockContentionTool: ToolDefinition = {
   },
 };
 
-export const diagnoseReplicationLagTool: ToolDefinition = {
-  name: "diagnose_replication_lag",
-  description:
-    "Diagnose replication lag and replica replay pressure using replica status plus CES lag, long-transaction, and write-pressure signals.",
-  inputSchema: {
-    ...diagnosticBaseInputShape,
-    replica_id: diagnosticString("Optional replica identifier to focus on."),
-    channel: diagnosticString("Optional replication channel to focus on."),
-  },
-  async handler(input, deps, context): Promise<ToolResponse> {
-    try {
-      const ctx = await resolveContext(input, deps, context, true);
-      const diagnosticInput: DiagnoseReplicationLagInput = {
-        ...parseBaseInput(input),
-        replicaId: asOptionalString(input.replica_id, "replica_id"),
-        channel: asOptionalString(input.channel, "channel"),
-      };
-      const result = await deps.engine.diagnoseReplicationLag(diagnosticInput, ctx);
-      return formatSuccess(toPublicDiagnosticResult(result), {
-        summary: summarizeDiagnostic("Replication-lag diagnosis", result.status),
-        metadata: metadata(context.taskId),
-      });
-    } catch (error) {
-      return formatToolError(error, {
-        action: "diagnose_replication_lag",
-        metadata: metadata(context.taskId),
-      });
-    }
-  },
-};
-
 export const diagnoseStoragePressureTool: ToolDefinition = {
   name: "diagnose_storage_pressure",
   description:
@@ -404,7 +372,6 @@ export const diagnosticToolDefinitions: ToolDefinition[] = [
   diagnoseSlowQueryTool,
   diagnoseConnectionSpikeTool,
   diagnoseLockContentionTool,
-  diagnoseReplicationLagTool,
   diagnoseStoragePressureTool,
 ];
 

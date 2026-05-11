@@ -45,7 +45,14 @@ export interface PoolHealth {
 }
 
 export interface ConnectionPool {
-  acquire(datasource: string, mode: PoolMode): Promise<Session>;
+  acquire(
+    datasource: string,
+    mode: PoolMode,
+    opts?: {
+      allowWithoutGlobalMutations?: boolean;
+      allowReadonlyFallbackForMutations?: boolean;
+    },
+  ): Promise<Session>;
   release(session: Session): Promise<void>;
   healthCheck(datasource: string): Promise<PoolHealth>;
   close(): Promise<void>;
@@ -157,11 +164,18 @@ function ensureMutationAllowed(config: Config): void {
   }
 }
 
-function selectCredential(profile: DataSourceProfile, mode: PoolMode) {
+function selectCredential(
+  profile: DataSourceProfile,
+  mode: PoolMode,
+  opts: { allowReadonlyFallbackForMutations?: boolean } = {},
+) {
   if (mode === "ro") {
     return profile.readonlyUser;
   }
   if (!profile.mutationUser) {
+    if (opts.allowReadonlyFallbackForMutations) {
+      return profile.readonlyUser;
+    }
     throw new ConnectionPoolError(
       `Mutation user is not configured for datasource "${profile.name}".`,
     );
@@ -196,17 +210,24 @@ export class ConnectionPoolManager implements ConnectionPool {
     this.adapters = options.adapters;
   }
 
-  async acquire(datasource: string, mode: PoolMode): Promise<Session> {
+  async acquire(
+    datasource: string,
+    mode: PoolMode,
+    opts: {
+      allowWithoutGlobalMutations?: boolean;
+      allowReadonlyFallbackForMutations?: boolean;
+    } = {},
+  ): Promise<Session> {
     const profile = await this.profileLoader.get(datasource);
     if (!profile) {
       throw new ConnectionPoolError(`Datasource profile not found: "${datasource}".`);
     }
 
-    if (mode === "rw") {
+    if (mode === "rw" && !opts.allowWithoutGlobalMutations) {
       ensureMutationAllowed(this.config);
     }
 
-    const entry = await this.getOrCreatePool(profile, mode);
+    const entry = await this.getOrCreatePool(profile, mode, opts);
     let driverSession: DriverSession;
     try {
       driverSession = await entry.pool.acquire();
@@ -320,6 +341,7 @@ export class ConnectionPoolManager implements ConnectionPool {
   private async getOrCreatePool(
     profile: DataSourceProfile,
     mode: PoolMode,
+    opts: { allowReadonlyFallbackForMutations?: boolean } = {},
   ): Promise<InternalPoolEntry> {
     const key = poolKey(profile.name, mode);
     const existing = this.pools.get(key);
@@ -327,7 +349,7 @@ export class ConnectionPoolManager implements ConnectionPool {
       return existing instanceof Promise ? existing : existing;
     }
 
-    const pending = this.createPool(profile, mode)
+    const pending = this.createPool(profile, mode, opts)
       .then((entry) => {
         this.pools.set(key, entry);
         return entry;
@@ -341,7 +363,11 @@ export class ConnectionPoolManager implements ConnectionPool {
     return pending;
   }
 
-  private async createPool(profile: DataSourceProfile, mode: PoolMode): Promise<InternalPoolEntry> {
+  private async createPool(
+    profile: DataSourceProfile,
+    mode: PoolMode,
+    opts: { allowReadonlyFallbackForMutations?: boolean } = {},
+  ): Promise<InternalPoolEntry> {
     const adapter = this.adapters[profile.engine];
     if (!adapter) {
       throw new ConnectionPoolError(`No driver adapter registered for engine "${profile.engine}".`);
@@ -352,7 +378,7 @@ export class ConnectionPoolManager implements ConnectionPool {
       );
     }
 
-    const credential = selectCredential(profile, mode);
+    const credential = selectCredential(profile, mode, opts);
     const password = await resolveCredentialValue(
       credential.password,
       this.secretResolver,

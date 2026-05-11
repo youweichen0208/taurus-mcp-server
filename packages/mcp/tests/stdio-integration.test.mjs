@@ -66,7 +66,6 @@ test("stdio transport exposes expected tools and keeps logs on stderr", async ()
       "diagnose_slow_query",
       "diagnose_connection_spike",
       "diagnose_lock_contention",
-      "diagnose_replication_lag",
       "diagnose_storage_pressure",
     ]);
 

@@ -6,7 +6,6 @@ import {
   type DiagnoseConnectionSpikeInput,
   type DiagnoseDbHotspotInput,
   type DiagnoseLockContentionInput,
-  type DiagnoseReplicationLagInput,
   type DiagnoseServiceLatencyInput,
   type DiagnoseSlowQueryInput,
   type DiagnoseStoragePressureInput,

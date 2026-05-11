@@ -75,7 +75,6 @@ import {
   type FindTopSlowSqlResult,
   type DiagnoseConnectionSpikeInput,
   type DiagnoseLockContentionInput,
-  type DiagnoseReplicationLagInput,
   type DiagnoseSlowQueryInput,
   type DiagnoseStoragePressureInput,
   type DiagnosticResult,
@@ -107,7 +106,6 @@ import {
   diagnoseConnectionSpike,
   diagnoseDbHotspot,
   diagnoseLockContention,
-  diagnoseReplicationLag,
   diagnoseServiceLatency,
   diagnoseSlowQuery,
   diagnoseStoragePressure,
@@ -443,13 +441,6 @@ export class TaurusDBEngine {
     ctx: SessionContext,
   ): Promise<DiagnosticResult> {
     return diagnoseLockContention(this, input, ctx);
-  }
-
-  async diagnoseReplicationLag(
-    input: DiagnoseReplicationLagInput,
-    ctx: SessionContext,
-  ): Promise<DiagnosticResult> {
-    return diagnoseReplicationLag(this, input, ctx);
   }
 
   async diagnoseStoragePressure(

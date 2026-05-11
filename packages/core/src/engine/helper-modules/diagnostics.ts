@@ -57,19 +57,42 @@ export function roundMetric(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
+export interface SafeMetricsQueryResult {
+  metrics: MetricSummary[];
+  error?: string;
+}
+
 export async function queryMetricsSafely(
   source: MetricsSource | undefined,
   aliases: MetricAlias[],
   input: DiagnosticBaseInput,
   ctx: SessionContext,
 ): Promise<MetricSummary[]> {
+  const result = await queryMetricsWithStatus(source, aliases, input, ctx);
+  return result.metrics;
+}
+
+export async function queryMetricsWithStatus(
+  source: MetricsSource | undefined,
+  aliases: MetricAlias[],
+  input: DiagnosticBaseInput,
+  ctx: SessionContext,
+): Promise<SafeMetricsQueryResult> {
   if (!source) {
-    return [];
+    return { metrics: [] };
   }
   try {
-    return await source.query({ aliases, timeRange: input.timeRange }, ctx);
-  } catch {
-    return [];
+    return {
+      metrics: await source.query({ aliases, timeRange: input.timeRange }, ctx),
+    };
+  } catch (error) {
+    return {
+      metrics: [],
+      error:
+        error instanceof Error && error.message.trim().length > 0
+          ? error.message
+          : "Metrics query failed.",
+    };
   }
 }
 

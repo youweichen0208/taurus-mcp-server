@@ -5,7 +5,6 @@ export type DiagnosticToolName =
   | "diagnose_slow_query"
   | "diagnose_connection_spike"
   | "diagnose_lock_contention"
-  | "diagnose_replication_lag"
   | "diagnose_storage_pressure";
 
 export type DiagnosticStatus = "ok" | "inconclusive" | "not_applicable";
@@ -58,11 +57,6 @@ export interface DiagnoseConnectionSpikeInput extends DiagnosticBaseInput {
 export interface DiagnoseLockContentionInput extends DiagnosticBaseInput {
   table?: string;
   blockerSessionId?: string;
-}
-
-export interface DiagnoseReplicationLagInput extends DiagnosticBaseInput {
-  replicaId?: string;
-  channel?: string;
 }
 
 export interface DiagnoseStoragePressureInput extends DiagnosticBaseInput {

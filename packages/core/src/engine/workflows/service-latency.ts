@@ -6,7 +6,6 @@ import {
   type DiagnoseConnectionSpikeInput,
   type DiagnoseDbHotspotInput,
   type DiagnoseLockContentionInput,
-  type DiagnoseReplicationLagInput,
   type DiagnoseServiceLatencyInput,
   type DiagnoseSlowQueryInput,
   type DiagnoseStoragePressureInput,
@@ -108,7 +107,6 @@ export async function diagnoseServiceLatency(
             "slow_queries",
             "storage_write_delay",
             "storage_read_delay",
-            "replication_delay",
           ],
           input,
           ctx,
@@ -120,7 +118,6 @@ export async function diagnoseServiceLatency(
     const slowQueriesMetric = pickMetric(metrics, "slow_queries");
     const writeDelayMetric = pickMetric(metrics, "storage_write_delay");
     const readDelayMetric = pickMetric(metrics, "storage_read_delay");
-    const replicationDelayMetric = pickMetric(metrics, "replication_delay");
 
     const topCandidates: ServiceLatencyCandidate[] = [];
     const evidence: ServiceLatencyResult["evidence"] = [];
@@ -359,10 +356,6 @@ export async function diagnoseServiceLatency(
         recommendedNextTools.add("find_top_slow_sql");
         recommendedNextTools.add("diagnose_slow_query");
         scoreCategory("slow_sql", input.symptom === "latency" ? 4 : 2);
-      }
-      if ((replicationDelayMetric?.max ?? 0) >= 60) {
-        recommendedNextTools.add("diagnose_replication_lag");
-        scoreCategory("resource_pressure", 3);
       }
     } else {
       for (const limitation of metricsSourceLimitation(engine.metricsSource)) {

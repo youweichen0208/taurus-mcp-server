@@ -75,7 +75,7 @@
 补充说明：
 
 - `list_recycle_bin` 和 `restore_recycle_bin_table` 属于 TaurusDB 专属能力，只有在 capability probe 命中 `recycle_bin` 时才会进入工具面
-- `restore_recycle_bin_table` 还额外受 `TAURUSDB_MCP_ENABLE_MUTATIONS=true` 控制，并且第一次调用必须走 confirmation token
+- `restore_recycle_bin_table` 第一次调用必须走 confirmation token；执行恢复时优先使用 `mutationUser`，未配置时会对该工具单独回退到 `readonlyUser`
 
 结论：
 

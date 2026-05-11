@@ -104,7 +104,6 @@ export const restoreRecycleBinTableTool: ToolDefinition = {
       .optional()
       .describe("Confirmation token returned by the first guarded restore call."),
   },
-  exposeWhen: (config) => config.enableMutations,
   async handler(input, deps, context): Promise<ToolResponse> {
     const restoreInput: RestoreRecycleBinTableInput = {
       recycleTable: asRequiredString(input.recycle_table, "recycle_table"),

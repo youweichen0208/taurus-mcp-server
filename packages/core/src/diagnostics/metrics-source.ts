@@ -12,7 +12,6 @@ export type MetricAlias =
   | "qps"
   | "tps"
   | "slow_queries"
-  | "replication_delay"
   | "storage_used_size"
   | "storage_write_delay"
   | "storage_read_delay"
@@ -80,7 +79,6 @@ const TAURUS_CES_METRICS: Record<MetricAlias, string> = {
   qps: "gaussdb_mysql008_qps",
   tps: "gaussdb_mysql009_tps",
   slow_queries: "gaussdb_mysql074_slow_queries",
-  replication_delay: "gaussdb_mysql077_replication_delay",
   storage_used_size: "gaussdb_mysql048_disk_used_size",
   storage_write_delay: "gaussdb_mysql104_dfv_write_delay",
   storage_read_delay: "gaussdb_mysql105_dfv_read_delay",
@@ -348,11 +346,16 @@ export class CesMetricsSource implements MetricsSource {
           }),
       });
       if (!response.ok) {
-        return {};
+        throw new Error(
+          `CES batch-query-metric-data returned HTTP ${response.status}.`,
+        );
       }
       return parseResponse(response);
-    } catch {
-      return {};
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error("CES batch-query-metric-data request failed.");
     } finally {
       clearTimeout(timer);
     }

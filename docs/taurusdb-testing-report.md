@@ -864,7 +864,14 @@ SHOW SESSION STATUS LIKE 'Created_tmp_disk_tables';
 
 - 当前实例支持 recycle bin
 - tools 已暴露 `list_recycle_bin` / `restore_recycle_bin_table`
-- mutation 已启用
+
+![alt text](image-30.png)
+确认当前TaurusDB内核版本中支持并上线recyle_bin这个功能
+
+![alt text](image-29.png)
+在参数列表中开启`rds_recycle_bin_mode`，设置成`ON`。
+
+![alt text](image-33.png)
 
 推荐先确认：
 
@@ -895,264 +902,201 @@ INSERT INTO t_recycle_bin_test(name) VALUES ('a'), ('b'), ('c');
 DROP TABLE t_recycle_bin_test;
 ```
 
-`list_recycle_bin` 推荐输入：
+![alt text](image-31.png)
 
-```json
-{
-  "datasource": "taurus_mcp"
-}
-```
+![alt text](image-32.png)
 
-重点是从返回结果里找到目标 `recycle_table` 名称，后续恢复必须使用这里返回的名字，而不是原表名。
-
-恢复有两种模式。
-
-模式一：`native_restore`
-
-适合直接恢复回原表，或者在恢复时顺带改名。
-
-第一次调用：
-
-```json
-{
-  "datasource": "taurus_mcp",
-  "recycle_table": "paste_recycle_table_here",
-  "method": "native_restore"
-}
-```
-
-预期：
-
-- 本次不会直接恢复
-- 返回 `CONFIRMATION_REQUIRED`
-- 返回 `confirmation_token`
-
-第二次调用：
-
-```json
-{
-  "datasource": "taurus_mcp",
-  "recycle_table": "paste_recycle_table_here",
-  "method": "native_restore",
-  "confirmation_token": "paste_confirmation_token_here"
-}
-```
-
-如果需要恢复到新名字，也可以在 `native_restore` 下同时带：
-
-```json
-{
-  "datasource": "taurus_mcp",
-  "recycle_table": "paste_recycle_table_here",
-  "method": "native_restore",
-  "destination_database": "taurusdb_test",
-  "destination_table": "t_recycle_bin_test_restore"
-}
-```
-
-模式二：`insert_select`
-
-适合希望恢复动作对 Binlog / DRS 更友好时使用，但要求先建好兼容结构的目标表。
-
-先准备目标表：
-
-```sql
-CREATE TABLE t_recycle_bin_test_restore (
-  id BIGINT PRIMARY KEY,
-  name VARCHAR(64) NOT NULL,
-  created_at TIMESTAMP NOT NULL
-) ENGINE=InnoDB;
-```
-
-第一次调用：
-
-```json
-{
-  "datasource": "taurus_mcp",
-  "recycle_table": "paste_recycle_table_here",
-  "method": "insert_select",
-  "destination_database": "taurusdb_test",
-  "destination_table": "t_recycle_bin_test_restore"
-}
-```
-
-第二次调用：
-
-```json
-{
-  "datasource": "taurus_mcp",
-  "recycle_table": "paste_recycle_table_here",
-  "method": "insert_select",
-  "destination_database": "taurusdb_test",
-  "destination_table": "t_recycle_bin_test_restore",
-  "confirmation_token": "paste_confirmation_token_here"
-}
-```
-
-验收点：
-
-- `list_recycle_bin` 返回只读结果，不应要求 confirmation
-- 第一次 restore 返回 `CONFIRMATION_REQUIRED`
-- 第一次 restore 返回 `confirmation_token`
-- 第二次带 token 才真正执行
-- 第二次必须使用与第一次完全相同的 `recycle_table`、`method`、`destination_database`、`destination_table`
-- `native_restore` 适合直接恢复或恢复时改名
-- `insert_select` 需要目标表已存在且结构兼容
-- 恢复完成后，应能查询到恢复后的表和样本数据
-
-截图点：
-
-- 回收站列表
-- 第一次 restore 返回 confirmation
-- 第二次 restore 成功
-- 恢复后表数据查询结果
-
-如果当前实例 `is_taurusdb=false` 或 feature 不支持，这一组直接记为 `SKIP`。
-
-### 4.7 复制延迟验证样本
+### 4.7 Flashback Query 验证样本
 
 前提：
 
-- 这一项不能在单实例上伪造，必须有主从或只读节点复制链路
-- 如果当前实例没有 replica，`diagnose_replication_lag` 返回 `not_applicable` 是合理结果
-- 更适合在主库制造写入压力，在只读节点或可见复制状态的连接上观察 `SHOW REPLICA STATUS`
+- 当前实例支持 `flashback_query`
+- 工具已暴露 `flashback_query`
+- 使用可丢弃测试表，不要直接在生产表上构造历史版本
 
-推荐输入：
+推荐先确认：
 
-```json
-{
-  "datasource": "taurus_mcp",
-  "database": "taurusdb_test",
-  "time_range": {
-    "relative": "30m"
-  },
-  "evidence_level": "full",
-  "include_raw_evidence": true
-}
-```
+1. `list_taurus_features`
+2. `flashback_query`
 
-如果知道 replica 或 channel：
+最小造景步骤：
 
-```json
-{
-  "datasource": "taurus_mcp",
-  "database": "taurusdb_test",
-  "replica_id": "your_replica_id",
-  "channel": "your_channel",
-  "time_range": {
-    "relative": "30m"
-  },
-  "evidence_level": "full",
-  "include_raw_evidence": true
-}
-```
+1. 建一个可丢弃测试表并插入初始数据
+2. 记录一个时间点 `T1`
+3. 对同一行执行 `UPDATE`
+4. 记录第二个时间点 `T2`
+5. 用 `flashback_query` 查询 `T1` 附近的历史视图
+6. 用普通 `SELECT` 查询当前结果，与历史结果做对比
 
-工具当前主要关注四类证据：
-
-- `SHOW REPLICA STATUS` 或 `SHOW SLAVE STATUS`
-- CES `replication_delay`
-- CES `long_trx_count`
-- CES `write_iops` / `write_throughput`
-
-更容易稳定命中的构造方式有两类。
-
-方案一：长事务 + 大批量写入
-
-适合优先验证，因为既容易触发 `long_trx_count`，也更接近真实业务里的大事务回放滞后。
-
-准备表：
+准备 SQL：
 
 ```sql
-CREATE TABLE IF NOT EXISTS t_replica_lag_test (
+CREATE TABLE t_flashback_query_test (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
-  k INT NOT NULL,
-  payload LONGTEXT NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  name VARCHAR(64) NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
+
+INSERT INTO t_flashback_query_test(name, status)
+VALUES ('flashback-a', 'draft');
+
+SELECT NOW(6) AS t1_before_update;
+
+UPDATE t_flashback_query_test
+SET status = 'published'
+WHERE id = 1;
+
+SELECT NOW(6) AS t2_after_update;
 ```
 
-会话 A，在主库执行：
+`flashback_query` 推荐输入：
+
+```json
+{
+  "datasource": "taurus_mcp",
+  "database": "taurusdb_test",
+  "table": "t_flashback_query_test",
+  "as_of": {
+    "timestamp": "paste_t1_before_update_here"
+  },
+  "where": "id = 1",
+  "columns": ["id", "name", "status", "updated_at"],
+  "limit": 1
+}
+```
+
+当前态对比 SQL：
 
 ```sql
-SET autocommit = 0;
-BEGIN;
-
-INSERT INTO t_replica_lag_test(k, payload)
-SELECT
-  a.n + b.n * 10 + c.n * 100,
-  RPAD(CONCAT('lag-', a.n, '-', b.n, '-', c.n), 8192, 'x')
-FROM
-  (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
-   UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) a
-CROSS JOIN
-  (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
-   UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) b
-CROSS JOIN
-  (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4
-   UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) c;
+SELECT id, name, status, updated_at
+FROM t_flashback_query_test
+WHERE id = 1;
 ```
 
-执行后先不要提交，保持事务打开 2 到 5 分钟。
+预期结果：
 
-观察 SQL：
+- `flashback_query` 返回 `status='draft'`
+- 当前普通 `SELECT` 返回 `status='published'`
+- `flashback_query` 只返回历史只读结果，不改变当前表数据
 
-```sql
-SHOW REPLICA STATUS;
-```
+如果时间点太靠近导致结果不稳定：
 
-重点看下面几个字段是否开始抬升或异常：
-
-- `Seconds_Behind_Master` 或 `Seconds_Behind_Source`
-- `Replica_IO_Running`
-- `Replica_SQL_Running`
-- `Last_IO_Error`
-- `Last_SQL_Error`
-
-方案二：连续小事务高频写
-
-如果不方便长时间持有大事务，可以持续做高频写入 2 到 10 分钟。
-
-```sql
-INSERT INTO t_replica_lag_test(k, payload)
-SELECT
-  FLOOR(RAND() * 100000),
-  RPAD(UUID(), 4096, 'x')
-FROM
-  (SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5
-   UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9 UNION ALL SELECT 10) t;
-```
-
-必要时再配合：
-
-```sql
-UPDATE t_replica_lag_test
-SET payload = RPAD(UUID(), 4096, 'y')
-WHERE id % 10 = 0;
-```
-
-这一类更容易把结果导向主库写压过高，而不是长事务。
-
-实现阈值说明：
-
-- 复制延迟达到 `60s` 以上，预期命中 `replication_lag_delay_confirmed`
-- 复制延迟达到 `300s` 以上，严重度更容易到 `high`
-- `long_trx_count > 0` 时，预期命中 `replication_lag_long_transaction_pressure`
-- `write_iops >= 1000` 或 `write_throughput >= 50 MB/s` 时，预期命中 `replication_lag_write_pressure`
-
-验收点：
-
-- 有复制链路且 lag 明显升高时，应返回 `replication_status`，并尽量看到 `ces_metrics`
-- 长事务场景下，优先期望出现 `replication_lag_long_transaction_pressure`
-- 写压场景下，优先期望出现 `replication_lag_write_pressure`
-- `Seconds_Behind_Master` 或 `Seconds_Behind_Source` 超过 60 秒时，预期出现 `replication_lag_delay_confirmed`
+- 在记录 `T1` 后等待 1 到 2 秒再执行 `UPDATE`
+- 或改用相对时间，例如 `as_of.relative = "10s"`
 
 截图点：
 
-- `diagnose_replication_lag`
-- `SHOW REPLICA STATUS`
-- 长事务或高频写入执行中的会话
+- `T1` / `T2` 时间点记录
+- `flashback_query` 返回历史值
+- 普通 `SELECT` 返回当前值
 
----
+### 4.8 Enhanced Explain 专属能力验证样本
+
+前提：
+
+- 当前实例支持 TaurusDB 专属 explain 增强
+- `list_taurus_features` 已返回 `ndp_pushdown`、`parallel_query`、`offset_pushdown`
+- 工具已暴露 `explain_sql_enhanced`
+
+推荐先确认：
+
+1. `list_taurus_features`
+2. `explain_sql_enhanced`
+
+最小造景步骤：
+
+1. 准备一张行数足够多的测试表
+2. 分别构造大分页、聚合扫描、过滤聚合三类 SQL
+3. 对每条 SQL 执行 `explain_sql_enhanced`
+4. 记录返回中的 `taurusHints`、`optimizationSuggestions`、`blockedReason`
+
+准备 SQL：
+
+```sql
+DROP TABLE IF EXISTS t_explain_taurus_test;
+
+CREATE TABLE t_explain_taurus_test (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  amount DECIMAL(12,2) NOT NULL,
+  created_at DATETIME NOT NULL,
+  note VARCHAR(255) NOT NULL
+) ENGINE=InnoDB;
+
+SET SESSION cte_max_recursion_depth = 60000;
+
+INSERT INTO t_explain_taurus_test (user_id, status, amount, created_at, note)
+WITH RECURSIVE seq AS (
+  SELECT 1 AS n
+  UNION ALL
+  SELECT n + 1 FROM seq WHERE n < 50000
+)
+SELECT
+  n % 1000,
+  CASE
+    WHEN n % 4 = 0 THEN 'paid'
+    WHEN n % 4 = 1 THEN 'pending'
+    WHEN n % 4 = 2 THEN 'cancelled'
+    ELSE 'refunded'
+  END,
+  (n % 10000) / 10.0,
+  TIMESTAMP('2026-01-01 00:00:00') + INTERVAL (n % 14400) MINUTE,
+  RPAD(CONCAT('note-', n), 120, 'x')
+FROM seq;
+```
+
+验证 SQL 1：`offset_pushdown`
+
+```sql
+SELECT id, user_id, status
+FROM t_explain_taurus_test
+ORDER BY id
+LIMIT 20 OFFSET 5000;
+```
+
+验证 SQL 2：`parallel_query`
+
+```sql
+SELECT status, COUNT(*) AS cnt
+FROM t_explain_taurus_test
+GROUP BY status;
+```
+
+验证 SQL 3：`ndp_pushdown`
+
+```sql
+SELECT status, SUM(amount) AS total_amount
+FROM t_explain_taurus_test
+WHERE created_at >= '2026-01-03 00:00:00'
+GROUP BY status;
+```
+
+`explain_sql_enhanced` 推荐输入示例：
+
+```json
+{
+  "datasource": "taurus_mcp",
+  "database": "taurusdb_test",
+  "sql": "SELECT id, user_id, status FROM t_explain_taurus_test ORDER BY id LIMIT 20 OFFSET 5000"
+}
+```
+
+预期结果：
+
+- `list_taurus_features` 中这三项显示 `available=true`
+- `explain_sql_enhanced` 返回 `taurusHints`
+- 大分页 SQL 能看到 `offset_pushdown` 相关提示
+- 聚合或扫描类 SQL 能看到 `parallel_query`、`ndp_pushdown` 的可用性或阻断原因
+- 如果实例未开启某项能力，返回里应明确体现 `enabled=false` 或 `blockedReason`
+
+截图点：
+
+- `list_taurus_features` 中这三项能力的状态
+- `offset_pushdown` 场景的增强 explain
+- `parallel_query` 场景的增强 explain
+- `ndp_pushdown` 场景的增强 explain
 
 ## 5. 执行步骤
 
@@ -1260,12 +1204,32 @@ npm run cloud:validate
 - 能返回计划
 - 如果专属增强能力可用，应返回 `taurusHints`、`optimizationSuggestions`
 - 如果不可用，要能给出可接受降级
+- 如果要验证 TaurusDB 专属能力，至少补 3 组 SQL：
+  - 大分页 SQL：看 `offset_pushdown`
+  - 大扫描/聚合 SQL：看 `parallel_query`
+  - 过滤 + 聚合 SQL：看 `ndp_pushdown`
+
+建议按下面顺序补充：
+
+1. 先跑 `list_taurus_features`
+2. 确认 `ndp_pushdown`、`parallel_query`、`offset_pushdown` 的 `available` / `enabled`
+3. 再对 [4.8 Enhanced Explain 专属能力验证样本](#48-enhanced-explain-专属能力验证样本) 中的 3 组 SQL 执行 `explain_sql_enhanced`
+
+补充验收：
+
+- `offset_pushdown` 场景应能看到针对 `OFFSET` 的增强提示
+- `parallel_query` 场景应能看到并行执行相关提示，或明确显示未启用/被阻断
+- `ndp_pushdown` 场景应能看到下推相关提示，或明确显示未启用/被阻断
+- 如果三项都不可见，需在报告中记录实例参数状态，不要只写“未命中”
 
 截图：
 
 - 简单 SQL explain
 - 业务 SQL explain
 - 增强 explain 输出
+- `offset_pushdown` 样例 explain
+- `parallel_query` 样例 explain
+- `ndp_pushdown` 样例 explain
 
 ### 5.6 Diagnostics 分组执行建议
 
@@ -1287,7 +1251,6 @@ npm run cloud:validate
 - `diagnose_service_latency` 的 `ces_metrics` 补强
 - `diagnose_connection_spike` 的 `ces_metrics` 补强
 - `diagnose_storage_pressure` 的 `ces_metrics` 补强
-- `diagnose_replication_lag`
 
 建议你整理报告时按下面两类结果记录：
 
@@ -1489,7 +1452,7 @@ npm run cloud:validate
 补充验收：
 
 - `evidence[].source` 里尽量出现 `ces_metrics`
-- 结果能补充 CPU、内存、连接使用率、存储延迟、复制延迟等资源压力线索
+- 结果能补充 CPU、内存、连接使用率、存储延迟等资源压力线索
 
 截图：
 
@@ -1548,68 +1511,6 @@ npm run cloud:validate
 - `table_storage` / SQL 证据与 `ces_metrics` 已合并
 - 当前更像容量压力、读延迟、写延迟，还是 IOPS / 吞吐压力
 
-#### 5.8.5 复制延迟诊断
-
-前置样本：
-
-- 先按 [4.7 复制延迟验证样本](#47-复制延迟验证样本) 构造复制延迟现场
-
-调用：
-
-1. `diagnose_replication_lag`
-
-推荐输入：
-
-```json
-{
-  "datasource": "taurus_mcp",
-  "database": "taurusdb_test",
-  "time_range": {
-    "relative": "30m"
-  },
-  "evidence_level": "full",
-  "include_raw_evidence": true
-}
-```
-
-如果知道 replica 或 channel：
-
-```json
-{
-  "datasource": "taurus_mcp",
-  "database": "taurusdb_test",
-  "replica_id": "your_replica_id",
-  "channel": "your_channel",
-  "time_range": {
-    "relative": "30m"
-  },
-  "evidence_level": "full",
-  "include_raw_evidence": true
-}
-```
-
-验收：
-
-- 有复制链路且 lag 明显升高时，应返回 `replication_status`，并尽量看到 `ces_metrics`
-- 长事务场景下，优先期望出现 `replication_lag_long_transaction_pressure`
-- 写压场景下，优先期望出现 `replication_lag_write_pressure`
-- `Seconds_Behind_Master` 或 `Seconds_Behind_Source` 超过 60 秒时，预期出现 `replication_lag_delay_confirmed`
-- 有复制链路时，应返回复制相关证据
-- 单实例或无复制链路时，`not_applicable` 可接受
-
-截图：
-
-- `diagnose_replication_lag`
-- `SHOW REPLICA STATUS`
-- 长事务或高频写入执行中的会话
-
-补充说明：
-
-- 这是 diagnostics 里最重度依赖 CES 的部分
-- 如果当前实例没有复制链路，最终可记 `not_applicable`
-- 如果有复制链路，建议把这一组单独归到“CES 增强诊断”里
-- 建议在图注里明确标出 `replication_delay`、`long_trx_count`、`write_iops`、`write_throughput` 里实际出现了哪些 CES 指标
-
 ### 5.9 回收站恢复
 
 前置样本：
@@ -1646,6 +1547,36 @@ npm run cloud:validate
 - 第二次 restore 成功
 - 恢复后表数据查询结果
 
+### 5.10 Flashback Query
+
+前置样本：
+
+- 先按 [4.7 Flashback Query 验证样本](#47-flashback-query-验证样本) 构造历史版本
+
+只在支持时执行：
+
+1. `flashback_query`
+2. `execute_readonly_sql`
+
+验收：
+
+- `flashback_query` 能返回指定历史时间点的数据视图
+- 当前普通 `SELECT` 能返回更新后的当前值
+- 历史查询结果与当前结果存在预期差异
+- `flashback_query` 不应要求 confirmation，也不应修改当前数据
+
+注意：
+
+- `as_of.timestamp` 和 `as_of.relative` 二选一
+- 建议优先记录明确时间点，再做更新，避免只靠相对时间猜测
+- 如果环境不支持 flashback query，直接记 `SKIP`
+
+截图：
+
+- `flashback_query` 返回结果
+- 当前普通 `SELECT` 返回结果
+- 同一行历史态与当前态对比结果
+
 ---
 
 ## 6. 可接受跳过条件
@@ -1656,8 +1587,6 @@ npm run cloud:validate
   - 跳过 TaurusDB 专属能力验证
 - `list_taurus_features` 不暴露 `recycle_bin`
   - 跳过 recycle bin 恢复
-- 无复制链路
-  - `diagnose_replication_lag` 记 `not_applicable`
 - `performance_schema=OFF`
   - 依赖运行时 statement/waits 的深度诊断可能降级
 
@@ -1681,8 +1610,8 @@ npm run cloud:validate
 12. `diagnose_connection_spike`
 13. `diagnose_lock_contention`
 14. `diagnose_storage_pressure`
-15. `diagnose_replication_lag`
-16. `list_recycle_bin` / `restore_recycle_bin_table`
+15. `list_recycle_bin` / `restore_recycle_bin_table`
+16. `flashback_query`
 
 建议命名：
 
@@ -1698,8 +1627,11 @@ test-assets/cloud-taurusdb/10-show-processlist.png
 test-assets/cloud-taurusdb/11-diagnose-connection-spike.png
 test-assets/cloud-taurusdb/12-diagnose-lock-contention.png
 test-assets/cloud-taurusdb/13-diagnose-storage-pressure.png
-test-assets/cloud-taurusdb/14-diagnose-replication-lag.png
-test-assets/cloud-taurusdb/15-recycle-bin.png
+test-assets/cloud-taurusdb/14-recycle-bin.png
+test-assets/cloud-taurusdb/15-flashback-query.png
+test-assets/cloud-taurusdb/16-explain-offset-pushdown.png
+test-assets/cloud-taurusdb/17-explain-parallel-query.png
+test-assets/cloud-taurusdb/18-explain-ndp-pushdown.png
 ```
 
 ---
@@ -1784,8 +1716,7 @@ test-assets/cloud-taurusdb/15-recycle-bin.png
 3. 造慢 SQL 样本并跑 `find_top_slow_sql`
 4. 复跑 `diagnose_service_latency`、`diagnose_connection_spike`、`diagnose_storage_pressure`，补齐带 `ces_metrics` 的截图
 5. 造连接堆积和锁等待样本，补全 `show_processlist`、`diagnose_lock_contention`
-6. 如果有复制链路，再做 `diagnose_replication_lag`
-7. 如果 feature 支持，再做 recycle bin 验证
-8. 最后把基础诊断与 CES 增强诊断分别收口到最终报告
+6. 如果 feature 支持，再做 recycle bin 验证
+7. 最后把基础诊断与 CES 增强诊断分别收口到最终报告
 
 你可以把这份文档当成主 checklist，用 [opentaurus-case-template.md](./opentaurus-case-template.md) 组织最后的案例式总结。
