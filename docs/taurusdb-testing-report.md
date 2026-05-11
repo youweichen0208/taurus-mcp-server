@@ -74,12 +74,6 @@ export TAURUSDB_CLOUD_ACCESS_KEY_ID='<ak>'
 export TAURUSDB_CLOUD_SECRET_ACCESS_KEY='<sk>'
 ```
 
-如果当前阶段先跳过 CES：
-
-```bash
-export TAURUSDB_CLOUD_ENABLE_CES=false
-```
-
 如果要验证回收站恢复或其他确认流：
 
 ```bash
@@ -1275,7 +1269,7 @@ npm run cloud:validate
 
 ### 5.6 Diagnostics 分组执行建议
 
-为了方便把你当前“CES 关闭时已经做过的诊断”和“CES 打通后需要补做的诊断”分开整理，建议把 diagnostics 拆成两组执行。
+考虑到 CES 不额外收费，且大多数云端实例测试都会默认开启，建议把 diagnostics 拆成两组执行：
 
 先做或复用现有截图即可的部分：
 
@@ -1287,7 +1281,7 @@ npm run cloud:validate
 - `diagnose_connection_spike` 的本地 `processlist` 证据
 - `diagnose_storage_pressure` 的本地 SQL / `table_storage` 证据
 
-CES 打通后建议补做的部分：
+默认开启 CES 后建议重点补齐的部分：
 
 - `cloud:validate` 里的 `CES batch-query-metric-data`
 - `diagnose_service_latency` 的 `ces_metrics` 补强
@@ -1297,14 +1291,14 @@ CES 打通后建议补做的部分：
 
 建议你整理报告时按下面两类结果记录：
 
-- `无 CES 诊断`
+- `基础诊断`
   - 证明本地 SQL / 内核侧证据链已经成立
-- `有 CES 诊断`
+- `CES 增强诊断`
   - 证明云指标证据已经接通，并能和本地证据合并分析
 
 ### 5.7 无 CES 也可先完成的诊断
 
-这一组即使之前 `TAURUSDB_CLOUD_ENABLE_CES=false` 也可以先完成，已经有截图的部分通常可以直接复用。
+这一组即使不依赖 CES 也可以成立，已经有截图的部分通常可以直接复用，后续只需要补对应的 CES 增强截图。
 
 #### 5.7.1 慢 SQL / 延迟诊断
 
@@ -1353,7 +1347,7 @@ CES 打通后建议补做的部分：
 补充说明：
 
 - `diagnose_service_latency` 即使没有 CES，也可以先用 `statement_digest`、`processlist`、锁证据完成一版结果
-- 如果你之前已经有 latency / top slow sql / slow query 截图，这一组大概率可以直接归到“无 CES 诊断”
+- 如果你之前已经有 latency / top slow sql / slow query 截图，这一组大概率可以直接归到“基础诊断”
 
 #### 5.7.2 连接暴涨诊断
 
@@ -1378,7 +1372,7 @@ CES 打通后建议补做的部分：
 
 - 能识别 idle / active session 特征
 - `evidence[].source` 至少包含 `processlist`
-- 如果 CES 跳过，不要求 `ces_metrics`
+- 这一轮基础截图不强制要求 `ces_metrics`
 
 截图：
 
@@ -1388,7 +1382,7 @@ CES 打通后建议补做的部分：
 补充说明：
 
 - 这一组的基础验收重点还是 `processlist`
-- 如果之前 CES 关闭，当前截图仍然可用于“无 CES 诊断”；后续只需要补一版带 `ces_metrics` 的结果
+- 如果你之前已经有连接现场截图，当前截图仍然可用于“基础诊断”；后续只需要补一版带 `ces_metrics` 的结果
 
 #### 5.7.3 锁竞争诊断
 
@@ -1422,7 +1416,7 @@ CES 打通后建议补做的部分：
 补充说明：
 
 - 锁竞争诊断本身不依赖 CES
-- 这一组如果已经有 blocker / waiter、`show_processlist`、诊断结果截图，可以直接视为已完成的“无 CES 诊断”
+- 这一组如果已经有 blocker / waiter、`show_processlist`、诊断结果截图，可以直接视为已完成的“基础诊断”
 
 #### 5.7.4 存储压力诊断
 
@@ -1445,7 +1439,7 @@ CES 打通后建议补做的部分：
 验收：
 
 - 能返回 `table_storage` 或本地 SQL 证据
-- 若 CES 关闭，不要求云指标证据
+- 这一轮基础截图不强制要求云指标证据
 
 截图：
 
@@ -1454,11 +1448,11 @@ CES 打通后建议补做的部分：
 补充说明：
 
 - `diagnose_storage_pressure` 在没有 CES 时，也可以先靠 `table_storage` 或本地 SQL 证据完成
-- CES 打通后建议再补一版带 `storage_used_size`、延迟、IOPS、吞吐的结果
+- CES 默认开启后，建议再补一版带 `storage_used_size`、延迟、IOPS、吞吐的结果
 
 ### 5.8 CES 打通后建议补做的诊断
 
-这一组是你接下来最适合集中补齐的内容，建议单独作为“有 CES 诊断”整理。
+这一组是你接下来最适合集中补齐的内容，建议单独作为“CES 增强诊断”整理。
 
 #### 5.8.1 Preflight 里的 CES 验证
 
@@ -1476,6 +1470,11 @@ npm run cloud:validate
 截图：
 
 - 更新后的整页 `cloud:validate` 结果
+
+建议在图注里明确标出：
+
+- `CES batch-query-metric-data=ok`
+- 当前 `project_id`、`instance_id`、`node_id` 已成功解析
 
 #### 5.8.2 延迟诊断补 CES 证据
 
@@ -1496,6 +1495,11 @@ npm run cloud:validate
 
 - 带 `ces_metrics` 的 `diagnose_service_latency`
 
+建议在图注里明确标出：
+
+- `ces_metrics` 已出现
+- 当前主要资源压力线索是 CPU / 内存 / 连接 / 存储 / 复制中的哪几项
+
 #### 5.8.3 连接暴涨诊断补 CES 证据
 
 目标：
@@ -1515,6 +1519,11 @@ npm run cloud:validate
 
 - 带 `ces_metrics` 的 `diagnose_connection_spike`
 
+建议在图注里明确标出：
+
+- `processlist` 与 `ces_metrics` 已合并分析
+- 当前连接压力更像 idle session 堆积、active session 暴涨，还是瞬时 QPS 抖动
+
 #### 5.8.4 存储压力诊断补 CES 证据
 
 目标：
@@ -1533,6 +1542,11 @@ npm run cloud:validate
 截图：
 
 - 带 `ces_metrics` 的 `diagnose_storage_pressure`
+
+建议在图注里明确标出：
+
+- `table_storage` / SQL 证据与 `ces_metrics` 已合并
+- 当前更像容量压力、读延迟、写延迟，还是 IOPS / 吞吐压力
 
 #### 5.8.5 复制延迟诊断
 
@@ -1593,7 +1607,8 @@ npm run cloud:validate
 
 - 这是 diagnostics 里最重度依赖 CES 的部分
 - 如果当前实例没有复制链路，最终可记 `not_applicable`
-- 如果有复制链路，建议把这一组单独归到“有 CES 诊断”里
+- 如果有复制链路，建议把这一组单独归到“CES 增强诊断”里
+- 建议在图注里明确标出 `replication_delay`、`long_trx_count`、`write_iops`、`write_throughput` 里实际出现了哪些 CES 指标
 
 ### 5.9 回收站恢复
 
@@ -1643,8 +1658,6 @@ npm run cloud:validate
   - 跳过 recycle bin 恢复
 - 无复制链路
   - `diagnose_replication_lag` 记 `not_applicable`
-- 未配置或暂时关闭 `CES`
-  - 云指标类 evidence 记 `SKIP`
 - `performance_schema=OFF`
   - 依赖运行时 statement/waits 的深度诊断可能降级
 
@@ -1766,13 +1779,13 @@ test-assets/cloud-taurusdb/15-recycle-bin.png
 
 结合你现在已经验证过的结果，建议按下面顺序继续：
 
-1. 保持 `TAURUSDB_CLOUD_ENABLE_CES=false`
-2. 保存当前 `cloud:validate` 成功截图
-3. 做控制面和只读工具截图
-4. 造慢 SQL 样本并跑 `find_top_slow_sql`
-5. 造连接堆积和锁等待样本
-6. 跑 `diagnose_connection_spike`、`diagnose_lock_contention`
+1. 保持 CES 默认开启，并保存当前 `cloud:validate` 成功截图
+2. 做控制面和只读工具截图
+3. 造慢 SQL 样本并跑 `find_top_slow_sql`
+4. 复跑 `diagnose_service_latency`、`diagnose_connection_spike`、`diagnose_storage_pressure`，补齐带 `ces_metrics` 的截图
+5. 造连接堆积和锁等待样本，补全 `show_processlist`、`diagnose_lock_contention`
+6. 如果有复制链路，再做 `diagnose_replication_lag`
 7. 如果 feature 支持，再做 recycle bin 验证
-8. 最后把 `CES` 问题作为单独“已知限制”写进报告
+8. 最后把基础诊断与 CES 增强诊断分别收口到最终报告
 
 你可以把这份文档当成主 checklist，用 [opentaurus-case-template.md](./opentaurus-case-template.md) 组织最后的案例式总结。
