@@ -1273,7 +1273,40 @@ npm run cloud:validate
 - 业务 SQL explain
 - 增强 explain 输出
 
-### 5.6 慢 SQL / 延迟诊断
+### 5.6 Diagnostics 分组执行建议
+
+为了方便把你当前“CES 关闭时已经做过的诊断”和“CES 打通后需要补做的诊断”分开整理，建议把 diagnostics 拆成两组执行。
+
+先做或复用现有截图即可的部分：
+
+- `find_top_slow_sql`
+- `diagnose_slow_query`
+- `diagnose_lock_contention`
+- `show_processlist`
+- `diagnose_service_latency` 的本地 SQL / `processlist` 证据
+- `diagnose_connection_spike` 的本地 `processlist` 证据
+- `diagnose_storage_pressure` 的本地 SQL / `table_storage` 证据
+
+CES 打通后建议补做的部分：
+
+- `cloud:validate` 里的 `CES batch-query-metric-data`
+- `diagnose_service_latency` 的 `ces_metrics` 补强
+- `diagnose_connection_spike` 的 `ces_metrics` 补强
+- `diagnose_storage_pressure` 的 `ces_metrics` 补强
+- `diagnose_replication_lag`
+
+建议你整理报告时按下面两类结果记录：
+
+- `无 CES 诊断`
+  - 证明本地 SQL / 内核侧证据链已经成立
+- `有 CES 诊断`
+  - 证明云指标证据已经接通，并能和本地证据合并分析
+
+### 5.7 无 CES 也可先完成的诊断
+
+这一组即使之前 `TAURUSDB_CLOUD_ENABLE_CES=false` 也可以先完成，已经有截图的部分通常可以直接复用。
+
+#### 5.7.1 慢 SQL / 延迟诊断
 
 调用顺序：
 
@@ -1317,7 +1350,12 @@ npm run cloud:validate
 - top slow sql 结果
 - slow query 根因结果
 
-### 5.7 连接暴涨诊断
+补充说明：
+
+- `diagnose_service_latency` 即使没有 CES，也可以先用 `statement_digest`、`processlist`、锁证据完成一版结果
+- 如果你之前已经有 latency / top slow sql / slow query 截图，这一组大概率可以直接归到“无 CES 诊断”
+
+#### 5.7.2 连接暴涨诊断
 
 调用：
 
@@ -1347,7 +1385,12 @@ npm run cloud:validate
 - `show_processlist`
 - `diagnose_connection_spike`
 
-### 5.8 锁竞争诊断
+补充说明：
+
+- 这一组的基础验收重点还是 `processlist`
+- 如果之前 CES 关闭，当前截图仍然可用于“无 CES 诊断”；后续只需要补一版带 `ces_metrics` 的结果
+
+#### 5.7.3 锁竞争诊断
 
 调用：
 
@@ -1376,7 +1419,12 @@ npm run cloud:validate
 - 阻塞窗口中的 `show_processlist`
 - `diagnose_lock_contention` 结果
 
-### 5.9 存储压力诊断
+补充说明：
+
+- 锁竞争诊断本身不依赖 CES
+- 这一组如果已经有 blocker / waiter、`show_processlist`、诊断结果截图，可以直接视为已完成的“无 CES 诊断”
+
+#### 5.7.4 存储压力诊断
 
 调用：
 
@@ -1403,7 +1451,90 @@ npm run cloud:validate
 
 - `diagnose_storage_pressure`
 
-### 5.10 复制延迟诊断
+补充说明：
+
+- `diagnose_storage_pressure` 在没有 CES 时，也可以先靠 `table_storage` 或本地 SQL 证据完成
+- CES 打通后建议再补一版带 `storage_used_size`、延迟、IOPS、吞吐的结果
+
+### 5.8 CES 打通后建议补做的诊断
+
+这一组是你接下来最适合集中补齐的内容，建议单独作为“有 CES 诊断”整理。
+
+#### 5.8.1 Preflight 里的 CES 验证
+
+执行：
+
+```bash
+npm run cloud:validate
+```
+
+新增验收重点：
+
+- `CES batch-query-metric-data` 为 `ok`
+- 截图里能看到整页 `cloud:validate` 成功结果
+
+截图：
+
+- 更新后的整页 `cloud:validate` 结果
+
+#### 5.8.2 延迟诊断补 CES 证据
+
+目标：
+
+- 在已有 `diagnose_service_latency` 结果基础上，补一版包含 `ces_metrics` 的结果
+
+建议复跑：
+
+1. `diagnose_service_latency`
+
+补充验收：
+
+- `evidence[].source` 里尽量出现 `ces_metrics`
+- 结果能补充 CPU、内存、连接使用率、存储延迟、复制延迟等资源压力线索
+
+截图：
+
+- 带 `ces_metrics` 的 `diagnose_service_latency`
+
+#### 5.8.3 连接暴涨诊断补 CES 证据
+
+目标：
+
+- 在已有 `show_processlist` / `diagnose_connection_spike` 结果基础上，补一版包含 CES 连接指标的结果
+
+建议复跑：
+
+1. `diagnose_connection_spike`
+
+补充验收：
+
+- `evidence[].source` 里尽量出现 `ces_metrics`
+- 能看到 `connection_count`、`active_connection_count`、`connection_usage`、`QPS` 中至少一部分指标
+
+截图：
+
+- 带 `ces_metrics` 的 `diagnose_connection_spike`
+
+#### 5.8.4 存储压力诊断补 CES 证据
+
+目标：
+
+- 在已有本地 SQL / `table_storage` 结果基础上，补一版带 CES 存储指标的结果
+
+建议复跑：
+
+1. `diagnose_storage_pressure`
+
+补充验收：
+
+- `evidence[].source` 里尽量出现 `ces_metrics`
+- 能看到 `storage_used_size`、读写延迟、IOPS、吞吐、临时表指标中的至少一部分
+
+截图：
+
+- 带 `ces_metrics` 的 `diagnose_storage_pressure`
+
+#### 5.8.5 复制延迟诊断
 
 前置样本：
 
@@ -1458,7 +1589,13 @@ npm run cloud:validate
 - `SHOW REPLICA STATUS`
 - 长事务或高频写入执行中的会话
 
-### 5.11 回收站恢复
+补充说明：
+
+- 这是 diagnostics 里最重度依赖 CES 的部分
+- 如果当前实例没有复制链路，最终可记 `not_applicable`
+- 如果有复制链路，建议把这一组单独归到“有 CES 诊断”里
+
+### 5.9 回收站恢复
 
 前置样本：
 
