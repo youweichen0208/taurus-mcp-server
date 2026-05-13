@@ -12,7 +12,7 @@ test("config uses documented defaults when env is empty", () => {
 
   assert.equal(config.defaultDatasource, undefined);
   assert.equal(config.profilesPath, undefined);
-  assert.equal(config.enableMutations, false);
+  assert.equal(config.enableMutations, true);
   assert.equal(config.cloud.provider, "huaweicloud");
   assert.equal(config.cloud.region, undefined);
   assert.equal(config.cloud.projectId, undefined);

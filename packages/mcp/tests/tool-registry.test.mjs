@@ -48,6 +48,7 @@ test("tool registry registers default MCP tools through legacy tool API", async 
       "show_processlist",
       "execute_readonly_sql",
       "explain_sql",
+      "execute_sql",
       "get_kernel_info",
       "list_taurus_features",
       "set_cloud_region",
@@ -77,18 +78,18 @@ test("tool registry registers default MCP tools through legacy tool API", async 
   assert.match(result.structuredContent.metadata.task_id, /^task_/);
 });
 
-test("tool registry registers execute_sql only when mutations are enabled", () => {
-  const disabled = createLegacyToolServerRecorder();
-  registerTools(disabled.server, { pingResponse: "pong" }, createConfigFromEnv({}));
-  assert.equal(disabled.calls.some((call) => call.name === "execute_sql"), false);
+test("tool registry exposes execute_sql by default and hides it when mutations are disabled", () => {
+  const enabledByDefault = createLegacyToolServerRecorder();
+  registerTools(enabledByDefault.server, { pingResponse: "pong" }, createConfigFromEnv({}));
+  assert.equal(enabledByDefault.calls.some((call) => call.name === "execute_sql"), true);
 
-  const enabled = createLegacyToolServerRecorder();
+  const disabled = createLegacyToolServerRecorder();
   registerTools(
-    enabled.server,
+    disabled.server,
     { pingResponse: "pong" },
-    createConfigFromEnv({ TAURUSDB_MCP_ENABLE_MUTATIONS: "true" }),
+    createConfigFromEnv({ TAURUSDB_MCP_ENABLE_MUTATIONS: "false" }),
   );
-  assert.equal(enabled.calls.some((call) => call.name === "execute_sql"), true);
+  assert.equal(disabled.calls.some((call) => call.name === "execute_sql"), false);
 });
 
 test("tool registry registers diagnostics tools by default", () => {

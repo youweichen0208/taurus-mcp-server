@@ -45,14 +45,13 @@ export TAURUSDB_DEFAULT_DATASOURCE=taurus_mcp
 如果要验证写操作确认流，再补：
 
 ```bash
-export TAURUSDB_MCP_ENABLE_MUTATIONS=true
 export TAURUSDB_SQL_MUTATION_USER='<mutation-user>'
 export TAURUSDB_SQL_MUTATION_PASSWORD='<mutation-password>'
 ```
 
 注意：
 
-- `restore_recycle_bin_table` 只有在 `TAURUSDB_MCP_ENABLE_MUTATIONS=true` 时才会暴露。
+- `restore_recycle_bin_table` 默认暴露；只有在显式设置 `TAURUSDB_MCP_ENABLE_MUTATIONS=false` 时才会隐藏。
 - 该 Tool 的第一次调用不会直接执行恢复，而是先返回 `confirmation_token`。
 
 如果你的云端连接需要 TLS，建议用 profile 文件，而不是把所有配置塞进环境变量：

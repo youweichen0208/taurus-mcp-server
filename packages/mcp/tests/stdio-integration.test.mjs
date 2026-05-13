@@ -54,6 +54,7 @@ test("stdio transport exposes expected tools and keeps logs on stderr", async ()
       "show_processlist",
       "execute_readonly_sql",
       "explain_sql",
+      "execute_sql",
       "get_kernel_info",
       "list_taurus_features",
       "set_cloud_region",
@@ -87,14 +88,13 @@ test("stdio transport exposes expected tools and keeps logs on stderr", async ()
   }
 });
 
-test("stdio transport exposes execute_sql when mutations are enabled", async () => {
+test("stdio transport exposes execute_sql by default", async () => {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [serverEntrypoint],
     cwd: path.resolve(__dirname, "../../.."),
     stderr: "pipe",
     env: {
-      TAURUSDB_MCP_ENABLE_MUTATIONS: "true",
       TAURUSDB_MCP_LOG_LEVEL: "error",
     },
   });

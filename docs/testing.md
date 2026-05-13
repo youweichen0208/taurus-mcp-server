@@ -451,7 +451,6 @@ export TAURUSDB_SQL_PASSWORD='taurus_ro_password'
 export TAURUSDB_SQL_MUTATION_USER=taurus_rw
 export TAURUSDB_SQL_MUTATION_PASSWORD='taurus_rw_password'
 export TAURUSDB_DEFAULT_DATASOURCE=local_mysql
-export TAURUSDB_MCP_ENABLE_MUTATIONS=true
 export TAURUSDB_MCP_LOG_LEVEL=info
 ```
 

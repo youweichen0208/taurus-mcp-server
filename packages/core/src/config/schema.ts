@@ -89,7 +89,7 @@ const CesMetricsSourceSchema = z
 export const ConfigSchema = z.object({
   defaultDatasource: z.string().min(1).optional(),
   profilesPath: z.string().min(1).optional(),
-  enableMutations: z.boolean().default(false),
+  enableMutations: z.boolean().default(true),
   cloud: CloudSchema,
   limits: LimitsSchema,
   audit: AuditSchema,
