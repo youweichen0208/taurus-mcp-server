@@ -1553,10 +1553,42 @@ npm run cloud:validate
 
 - 先按 [4.7 Flashback Query 验证样本](#47-flashback-query-验证样本) 构造历史版本
 
-只在支持时执行：
+![alt text](image-35.png)
+
+执行前确认：
+
+1. `list_taurus_features`
+2. `execute_readonly_sql`
+
+前置条件：
+
+- `flashback_query.available = true`
+- `flashback_query.enabled = true`
+- `SHOW VARIABLES LIKE 'innodb_rds_backquery_enable'` 返回 `ON` 或 `1`
+- 测试表是 `InnoDB`，并且已经启用 `BACKQUERY=1`
+- 使用可丢弃测试表，不要直接在生产表上构造历史版本
+
+如果 `flashback_query.available = true` 但 `enabled = false`：
+
+- 说明当前内核版本已经满足最低要求，但实例参数开关未开启，或尚未生效
+- 需要先在 TaurusDB 控制台打开 `innodb_rds_backquery_enable`
+- 如需对已有测试表启用 flashback，执行 `ALTER TABLE <table_name> BACKQUERY=1`
+- 如果刚开启实例参数，等待状态切换完成后再重新探测 `list_taurus_features`
+
+只在支持且已启用时执行：
 
 1. `flashback_query`
 2. `execute_readonly_sql`
+
+推荐验证步骤：
+
+1. 建立带 `BACKQUERY=1` 的可丢弃测试表，插入初始值
+2. 记录时间点 `T1`
+3. 等待 1 到 2 秒
+4. 更新同一行，把 `status` 从 `draft` 改成 `published`
+5. 查询当前表，确认当前值已经变化
+6. 用 `flashback_query` 按 `T1` 回查同一行历史值
+7. 对比历史态与当前态
 
 验收：
 
@@ -1569,10 +1601,15 @@ npm run cloud:validate
 
 - `as_of.timestamp` 和 `as_of.relative` 二选一
 - 建议优先记录明确时间点，再做更新，避免只靠相对时间猜测
+- 当前实现会把 flashback 时间点格式化到秒级；即使采集时用了 `NOW(6)`，实际查询仍按秒级时间点执行
+- 因此记录 `T1` 后建议等待 1 到 2 秒再执行 `UPDATE`，避免 `T1` 与更新落在同一秒导致结果不稳定
+- 若实例参数已开启但 tool 仍未暴露或仍显示 `enabled=false`，先重新执行 `list_taurus_features`，再检查实例参数是否已生效
 - 如果环境不支持 flashback query，直接记 `SKIP`
 
 截图：
 
+- `list_taurus_features` 中 `flashback_query` 状态
+- `SHOW VARIABLES LIKE 'innodb_rds_backquery_enable'` 结果
 - `flashback_query` 返回结果
 - 当前普通 `SELECT` 返回结果
 - 同一行历史态与当前态对比结果
