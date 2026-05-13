@@ -108,6 +108,7 @@ export function buildFeatureMatrix(
   }
 
   const flashbackEnabled = normalizeBooleanVariable(variables.innodb_rds_backquery_enable);
+  const recycleBinMode = normalizeBooleanVariable(variables.rds_recycle_bin_mode);
   const parallelSetting = variables.force_parallel_execute;
   const parallelEnabled = normalizeBooleanVariable(parallelSetting);
   const offsetPushdownEnabled = inferOffsetPushdown(variables.optimizer_switch);
@@ -125,18 +126,55 @@ export function buildFeatureMatrix(
   const multiTenantActive = normalizeBooleanVariable(
     variables.rds_multi_tenant ?? variables.multi_tenant_mode,
   );
+  const multiTenantParamName =
+    variables.multi_tenant_mode !== undefined
+      ? "multi_tenant_mode"
+      : variables.rds_multi_tenant !== undefined
+        ? "rds_multi_tenant"
+        : "multi_tenant_mode";
+  const statementOutlineEnabled = normalizeBooleanVariable(
+    variables.rds_opt_outline_enabled,
+  );
+  const partitionMdlEnabled = normalizeBooleanVariable(
+    variables.rds_partition_level_mdl_enabled,
+  );
+  const dynamicMaskingEnabled = normalizeBooleanVariable(
+    variables.rds_dynamic_masking_enabled,
+  );
+  const nonblockingDdlEnabled = normalizeBooleanVariable(
+    variables.rds_nonblock_ddl_enable,
+  );
+  const hotRowUpdateEnabled = normalizeBooleanVariable(variables.rds_hotspot);
 
   const flashback = makeVersionGatedFeature(kernelInfo, "flashback_query");
   if (flashback.available) {
     flashback.enabled = flashbackEnabled ?? true;
+    if (flashbackEnabled === false) {
+      flashback.param = "innodb_rds_backquery_enable=OFF";
+    } else if (flashbackEnabled === true) {
+      flashback.param = "innodb_rds_backquery_enable=ON";
+    }
   }
 
   const recycleBin = makeVersionGatedFeature(kernelInfo, "recycle_bin");
   if (recycleBin.available) {
-    recycleBin.enabled = true;
+    recycleBin.enabled = recycleBinMode ?? true;
+    if (recycleBinMode === false) {
+      recycleBin.param = "rds_recycle_bin_mode=OFF";
+    } else if (recycleBinMode === true) {
+      recycleBin.param = "rds_recycle_bin_mode=ON";
+    }
   }
 
   const statementOutline = makeVersionGatedFeature(kernelInfo, "statement_outline");
+  if (statementOutline.available) {
+    statementOutline.enabled = statementOutlineEnabled;
+    if (statementOutlineEnabled === false) {
+      statementOutline.param = "rds_opt_outline_enabled=OFF";
+    } else if (statementOutlineEnabled === true) {
+      statementOutline.param = "rds_opt_outline_enabled=ON";
+    }
+  }
   const columnCompression = makeVersionGatedFeature(kernelInfo, "column_compression");
   const multiTenant: FeatureMatrix["multi_tenant"] = makeVersionGatedFeature(
     kernelInfo,
@@ -145,11 +183,51 @@ export function buildFeatureMatrix(
   if (multiTenant.available) {
     multiTenant.active = multiTenantActive ?? false;
     multiTenant.enabled = multiTenantActive ?? false;
+    if (multiTenantActive === false) {
+      multiTenant.param = `${multiTenantParamName}=OFF`;
+    } else if (multiTenantActive === true) {
+      multiTenant.param =
+        variables[multiTenantParamName] !== undefined
+          ? `${multiTenantParamName}=${variables[multiTenantParamName]}`
+          : `${multiTenantParamName}=ON`;
+    }
   }
   const partitionMdl = makeVersionGatedFeature(kernelInfo, "partition_mdl");
+  if (partitionMdl.available) {
+    partitionMdl.enabled = partitionMdlEnabled;
+    if (partitionMdlEnabled === false) {
+      partitionMdl.param = "rds_partition_level_mdl_enabled=OFF";
+    } else if (partitionMdlEnabled === true) {
+      partitionMdl.param = "rds_partition_level_mdl_enabled=ON";
+    }
+  }
   const dynamicMasking = makeVersionGatedFeature(kernelInfo, "dynamic_masking");
+  if (dynamicMasking.available) {
+    dynamicMasking.enabled = dynamicMaskingEnabled;
+    if (dynamicMaskingEnabled === false) {
+      dynamicMasking.param = "rds_dynamic_masking_enabled=OFF";
+    } else if (dynamicMaskingEnabled === true) {
+      dynamicMasking.param = "rds_dynamic_masking_enabled=ON";
+    }
+  }
   const nonblockingDdl = makeVersionGatedFeature(kernelInfo, "nonblocking_ddl");
+  if (nonblockingDdl.available) {
+    nonblockingDdl.enabled = nonblockingDdlEnabled;
+    if (nonblockingDdlEnabled === false) {
+      nonblockingDdl.param = "rds_nonblock_ddl_enable=OFF";
+    } else if (nonblockingDdlEnabled === true) {
+      nonblockingDdl.param = "rds_nonblock_ddl_enable=ON";
+    }
+  }
   const hotRowUpdate = makeVersionGatedFeature(kernelInfo, "hot_row_update");
+  if (hotRowUpdate.available) {
+    hotRowUpdate.enabled = hotRowUpdateEnabled;
+    if (hotRowUpdateEnabled === false) {
+      hotRowUpdate.param = "rds_hotspot=OFF";
+    } else if (hotRowUpdateEnabled === true) {
+      hotRowUpdate.param = "rds_hotspot=ON";
+    }
+  }
 
   return {
     flashback_query: flashback,
@@ -162,10 +240,17 @@ export function buildFeatureMatrix(
       available: true,
       enabled: ndpMode ? ndpMode !== "OFF" : true,
       mode: ndpMode,
+      param: ndpModeRaw ? `ndp_pushdown_mode=${ndpModeRaw}` : undefined,
     },
     offset_pushdown: {
       available: true,
       enabled: offsetPushdownEnabled ?? true,
+      param:
+        offsetPushdownEnabled === false
+          ? "optimizer_switch: offset_pushdown=off"
+          : offsetPushdownEnabled === true
+            ? "optimizer_switch: offset_pushdown=on"
+            : undefined,
     },
     recycle_bin: recycleBin,
     statement_outline: statementOutline,

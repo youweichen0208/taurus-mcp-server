@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createConfigFromEnv } from "@huaweicloud/taurusdb-core";
+import { createConfigFromEnv, FlashbackNoViewError } from "@huaweicloud/taurusdb-core";
 import { ErrorCode } from "../dist/utils/formatter.js";
 import {
   executeReadonlySqlTool,
@@ -158,18 +158,68 @@ function createDeps(engineOverrides = {}) {
         rawVersion: "8.0.32 TaurusDB 2.0.69.250900",
       }),
       listFeatures: async () => ({
-        flashback_query: { available: true, enabled: true, minVersion: "2.0.69.250900" },
+        flashback_query: {
+          available: true,
+          enabled: true,
+          minVersion: "2.0.69.250900",
+          param: "innodb_rds_backquery_enable=ON",
+        },
         parallel_query: { available: true, enabled: false, param: "force_parallel_execute=OFF" },
-        ndp_pushdown: { available: true, enabled: true, mode: "REPLICA_ON" },
-        offset_pushdown: { available: true, enabled: true },
-        recycle_bin: { available: true, enabled: true, minVersion: "2.0.57.240900" },
-        statement_outline: { available: true, enabled: false, minVersion: "2.0.42.230600" },
+        ndp_pushdown: {
+          available: true,
+          enabled: true,
+          mode: "REPLICA_ON",
+          param: "ndp_pushdown_mode=REPLICA_ON",
+        },
+        offset_pushdown: {
+          available: true,
+          enabled: true,
+          param: "optimizer_switch: offset_pushdown=on",
+        },
+        recycle_bin: {
+          available: true,
+          enabled: true,
+          minVersion: "2.0.57.240900",
+          param: "rds_recycle_bin_mode=ON",
+        },
+        statement_outline: {
+          available: true,
+          enabled: false,
+          minVersion: "2.0.42.230600",
+          param: "rds_opt_outline_enabled=OFF",
+        },
         column_compression: { available: true, minVersion: "2.0.54.240600" },
-        multi_tenant: { available: true, enabled: false, active: false, minVersion: "2.0.54.240600" },
-        partition_mdl: { available: true, minVersion: "2.0.57.240900" },
-        dynamic_masking: { available: true, minVersion: "2.0.69.250900" },
-        nonblocking_ddl: { available: true, minVersion: "2.0.54.240600" },
-        hot_row_update: { available: true, minVersion: "2.0.54.240600" },
+        multi_tenant: {
+          available: true,
+          enabled: false,
+          active: false,
+          minVersion: "2.0.54.240600",
+          param: "rds_multi_tenant=OFF",
+        },
+        partition_mdl: {
+          available: true,
+          enabled: false,
+          minVersion: "2.0.57.240900",
+          param: "rds_partition_level_mdl_enabled=OFF",
+        },
+        dynamic_masking: {
+          available: true,
+          enabled: false,
+          minVersion: "2.0.69.250900",
+          param: "rds_dynamic_masking_enabled=OFF",
+        },
+        nonblocking_ddl: {
+          available: true,
+          enabled: false,
+          minVersion: "2.0.54.240600",
+          param: "rds_nonblock_ddl_enable=OFF",
+        },
+        hot_row_update: {
+          available: true,
+          enabled: false,
+          minVersion: "2.0.54.240600",
+          param: "rds_hotspot=OFF",
+        },
       }),
       explainEnhanced: async () => ({
         standardPlan: {
@@ -713,7 +763,35 @@ test("Taurus capability tools return kernel info and feature matrix", async () =
   const features = await listTaurusFeaturesTool.handler({}, deps, context);
   assert.equal(features.ok, true);
   assert.equal(features.data.features.flashback_query.available, true);
+  assert.equal(
+    features.data.features.flashback_query.param,
+    "innodb_rds_backquery_enable=ON",
+  );
   assert.equal(features.data.features.parallel_query.param, "force_parallel_execute=OFF");
+  assert.equal(features.data.features.ndp_pushdown.param, "ndp_pushdown_mode=REPLICA_ON");
+  assert.equal(
+    features.data.features.offset_pushdown.param,
+    "optimizer_switch: offset_pushdown=on",
+  );
+  assert.equal(features.data.features.recycle_bin.param, "rds_recycle_bin_mode=ON");
+  assert.equal(
+    features.data.features.statement_outline.param,
+    "rds_opt_outline_enabled=OFF",
+  );
+  assert.equal(features.data.features.multi_tenant.param, "rds_multi_tenant=OFF");
+  assert.equal(
+    features.data.features.partition_mdl.param,
+    "rds_partition_level_mdl_enabled=OFF",
+  );
+  assert.equal(
+    features.data.features.dynamic_masking.param,
+    "rds_dynamic_masking_enabled=OFF",
+  );
+  assert.equal(
+    features.data.features.nonblocking_ddl.param,
+    "rds_nonblock_ddl_enable=OFF",
+  );
+  assert.equal(features.data.features.hot_row_update.param, "rds_hotspot=OFF");
 });
 
 test("explain_sql_enhanced returns TaurusDB hints", async () => {
@@ -750,6 +828,49 @@ test("flashback_query returns structured readonly result", async () => {
   assert.equal(result.data.database, "app");
   assert.equal(result.data.table, "orders");
   assert.equal(result.data.row_count, 1);
+});
+
+test("flashback_query surfaces contextual diagnostics when no view is available", async () => {
+  const deps = createDeps({
+    flashbackQuery: async () => {
+      throw new FlashbackNoViewError(
+        "No view available for provided TIMESTAMP.",
+        {
+          requested_timestamp: "2026-05-13 11:04:39",
+          current_time: "2026-05-13 11:10:00",
+          backquery_window_seconds: 3600,
+          current_row_updated_at: "2026-05-13 11:04:39",
+          recommended_timestamps: [
+            "2026-05-13 11:04:38",
+            "2026-05-13 11:04:34",
+          ],
+        },
+      );
+    },
+  });
+
+  const result = await flashbackQueryTool.handler(
+    {
+      database: "app",
+      table: "orders",
+      as_of: { timestamp: "2026-05-13 11:04:39" },
+      where: "id = 1",
+      limit: 1,
+    },
+    deps,
+    context,
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, ErrorCode.CONNECTION_FAILED);
+  assert.equal(
+    result.summary,
+    "No historical flashback view was available for the requested timestamp.",
+  );
+  assert.deepEqual(result.error.details.recommended_timestamps, [
+    "2026-05-13 11:04:38",
+    "2026-05-13 11:04:34",
+  ]);
 });
 
 test("list_recycle_bin returns structured readonly result", async () => {

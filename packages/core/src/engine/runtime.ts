@@ -5,7 +5,15 @@ import type { CancelResult, ExplainResult, MutationOptions, MutationResult, Quer
 import type { ConfirmationToken, ConfirmationValidationResult } from "../safety/confirmation-store.js";
 import { InMemoryConfirmationStore } from "../safety/confirmation-store.js";
 import type { GuardrailDecision } from "../safety/guardrail.js";
-import { buildFlashbackSql, flashbackReadonlyOptions, type FlashbackInput } from "../taurus/flashback.js";
+import {
+  buildFlashbackSql,
+  FlashbackNoViewError,
+  flashbackReadonlyOptions,
+  formatTimestamp,
+  resolveRelativeTimestampFromBase,
+  resolveFlashbackTimestamp,
+  type FlashbackInput,
+} from "../taurus/flashback.js";
 import { buildListRecycleBinSql, buildRestoreRecycleBinTableSql, recycleBinMutationOptions, recycleBinReadonlyOptions, type RestoreRecycleBinTableInput } from "../taurus/recycle-bin.js";
 import type { ConfirmationOutcome, EnhancedExplainResult, IssueConfirmationInput, TaurusDBEngine } from "../engine.js";
 import { normalizeSql, sqlHash } from "../utils/hash.js";
@@ -44,6 +52,184 @@ function explainExtras(plan: ExplainResult["plan"]): string[] {
 
 function hasSqlPattern(sql: string, pattern: RegExp): boolean {
   return pattern.test(sql);
+}
+
+const NO_FLASHBACK_VIEW_PATTERN = /No view available for provided TIMESTAMP/i;
+const SIMPLE_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_$]*$/;
+
+function quoteIdentifier(identifier: string): string {
+  if (!SIMPLE_IDENTIFIER_PATTERN.test(identifier)) {
+    throw new Error(`Invalid identifier: "${identifier}".`);
+  }
+  return `\`${identifier}\``;
+}
+
+function firstRowAsObject(result: QueryResult): Record<string, unknown> | undefined {
+  if (result.rows.length === 0) {
+    return undefined;
+  }
+
+  const row = result.rows[0];
+  return Object.fromEntries(
+    result.columns.map((column, index) => [column.name, row[index]]),
+  );
+}
+
+function parseLocalTimestampToDate(value: string): Date | undefined {
+  const match = value.trim().match(
+    /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/,
+  );
+  if (!match) {
+    return undefined;
+  }
+
+  const date = new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4]),
+    Number(match[5]),
+    Number(match[6]),
+  );
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+function shiftTimestamp(timestamp: string, deltaMs: number): string | undefined {
+  const date = parseLocalTimestampToDate(timestamp);
+  if (!date) {
+    return undefined;
+  }
+  return formatTimestamp(new Date(date.getTime() + deltaMs));
+}
+
+async function buildFlashbackNoViewError(
+  engine: TaurusDBEngine,
+  ctx: SessionContext,
+  input: FlashbackInput,
+  database: string,
+  requestedTimestamp: string,
+): Promise<FlashbackNoViewError> {
+  const details: FlashbackNoViewError["details"] = {
+    database,
+    table: input.table,
+    where: input.where,
+    requested_timestamp: requestedTimestamp,
+    guidance: [
+      "Use the exact pre-update timestamp when validating flashback behavior.",
+      "If only an approximate time is known, try a timestamp slightly before the row's current updated_at value.",
+    ],
+  };
+
+  try {
+    const envResult = await engine.executor.executeReadonly(
+      "SELECT NOW(6) AS now_time, @@innodb_rds_backquery_window AS backquery_window",
+      ctx,
+      { maxRows: 1, maxColumns: 2, maxFieldChars: 128 },
+    );
+    const envRow = firstRowAsObject(envResult);
+    const nowTime =
+      typeof envRow?.now_time === "string" ? envRow.now_time : undefined;
+    const backqueryWindowRaw = envRow?.backquery_window;
+    const backqueryWindow =
+      typeof backqueryWindowRaw === "number"
+        ? backqueryWindowRaw
+        : typeof backqueryWindowRaw === "string" &&
+            backqueryWindowRaw.trim().length > 0
+          ? Number(backqueryWindowRaw)
+          : undefined;
+
+    details.current_time = nowTime;
+    if (Number.isFinite(backqueryWindow)) {
+      details.backquery_window_seconds = Number(backqueryWindow);
+    }
+    if (nowTime && Number.isFinite(backqueryWindow)) {
+      details.earliest_supported_timestamp_estimate = shiftTimestamp(
+        nowTime,
+        -Number(backqueryWindow) * 1000,
+      );
+    }
+  } catch {
+    // Best-effort diagnostics only.
+  }
+
+  if (input.where?.trim()) {
+    try {
+      const updatedAtResult = await engine.executor.executeReadonly(
+        `SELECT ${quoteIdentifier("updated_at")} FROM ${quoteIdentifier(database)}.${quoteIdentifier(input.table)} WHERE (${input.where.trim()}) LIMIT 1`,
+        ctx,
+        { maxRows: 1, maxColumns: 1, maxFieldChars: 128 },
+      );
+      const updatedAtRow = firstRowAsObject(updatedAtResult);
+      if (typeof updatedAtRow?.updated_at === "string") {
+        details.current_row_updated_at = updatedAtRow.updated_at;
+      }
+    } catch {
+      // The target table may not have updated_at, or the query may not be useful here.
+    }
+  }
+
+  const recommendations = new Set<string>();
+  const requestedMinusOneSecond = shiftTimestamp(requestedTimestamp, -1000);
+  if (requestedMinusOneSecond) {
+    recommendations.add(requestedMinusOneSecond);
+  }
+  if (details.current_row_updated_at) {
+    for (const deltaMs of [-1000, -5000, -30000, -60000]) {
+      const candidate = shiftTimestamp(details.current_row_updated_at, deltaMs);
+      if (candidate) {
+        recommendations.add(candidate);
+      }
+    }
+  }
+  if (
+    details.current_time &&
+    typeof details.backquery_window_seconds === "number"
+  ) {
+    const withinWindowCandidate = shiftTimestamp(details.current_time, -60_000);
+    if (withinWindowCandidate) {
+      recommendations.add(withinWindowCandidate);
+    }
+  }
+  if (recommendations.size > 0) {
+    details.recommended_timestamps = [...recommendations].slice(0, 5);
+  }
+
+  return new FlashbackNoViewError(
+    "No view available for provided TIMESTAMP.",
+    details,
+  );
+}
+
+async function resolveFlashbackInputForExecution(
+  engine: TaurusDBEngine,
+  ctx: SessionContext,
+  input: FlashbackInput,
+): Promise<FlashbackInput> {
+  if (!("relative" in input.asOf) || typeof input.asOf.relative !== "string") {
+    return input;
+  }
+
+  const envResult = await engine.executor.executeReadonly(
+    "SELECT NOW(6) AS now_time",
+    ctx,
+    { maxRows: 1, maxColumns: 1, maxFieldChars: 128 },
+  );
+  const envRow = firstRowAsObject(envResult);
+  if (typeof envRow?.now_time !== "string") {
+    throw new Error(
+      "Unable to resolve database current time for flashback relative timestamp.",
+    );
+  }
+
+  return {
+    ...input,
+    asOf: {
+      timestamp: resolveRelativeTimestampFromBase(
+        input.asOf.relative,
+        envRow.now_time,
+      ),
+    },
+  };
 }
 
 function buildEnhancedExplainSuggestions(
@@ -199,11 +385,35 @@ export async function flashbackQuery(
       );
     }
 
-    const sql = buildFlashbackSql(input, database);
-    return engine.executor.executeReadonly(sql, ctx, {
-      ...flashbackReadonlyOptions(input.limit),
-      ...opts,
-    });
+    const effectiveInput = await resolveFlashbackInputForExecution(
+      engine,
+      ctx,
+      input,
+    );
+    const sql = buildFlashbackSql(effectiveInput, database);
+    try {
+      return await engine.executor.executeReadonly(sql, ctx, {
+        ...flashbackReadonlyOptions(input.limit),
+        ...opts,
+      });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        NO_FLASHBACK_VIEW_PATTERN.test(error.message)
+      ) {
+        const requestedTimestamp = resolveFlashbackTimestamp(
+          effectiveInput.asOf,
+        );
+        throw await buildFlashbackNoViewError(
+          engine,
+          ctx,
+          effectiveInput,
+          database,
+          requestedTimestamp,
+        );
+      }
+      throw error;
+    }
   }
 
 export async function listRecycleBin(

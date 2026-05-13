@@ -18,6 +18,7 @@ type ProbeVariables = Partial<Record<string, string>>;
 
 const TAURUS_VARIABLE_NAMES = [
   "innodb_rds_backquery_enable",
+  "rds_recycle_bin_mode",
   "force_parallel_execute",
   "rds_ndp_mode",
   "taurus_ndp_mode",
@@ -25,6 +26,11 @@ const TAURUS_VARIABLE_NAMES = [
   "ndp_pushdown",
   "rds_multi_tenant",
   "multi_tenant_mode",
+  "rds_opt_outline_enabled",
+  "rds_partition_level_mdl_enabled",
+  "rds_dynamic_masking_enabled",
+  "rds_nonblock_ddl_enable",
+  "rds_hotspot",
 ] as const;
 
 function mysqlCompatFromVersion(rawVersion: string): KernelInfo["mysqlCompat"] {

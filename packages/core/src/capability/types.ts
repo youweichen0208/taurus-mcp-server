@@ -11,11 +11,12 @@ export type FeatureStatus = {
   enabled?: boolean;
   minVersion?: string;
   reason?: string;
+  param?: string;
 };
 
 export interface FeatureMatrix {
   flashback_query: FeatureStatus;
-  parallel_query: FeatureStatus & { param?: string };
+  parallel_query: FeatureStatus;
   ndp_pushdown: FeatureStatus & { mode?: "OFF" | "ON" | "REPLICA_ON" };
   offset_pushdown: FeatureStatus;
   recycle_bin: FeatureStatus;

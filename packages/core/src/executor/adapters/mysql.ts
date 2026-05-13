@@ -141,6 +141,7 @@ export function createMySqlDriverAdapter(): DriverAdapter {
         database: input.database,
         user: input.username,
         password: input.password,
+        dateStrings: true,
         connectionLimit: input.poolSize ?? 4,
         waitForConnections: true,
         queueLimit: 0,

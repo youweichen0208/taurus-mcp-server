@@ -1,6 +1,7 @@
 import {
   ConnectionPoolError,
   DatasourceResolutionError,
+  FlashbackNoViewError,
   SchemaIntrospectionError,
   UnsupportedFeatureError,
 } from "@huaweicloud/taurusdb-core";
@@ -33,6 +34,16 @@ function timeoutLikely(error: unknown): boolean {
 
 function cancelledLikely(error: unknown): boolean {
   return /cancelled|canceled/i.test(messageOf(error));
+}
+
+function detailsOf(error: unknown): Record<string, unknown> | undefined {
+  if (!error || typeof error !== "object" || !("details" in error)) {
+    return undefined;
+  }
+  const details = (error as { details?: unknown }).details;
+  return details && typeof details === "object" && !Array.isArray(details)
+    ? (details as Record<string, unknown>)
+    : undefined;
 }
 
 export function formatToolError(error: unknown, context: ToolErrorContext): ToolResponse {
@@ -85,6 +96,7 @@ export function formatToolError(error: unknown, context: ToolErrorContext): Tool
       message: error.message,
       summary: `${context.action} failed due to database connection issue.`,
       metadata: context.metadata,
+      details: detailsOf(error),
     });
   }
 
@@ -99,6 +111,17 @@ export function formatToolError(error: unknown, context: ToolErrorContext): Tool
         required_version: error.requiredVersion,
         current_version: error.currentVersion,
       },
+    });
+  }
+
+  if (error instanceof FlashbackNoViewError) {
+    return formatError({
+      code: ErrorCode.CONNECTION_FAILED,
+      message: error.message,
+      summary:
+        "No historical flashback view was available for the requested timestamp.",
+      metadata: context.metadata,
+      details: detailsOf(error),
     });
   }
 
@@ -125,5 +148,6 @@ export function formatToolError(error: unknown, context: ToolErrorContext): Tool
     message: messageOf(error),
     summary: `${context.action} failed unexpectedly.`,
     metadata: context.metadata,
+    details: detailsOf(error),
   });
 }

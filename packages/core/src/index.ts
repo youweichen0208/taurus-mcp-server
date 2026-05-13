@@ -124,7 +124,14 @@ export {
   resolveHuaweiCloudProjectId,
 } from "./cloud/auth.js";
 export type { HuaweiCloudAuthOptions } from "./cloud/auth.js";
-export type { FlashbackInput } from "./taurus/flashback.js";
+export {
+  FlashbackNoViewError,
+  formatTimestamp as formatFlashbackTimestamp,
+} from "./taurus/flashback.js";
+export type {
+  FlashbackInput,
+  FlashbackNoViewDetails,
+} from "./taurus/flashback.js";
 export {
   buildListRecycleBinSql,
   buildRestoreRecycleBinTableSql,

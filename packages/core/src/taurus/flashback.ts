@@ -12,6 +12,8 @@ export interface FlashbackInput {
 }
 
 const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_$]*$/;
+const SQL_TIMESTAMP_PATTERN =
+  /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.\d{1,6})?$/;
 const RELATIVE_DURATION_PATTERN =
   /(\d+)\s*(ms|milliseconds?|s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)/gi;
 
@@ -49,11 +51,106 @@ function quoteIdentifier(identifier: string, fieldName: string): string {
   return `\`${identifier}\``;
 }
 
-function formatTimestamp(date: Date): string {
+export type FlashbackNoViewDetails = {
+  database?: string;
+  table?: string;
+  where?: string;
+  requested_timestamp: string;
+  current_time?: string;
+  backquery_window_seconds?: number;
+  earliest_supported_timestamp_estimate?: string;
+  current_row_updated_at?: string;
+  recommended_timestamps?: string[];
+  guidance?: string[];
+};
+
+export class FlashbackNoViewError extends Error {
+  readonly details: FlashbackNoViewDetails;
+
+  constructor(message: string, details: FlashbackNoViewDetails) {
+    super(message);
+    this.name = "FlashbackNoViewError";
+    this.details = details;
+  }
+}
+
+export function formatTimestamp(date: Date): string {
   if (Number.isNaN(date.getTime())) {
     throw new Error("Invalid flashback timestamp.");
   }
-  return date.toISOString().slice(0, 19).replace("T", " ");
+
+  const year = String(date.getFullYear()).padStart(4, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const seconds = String(date.getSeconds()).padStart(2, "0");
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
+function parseTimestampLiteral(timestamp: string): string | undefined {
+  const match = timestamp.trim().match(SQL_TIMESTAMP_PATTERN);
+  if (!match) {
+    return undefined;
+  }
+  return `${match[1]} ${match[2]}`;
+}
+
+function parseRelativeDurationMs(relative: string): number {
+  const input = relative.trim();
+  if (!input) {
+    throw new Error("Flashback relative time cannot be empty.");
+  }
+
+  let consumed = "";
+  let offsetMs = 0;
+  for (const match of input.matchAll(RELATIVE_DURATION_PATTERN)) {
+    consumed += match[0];
+    const amount = Number.parseInt(match[1], 10);
+    const unit = normalizeDurationUnit(match[2]);
+    offsetMs += amount * UNIT_TO_MS[unit];
+  }
+
+  if (offsetMs <= 0 || consumed.replace(/\s+/g, "") !== input.replace(/\s+/g, "")) {
+    throw new Error(
+      `Invalid flashback relative time: "${relative}". Expected values like 5m, 10min, 1h, or 2h30m.`,
+    );
+  }
+
+  return offsetMs;
+}
+
+function parseTimestampLiteralToDate(timestamp: string): Date {
+  const literal = parseTimestampLiteral(timestamp);
+  if (literal) {
+    const match = literal.match(SQL_TIMESTAMP_PATTERN);
+    if (!match) {
+      throw new Error("Invalid flashback timestamp.");
+    }
+    const [, datePart, timePart] = match;
+    const [year, month, day] = datePart.split("-").map(Number);
+    const [hours, minutes, seconds] = timePart.split(":").map(Number);
+    const date = new Date(year, month - 1, day, hours, minutes, seconds, 0);
+    if (Number.isNaN(date.getTime())) {
+      throw new Error("Invalid flashback timestamp.");
+    }
+    return date;
+  }
+
+  const parsed = new Date(timestamp);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error("Invalid flashback timestamp.");
+  }
+  return parsed;
+}
+
+export function resolveRelativeTimestampFromBase(
+  relative: string,
+  baseTimestamp: string,
+): string {
+  const offsetMs = parseRelativeDurationMs(relative);
+  const baseDate = parseTimestampLiteralToDate(baseTimestamp);
+  return formatTimestamp(new Date(baseDate.getTime() - offsetMs));
 }
 
 export function resolveFlashbackTimestamp(
@@ -61,30 +158,15 @@ export function resolveFlashbackTimestamp(
   now: () => number = Date.now,
 ): string {
   if ("timestamp" in asOf && typeof asOf.timestamp === "string") {
+    const literal = parseTimestampLiteral(asOf.timestamp);
+    if (literal) {
+      return literal;
+    }
     return formatTimestamp(new Date(asOf.timestamp));
   }
 
   if ("relative" in asOf && typeof asOf.relative === "string") {
-    const input = asOf.relative.trim();
-    if (!input) {
-      throw new Error("Flashback relative time cannot be empty.");
-    }
-
-    let consumed = "";
-    let offsetMs = 0;
-    for (const match of input.matchAll(RELATIVE_DURATION_PATTERN)) {
-      consumed += match[0];
-      const amount = Number.parseInt(match[1], 10);
-      const unit = normalizeDurationUnit(match[2]);
-      offsetMs += amount * UNIT_TO_MS[unit];
-    }
-
-    if (offsetMs <= 0 || consumed.replace(/\s+/g, "") !== input.replace(/\s+/g, "")) {
-      throw new Error(
-        `Invalid flashback relative time: "${asOf.relative}". Expected values like 5m, 10min, 1h, or 2h30m.`,
-      );
-    }
-
+    const offsetMs = parseRelativeDurationMs(asOf.relative);
     return formatTimestamp(new Date(now() - offsetMs));
   }
 
