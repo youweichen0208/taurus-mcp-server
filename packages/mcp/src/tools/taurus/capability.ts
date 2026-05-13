@@ -54,14 +54,17 @@ export const listTaurusFeaturesTool: ToolDefinition = {
         deps.engine.getKernelInfo(ctx),
         deps.engine.listFeatures(ctx),
       ]);
-      const availableCount = Object.values(features).filter((feature) => feature.available).length;
-      const totalCount = Object.keys(features).length;
+      const publicFeatures = toPublicFeatureMatrix(features);
+      const availableCount = Object.values(publicFeatures).filter(
+        (feature) => feature.available,
+      ).length;
+      const totalCount = Object.keys(publicFeatures).length;
 
       return formatSuccess(
         {
           datasource: ctx.datasource,
           kernel: toPublicKernelInfo(kernel),
-          features: toPublicFeatureMatrix(features),
+          features: publicFeatures,
         },
         {
           summary: kernel.isTaurusDB

@@ -161,12 +161,19 @@ function toPublicFeatureStatus(status: Record<string, unknown>) {
   );
 }
 
+const HIDDEN_PUBLIC_FEATURES = new Set([
+  "statement_outline",
+  "column_compression",
+  "multi_tenant",
+  "partition_mdl",
+  "hot_row_update",
+]);
+
 export function toPublicFeatureMatrix(features: FeatureMatrix) {
   return Object.fromEntries(
-    Object.entries(features).map(([name, status]) => [
-      name,
-      toPublicFeatureStatus(status),
-    ]),
+    Object.entries(features)
+      .filter(([name]) => !HIDDEN_PUBLIC_FEATURES.has(name))
+      .map(([name, status]) => [name, toPublicFeatureStatus(status)]),
   );
 }
 
@@ -190,6 +197,26 @@ export function toPublicEnhancedExplainResult(
         blocked_reason: result.taurusHints.parallelQuery.blockedReason,
       },
       offset_pushdown: result.taurusHints.offsetPushdown,
+    },
+    feature_explanations: {
+      ndp_pushdown: {
+        matched: result.featureExplanations.ndpPushdown.matched,
+        meaning: result.featureExplanations.ndpPushdown.meaning,
+        why_triggered: result.featureExplanations.ndpPushdown.whyTriggered,
+        expected_benefit: result.featureExplanations.ndpPushdown.expectedBenefit,
+      },
+      parallel_query: {
+        matched: result.featureExplanations.parallelQuery.matched,
+        meaning: result.featureExplanations.parallelQuery.meaning,
+        why_triggered: result.featureExplanations.parallelQuery.whyTriggered,
+        expected_benefit: result.featureExplanations.parallelQuery.expectedBenefit,
+      },
+      offset_pushdown: {
+        matched: result.featureExplanations.offsetPushdown.matched,
+        meaning: result.featureExplanations.offsetPushdown.meaning,
+        why_triggered: result.featureExplanations.offsetPushdown.whyTriggered,
+        expected_benefit: result.featureExplanations.offsetPushdown.expectedBenefit,
+      },
     },
     optimization_suggestions: result.optimizationSuggestions,
   };

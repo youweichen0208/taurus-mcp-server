@@ -169,7 +169,7 @@ function createDeps(engineOverrides = {}) {
           available: true,
           enabled: true,
           mode: "REPLICA_ON",
-          param: "ndp_pushdown_mode=REPLICA_ON",
+          param: "ndp_mode=REPLICA_ON",
         },
         offset_pushdown: {
           available: true,
@@ -247,6 +247,26 @@ function createDeps(engineOverrides = {}) {
             blockedReason: "parallel_query is available but force_parallel_execute is disabled.",
           },
           offsetPushdown: true,
+        },
+        featureExplanations: {
+          ndpPushdown: {
+            matched: true,
+            meaning: "NDP meaning",
+            whyTriggered: "NDP triggered",
+            expectedBenefit: "NDP benefit",
+          },
+          parallelQuery: {
+            matched: false,
+            meaning: "PQ meaning",
+            whyTriggered: "PQ blocked",
+            expectedBenefit: "PQ benefit",
+          },
+          offsetPushdown: {
+            matched: true,
+            meaning: "OFFSET meaning",
+            whyTriggered: "OFFSET triggered",
+            expectedBenefit: "OFFSET benefit",
+          },
         },
         optimizationSuggestions: ["parallel_query is available but disabled."],
       }),
@@ -768,21 +788,12 @@ test("Taurus capability tools return kernel info and feature matrix", async () =
     "innodb_rds_backquery_enable=ON",
   );
   assert.equal(features.data.features.parallel_query.param, "force_parallel_execute=OFF");
-  assert.equal(features.data.features.ndp_pushdown.param, "ndp_pushdown_mode=REPLICA_ON");
+  assert.equal(features.data.features.ndp_pushdown.param, "ndp_mode=REPLICA_ON");
   assert.equal(
     features.data.features.offset_pushdown.param,
     "optimizer_switch: offset_pushdown=on",
   );
   assert.equal(features.data.features.recycle_bin.param, "rds_recycle_bin_mode=ON");
-  assert.equal(
-    features.data.features.statement_outline.param,
-    "rds_opt_outline_enabled=OFF",
-  );
-  assert.equal(features.data.features.multi_tenant.param, "rds_multi_tenant=OFF");
-  assert.equal(
-    features.data.features.partition_mdl.param,
-    "rds_partition_level_mdl_enabled=OFF",
-  );
   assert.equal(
     features.data.features.dynamic_masking.param,
     "rds_dynamic_masking_enabled=OFF",
@@ -791,7 +802,11 @@ test("Taurus capability tools return kernel info and feature matrix", async () =
     features.data.features.nonblocking_ddl.param,
     "rds_nonblock_ddl_enable=OFF",
   );
-  assert.equal(features.data.features.hot_row_update.param, "rds_hotspot=OFF");
+  assert.equal("statement_outline" in features.data.features, false);
+  assert.equal("column_compression" in features.data.features, false);
+  assert.equal("multi_tenant" in features.data.features, false);
+  assert.equal("partition_mdl" in features.data.features, false);
+  assert.equal("hot_row_update" in features.data.features, false);
 });
 
 test("explain_sql_enhanced returns TaurusDB hints", async () => {
@@ -807,6 +822,11 @@ test("explain_sql_enhanced returns TaurusDB hints", async () => {
   assert.equal(result.data.standard_plan.guardrail.action, "allow");
   assert.equal(result.data.taurus_hints.ndp_pushdown.condition, true);
   assert.equal(result.data.taurus_hints.offset_pushdown, true);
+  assert.equal(result.data.feature_explanations.offset_pushdown.matched, true);
+  assert.equal(
+    result.data.feature_explanations.offset_pushdown.why_triggered,
+    "OFFSET triggered",
+  );
 });
 
 test("flashback_query returns structured readonly result", async () => {

@@ -113,10 +113,23 @@ export function buildFeatureMatrix(
   const parallelEnabled = normalizeBooleanVariable(parallelSetting);
   const offsetPushdownEnabled = inferOffsetPushdown(variables.optimizer_switch);
   const ndpModeRaw =
+    variables.ndp_mode ??
     variables.rds_ndp_mode ??
     variables.taurus_ndp_mode ??
     variables.ndp_pushdown_mode ??
     variables.ndp_pushdown;
+  const ndpParamName =
+    variables.ndp_mode !== undefined
+      ? "ndp_mode"
+      : variables.rds_ndp_mode !== undefined
+        ? "rds_ndp_mode"
+        : variables.taurus_ndp_mode !== undefined
+          ? "taurus_ndp_mode"
+          : variables.ndp_pushdown_mode !== undefined
+            ? "ndp_pushdown_mode"
+            : variables.ndp_pushdown !== undefined
+              ? "ndp_pushdown"
+              : undefined;
   const ndpMode =
     ndpModeRaw?.toUpperCase() === "REPLICA_ON" ||
     ndpModeRaw?.toUpperCase() === "ON" ||
@@ -240,7 +253,8 @@ export function buildFeatureMatrix(
       available: true,
       enabled: ndpMode ? ndpMode !== "OFF" : true,
       mode: ndpMode,
-      param: ndpModeRaw ? `ndp_pushdown_mode=${ndpModeRaw}` : undefined,
+      param:
+        ndpModeRaw && ndpParamName ? `${ndpParamName}=${ndpModeRaw}` : undefined,
     },
     offset_pushdown: {
       available: true,

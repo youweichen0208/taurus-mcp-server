@@ -58,6 +58,26 @@ export interface EnhancedExplainResult {
     };
     offsetPushdown: boolean;
   };
+  featureExplanations: {
+    offsetPushdown: {
+      matched: boolean;
+      meaning: string;
+      whyTriggered: string;
+      expectedBenefit: string;
+    };
+    parallelQuery: {
+      matched: boolean;
+      meaning: string;
+      whyTriggered: string;
+      expectedBenefit: string;
+    };
+    ndpPushdown: {
+      matched: boolean;
+      meaning: string;
+      whyTriggered: string;
+      expectedBenefit: string;
+    };
+  };
   optimizationSuggestions: string[];
 }
 

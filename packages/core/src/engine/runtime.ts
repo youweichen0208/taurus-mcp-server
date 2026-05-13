@@ -276,6 +276,77 @@ function buildEnhancedExplainSuggestions(
   return [...new Set(suggestions)];
 }
 
+function buildOffsetPushdownExplanation(
+  matched: boolean,
+  hasOffset: boolean,
+  features: FeatureMatrix,
+): EnhancedExplainResult["featureExplanations"]["offsetPushdown"] {
+  return {
+    matched,
+    meaning:
+      "offset_pushdown is a TaurusDB pagination optimization for LIMIT/OFFSET queries that pushes row-skipping work closer to the storage layer.",
+    whyTriggered: matched
+      ? "This query uses ORDER BY with LIMIT/OFFSET, so TaurusDB can apply offset handling during indexed row retrieval instead of discarding as many rows at the coordinator layer."
+      : !hasOffset
+        ? "The SQL does not contain an OFFSET clause, so there is no offset workload to push down."
+        : features.offset_pushdown.enabled === false
+          ? "The SQL uses OFFSET, but the instance-level offset_pushdown optimization is disabled."
+          : "The SQL uses OFFSET, but the plan did not confirm that TaurusDB could push the offset handling down for this shape.",
+    expectedBenefit: matched
+      ? "Reduces intermediate rows that must be materialized and discarded for deep pagination, which lowers coordinator overhead and makes large OFFSET pages more stable."
+      : "No offset_pushdown benefit is expected for this execution path.",
+  };
+}
+
+function buildParallelQueryExplanation(
+  matched: boolean,
+  features: FeatureMatrix,
+  standardPlan: ExplainResult,
+  sql: string,
+): EnhancedExplainResult["featureExplanations"]["parallelQuery"] {
+  const aggregationLike = hasSqlPattern(sql, /\b(group\s+by|order\s+by|join)\b/i);
+  return {
+    matched,
+    meaning:
+      "parallel_query lets TaurusDB split eligible scan or aggregation work across multiple workers to improve throughput on larger analytical reads.",
+    whyTriggered: matched
+      ? "This query shape looks like a larger scan or aggregation, and parallel_query is enabled on the instance, so TaurusDB may benefit from parallel execution."
+      : !features.parallel_query.available
+        ? features.parallel_query.reason ??
+          "parallel_query is unavailable on this instance."
+        : features.parallel_query.enabled === false
+          ? "The query shape may benefit from parallel execution, but force_parallel_execute is currently disabled."
+          : aggregationLike || standardPlan.riskSummary.fullTableScanLikely
+            ? "The query shape is compatible with parallel_query, but the estimated work size was not large enough to justify turning it on."
+            : "This query is too small or too index-selective to meaningfully benefit from parallel workers.",
+    expectedBenefit: matched
+      ? "Can improve throughput for larger scans, GROUP BY, ORDER BY, and join-heavy reads by spreading work across multiple workers."
+      : "No meaningful parallel-query gain is expected for this execution path.",
+  };
+}
+
+function buildNdpPushdownExplanation(
+  matched: boolean,
+  features: FeatureMatrix,
+  extras: string,
+): EnhancedExplainResult["featureExplanations"]["ndpPushdown"] {
+  return {
+    matched,
+    meaning:
+      "ndp_pushdown lets TaurusDB push filter, projection, or aggregation work down toward the data nodes so less data has to travel back to the coordinator.",
+    whyTriggered: matched
+      ? `The EXPLAIN Extra field shows TaurusDB NDP pushdown markers (${extras.trim() || "NDP pushdown detected"}), which indicates parts of the filter or aggregation are being executed closer to storage.`
+      : !features.ndp_pushdown.available
+        ? features.ndp_pushdown.reason ?? "ndp_pushdown is unavailable on this instance."
+        : features.ndp_pushdown.enabled === false
+          ? "The query shape could use NDP pushdown, but the feature is disabled on this instance."
+          : "The EXPLAIN plan did not expose TaurusDB NDP pushdown markers for this SQL, so the result cannot confirm that NDP was used.",
+    expectedBenefit: matched
+      ? "Reduces coordinator CPU and network transfer by shrinking the amount of raw row data that must be returned from the storage side."
+      : "No NDP pushdown benefit is expected for this execution path.",
+  };
+}
+
 export async function explain(
   engine: TaurusDBEngine,
   sql: string, ctx: SessionContext): Promise<ExplainResult> {
@@ -294,6 +365,19 @@ export async function explainEnhanced(
     const extras = explainExtras(standardPlan.plan).join(" ");
     const fullScanLikely = standardPlan.riskSummary.fullTableScanLikely;
     const hasOffset = hasSqlPattern(sql, /\boffset\s+\d+/i);
+    const ndpMatched =
+      /using pushed ndp condition/i.test(extras) ||
+      /using pushed ndp columns/i.test(extras) ||
+      /using pushed ndp aggregate/i.test(extras);
+    const parallelWouldEnable =
+      features.parallel_query.available &&
+      (fullScanLikely ||
+        hasSqlPattern(sql, /\b(group\s+by|order\s+by|join)\b/i) ||
+        (standardPlan.riskSummary.estimatedRows ?? 0) >= 100_000);
+    const offsetMatched =
+      hasOffset &&
+      features.offset_pushdown.available &&
+      features.offset_pushdown.enabled !== false;
 
     return {
       standardPlan,
@@ -309,11 +393,7 @@ export async function explainEnhanced(
               : undefined,
         },
         parallelQuery: {
-          wouldEnable:
-            features.parallel_query.available &&
-            (fullScanLikely ||
-              hasSqlPattern(sql, /\b(group\s+by|order\s+by|join)\b/i) ||
-              (standardPlan.riskSummary.estimatedRows ?? 0) >= 100_000),
+          wouldEnable: parallelWouldEnable,
           estimatedDegree:
             features.parallel_query.available && features.parallel_query.enabled
               ? ctx.limits.maxRows >= 1000
@@ -326,10 +406,25 @@ export async function explainEnhanced(
               ? "parallel_query is available but force_parallel_execute is disabled."
               : undefined,
         },
-        offsetPushdown:
-          hasOffset &&
-          features.offset_pushdown.available &&
-          features.offset_pushdown.enabled !== false,
+        offsetPushdown: offsetMatched,
+      },
+      featureExplanations: {
+        offsetPushdown: buildOffsetPushdownExplanation(
+          offsetMatched,
+          hasOffset,
+          features,
+        ),
+        parallelQuery: buildParallelQueryExplanation(
+          parallelWouldEnable,
+          features,
+          standardPlan,
+          sql,
+        ),
+        ndpPushdown: buildNdpPushdownExplanation(
+          ndpMatched,
+          features,
+          extras,
+        ),
       },
       optimizationSuggestions: buildEnhancedExplainSuggestions(
         sql,

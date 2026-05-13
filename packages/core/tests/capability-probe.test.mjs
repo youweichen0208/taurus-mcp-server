@@ -70,7 +70,7 @@ test("capability probe exposes parameter-level disable reasons for TaurusDB feat
       innodb_rds_backquery_enable: "ON",
       rds_recycle_bin_mode: "OFF",
       force_parallel_execute: "OFF",
-      ndp_pushdown_mode: "OFF",
+      ndp_mode: "OFF",
       optimizer_switch: "index_merge=on,offset_pushdown=off",
       rds_multi_tenant: "OFF",
       rds_opt_outline_enabled: "OFF",
@@ -95,7 +95,7 @@ test("capability probe exposes parameter-level disable reasons for TaurusDB feat
 
   assert.equal(snapshot.features.flashback_query.param, "innodb_rds_backquery_enable=ON");
   assert.equal(snapshot.features.ndp_pushdown.enabled, false);
-  assert.equal(snapshot.features.ndp_pushdown.param, "ndp_pushdown_mode=OFF");
+  assert.equal(snapshot.features.ndp_pushdown.param, "ndp_mode=OFF");
   assert.equal(snapshot.features.offset_pushdown.enabled, false);
   assert.equal(snapshot.features.offset_pushdown.param, "optimizer_switch: offset_pushdown=off");
   assert.equal(snapshot.features.recycle_bin.enabled, false);

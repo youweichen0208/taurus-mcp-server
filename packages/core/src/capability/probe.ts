@@ -20,6 +20,7 @@ const TAURUS_VARIABLE_NAMES = [
   "innodb_rds_backquery_enable",
   "rds_recycle_bin_mode",
   "force_parallel_execute",
+  "ndp_mode",
   "rds_ndp_mode",
   "taurus_ndp_mode",
   "ndp_pushdown_mode",
@@ -73,6 +74,7 @@ function firstRow(result: { rows?: unknown[] }): unknown {
 function inferInstanceSpecHint(variables: ProbeVariables): KernelInfo["instanceSpecHint"] {
   const parallelSetting = (variables.force_parallel_execute ?? "").toUpperCase();
   const ndpMode = (
+    variables.ndp_mode ??
     variables.rds_ndp_mode ??
     variables.taurus_ndp_mode ??
     variables.ndp_pushdown_mode ??

@@ -1894,6 +1894,35 @@ test("engine delegates context, schema, guardrail, and executor methods", async 
       },
       offsetPushdown: false,
     },
+    featureExplanations: {
+      ndpPushdown: {
+        matched: false,
+        meaning:
+          "ndp_pushdown lets TaurusDB push filter, projection, or aggregation work down toward the data nodes so less data has to travel back to the coordinator.",
+        whyTriggered:
+          "The EXPLAIN plan did not expose TaurusDB NDP pushdown markers for this SQL, so the result cannot confirm that NDP was used.",
+        expectedBenefit:
+          "No NDP pushdown benefit is expected for this execution path.",
+      },
+      parallelQuery: {
+        matched: false,
+        meaning:
+          "parallel_query lets TaurusDB split eligible scan or aggregation work across multiple workers to improve throughput on larger analytical reads.",
+        whyTriggered:
+          "The query shape may benefit from parallel execution, but force_parallel_execute is currently disabled.",
+        expectedBenefit:
+          "No meaningful parallel-query gain is expected for this execution path.",
+      },
+      offsetPushdown: {
+        matched: false,
+        meaning:
+          "offset_pushdown is a TaurusDB pagination optimization for LIMIT/OFFSET queries that pushes row-skipping work closer to the storage layer.",
+        whyTriggered:
+          "The SQL does not contain an OFFSET clause, so there is no offset workload to push down.",
+        expectedBenefit:
+          "No offset_pushdown benefit is expected for this execution path.",
+      },
+    },
     optimizationSuggestions: [
       "parallel_query is available but disabled. Consider SET GLOBAL force_parallel_execute=ON.",
     ],

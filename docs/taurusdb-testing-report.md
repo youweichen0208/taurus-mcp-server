@@ -1042,6 +1042,9 @@ WHERE id = 1;
 ### 4.8 Enhanced Explain 专属能力验证样本
 
 前提：
+![alt text](image-37.png)
+
+![alt text](image-46.png)
 
 - 当前实例支持 TaurusDB 专属 explain 增强
 - `list_taurus_features` 已返回 `ndp_pushdown`、`parallel_query`、`offset_pushdown`
@@ -1095,6 +1098,8 @@ SELECT
 FROM seq;
 ```
 
+![alt text](image-38.png)
+
 验证 SQL 1：`offset_pushdown`
 
 ```sql
@@ -1104,6 +1109,8 @@ ORDER BY id
 LIMIT 20 OFFSET 5000;
 ```
 
+![alt text](image-44.png)
+
 验证 SQL 2：`parallel_query`
 
 ```sql
@@ -1112,14 +1119,18 @@ FROM t_explain_taurus_test
 GROUP BY status;
 ```
 
+![alt text](image-45.png)
+
 验证 SQL 3：`ndp_pushdown`
 
 ```sql
-SELECT status, SUM(amount) AS total_amount
-FROM t_explain_taurus_test
-WHERE created_at >= '2026-01-03 00:00:00'
-GROUP BY status;
+SELECT user_id, amount
+    FROM t_orders_test WHERE status = 'paid'
+      AND created_at >= '2026-01-03 00:00:00'
+    LIMIT 1000;
 ```
+
+![alt text](image-47.png)
 
 `explain_sql_enhanced` 推荐输入示例：
 
@@ -1145,6 +1156,165 @@ GROUP BY status;
 - `offset_pushdown` 场景的增强 explain
 - `parallel_query` 场景的增强 explain
 - `ndp_pushdown` 场景的增强 explain
+
+### 4.9 Dynamic Masking 验证样本
+
+前提：
+
+- 当前实例支持 `dynamic_masking`
+- `list_taurus_features` 已返回 `dynamic_masking`
+- 如果要做实际脱敏效果验证，实例参数 `rds_dynamic_masking_enabled` 需要为 `ON`
+- 需要准备一张仅用于测试的敏感字段样本表，不要直接在生产表上验证
+
+推荐先确认：
+
+1. `list_taurus_features`
+2. `SHOW VARIABLES LIKE 'rds_dynamic_masking_enabled'`
+
+最小造景步骤：
+
+1. 建一张可丢弃测试表，包含手机号、邮箱、证件号等敏感字段
+2. 插入 1 到 2 行样本数据
+3. 配置动态脱敏规则，使受控用户查询时返回脱敏值
+4. 用高权限用户查询一次，记录原始值
+5. 用受脱敏策略影响的用户查询同一行，记录脱敏后的返回结果
+6. 对比两次查询结果，确认脱敏只影响查询结果展示，不修改底表数据
+
+准备 SQL：
+
+```sql
+DROP TABLE IF EXISTS t_dynamic_masking_test;
+
+CREATE TABLE t_dynamic_masking_test (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  name VARCHAR(64) NOT NULL,
+  phone VARCHAR(32) NOT NULL,
+  email VARCHAR(128) NOT NULL,
+  id_no VARCHAR(32) NOT NULL
+) ENGINE=InnoDB;
+
+INSERT INTO t_dynamic_masking_test(name, phone, email, id_no)
+VALUES ('masking-a', '13812345678', 'masking-a@example.com', '330101199001011234');
+
+SELECT id, name, phone, email, id_no
+FROM t_dynamic_masking_test
+WHERE id = 1;
+```
+
+预期结果：
+
+- `list_taurus_features` 中 `dynamic_masking` 显示 `available=true`
+- 如果实例参数未开启，应明确显示 `rds_dynamic_masking_enabled=OFF`
+- 高权限用户查询返回原始值
+- 受控用户查询返回脱敏后的值
+- 普通 `SELECT` 不会改写底表数据
+
+截图点：
+
+- `list_taurus_features` 中 `dynamic_masking` 状态
+- `SHOW VARIABLES LIKE 'rds_dynamic_masking_enabled'` 结果
+- 高权限用户查询结果
+- 受控用户查询结果
+- 同一行原始值与脱敏值对比
+
+注意事项：
+
+- 动态脱敏的核心验证点不是“能否查到数据”，而是“不同权限用户看到的结果是否不同”
+- 如果当前环境暂时没有可切换的测试用户，可先完成参数和规则配置验证，再补用户视角验证
+- 该能力更适合在专门测试库或演示库中验证，避免误伤现网权限与规则
+
+### 4.10 Nonblocking DDL 验证样本
+
+前提：
+
+- 当前实例支持 `nonblocking_ddl`
+- `list_taurus_features` 已返回 `nonblocking_ddl`
+- 如果要做行为验证，实例参数 `rds_nonblock_ddl_enable` 需要为 `ON`
+- 需要准备一张仅用于测试的表，不要直接在生产大表上执行验证 DDL
+
+推荐先确认：
+
+1. `list_taurus_features`
+2. `SHOW VARIABLES LIKE 'rds_nonblock_ddl_enable'`
+3. `show_processlist`
+
+最小造景步骤：
+
+1. 建一张可丢弃测试表并灌入足够数据
+2. 会话 A 持续执行只读查询，模拟业务访问
+3. 会话 B 对同一张表执行一个典型 DDL，例如 `ADD COLUMN` 或 `ADD INDEX`
+4. 在 DDL 进行期间持续观察会话 A 的查询是否被长时间阻塞
+5. 用 `show_processlist` 记录并发期间的会话状态
+6. 对比 DDL 前后查询延迟、阻塞情况和 DDL 完成情况
+
+准备 SQL：
+
+```sql
+DROP TABLE IF EXISTS t_nonblocking_ddl_test;
+
+CREATE TABLE t_nonblocking_ddl_test (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  created_at DATETIME NOT NULL,
+  note VARCHAR(255) NOT NULL
+) ENGINE=InnoDB;
+
+SET SESSION cte_max_recursion_depth = 60000;
+
+INSERT INTO t_nonblocking_ddl_test (user_id, status, created_at, note)
+WITH RECURSIVE seq AS (
+  SELECT 1 AS n
+  UNION ALL
+  SELECT n + 1 FROM seq WHERE n < 50000
+)
+SELECT
+  n % 1000,
+  CASE
+    WHEN n % 2 = 0 THEN 'active'
+    ELSE 'pending'
+  END,
+  TIMESTAMP('2026-01-01 00:00:00') + INTERVAL (n % 14400) MINUTE,
+  RPAD(CONCAT('ddl-note-', n), 120, 'x')
+FROM seq;
+```
+
+会话 A 持续查询：
+
+```sql
+SELECT COUNT(*) AS cnt
+FROM t_nonblocking_ddl_test
+WHERE status = 'active';
+```
+
+会话 B 执行 DDL：
+
+```sql
+ALTER TABLE t_nonblocking_ddl_test
+ADD COLUMN remark VARCHAR(128) NULL;
+```
+
+预期结果：
+
+- `list_taurus_features` 中 `nonblocking_ddl` 显示 `available=true`
+- 如果实例参数未开启，应明确显示 `rds_nonblock_ddl_enable=OFF`
+- DDL 能正常完成
+- DDL 期间并发只读查询不中断，或阻塞显著低于普通阻塞式 DDL
+- `show_processlist` 中未出现异常长时间 metadata lock 等待
+
+截图点：
+
+- `list_taurus_features` 中 `nonblocking_ddl` 状态
+- `SHOW VARIABLES LIKE 'rds_nonblock_ddl_enable'` 结果
+- 会话 A 持续查询结果
+- 会话 B 执行 DDL 结果
+- `show_processlist` 并发观察结果
+
+注意事项：
+
+- 这类能力的核心不是“DDL 能否执行”，而是“DDL 期间业务读写是否明显受阻”
+- 如果测试环境资源较小，可先用 `ADD COLUMN` 做最小验证，再视情况补充 `ADD INDEX`
+- 建议保留会话 A / 会话 B 的时间线截图，方便后续对比是否出现长时间锁等待
 
 ## 5. 执行步骤
 
