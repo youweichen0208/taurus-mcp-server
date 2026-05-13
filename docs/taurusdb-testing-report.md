@@ -911,22 +911,35 @@ DROP TABLE t_recycle_bin_test;
 前提：
 
 - 当前实例支持 `flashback_query`
+- `flashback_query.enabled = true`
 - 工具已暴露 `flashback_query`
+- `SHOW VARIABLES LIKE 'innodb_rds_backquery_enable'` 返回 `ON` 或 `1`
+- 测试表是 `InnoDB`，并且已经启用 `BACKQUERY=1`
 - 使用可丢弃测试表，不要直接在生产表上构造历史版本
 
 推荐先确认：
 
 1. `list_taurus_features`
-2. `flashback_query`
+2. `execute_readonly_sql`
+3. `flashback_query`
+
+如果 `flashback_query.available = true` 但 `enabled = false`：
+
+- 说明当前内核版本已经满足最低要求，但实例参数开关未开启，或尚未生效
+- 需要先在 TaurusDB 控制台打开 `innodb_rds_backquery_enable`
+- 如需对已有测试表启用 flashback，执行 `ALTER TABLE <table_name> BACKQUERY=1`
+- 如果刚开启实例参数，等待状态切换完成后再重新探测 `list_taurus_features`
 
 最小造景步骤：
 
-1. 建一个可丢弃测试表并插入初始数据
+1. 建一个启用 `BACKQUERY=1` 的可丢弃测试表并插入初始数据
 2. 记录一个时间点 `T1`
-3. 对同一行执行 `UPDATE`
-4. 记录第二个时间点 `T2`
-5. 用 `flashback_query` 查询 `T1` 附近的历史视图
-6. 用普通 `SELECT` 查询当前结果，与历史结果做对比
+3. 等待 1 到 2 秒
+4. 对同一行执行 `UPDATE`
+5. 记录第二个时间点 `T2`
+6. 用普通 `SELECT` 查询当前结果，确认当前值已经变化
+7. 用 `flashback_query` 查询 `T1` 附近的历史视图
+8. 对比历史结果与当前结果
 
 准备 SQL：
 
@@ -936,7 +949,7 @@ CREATE TABLE t_flashback_query_test (
   name VARCHAR(64) NOT NULL,
   status VARCHAR(32) NOT NULL,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-) ENGINE=InnoDB;
+) ENGINE=InnoDB, BACKQUERY=1;
 
 INSERT INTO t_flashback_query_test(name, status)
 VALUES ('flashback-a', 'draft');
@@ -984,9 +997,13 @@ WHERE id = 1;
 
 - 在记录 `T1` 后等待 1 到 2 秒再执行 `UPDATE`
 - 或改用相对时间，例如 `as_of.relative = "10s"`
+- 当前实现会把 flashback 时间点格式化到秒级；即使采集时用了 `NOW(6)`，实际查询仍按秒级时间点执行
+- 如果实例参数已开启但 tool 仍未暴露或仍显示 `enabled=false`，先重新执行 `list_taurus_features`，再检查实例参数是否已生效
 
 截图点：
 
+- `list_taurus_features` 中 `flashback_query` 状态
+- `SHOW VARIABLES LIKE 'innodb_rds_backquery_enable'` 结果
 - `T1` / `T2` 时间点记录
 - `flashback_query` 返回历史值
 - 普通 `SELECT` 返回当前值
