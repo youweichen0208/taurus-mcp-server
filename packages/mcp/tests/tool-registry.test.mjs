@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createConfigFromEnv } from "@huaweicloud/taurusdb-core";
+import { createConfigFromEnv } from "taurusdb-core";
 import { registerTools } from "../dist/tools/registry.js";
 import { ErrorCode } from "../dist/utils/formatter.js";
 

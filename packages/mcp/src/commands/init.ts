@@ -145,7 +145,7 @@ function mergeWithKey(
 
 const SHARED_ENTRY: McpServerEntry = {
   command: "npx",
-  args: ["-y", "@huaweicloud/taurusdb-mcp"],
+  args: ["-y", "taurusdb-mcp"],
 };
 
 function createClaudeAdapter(): ClientAdapter {

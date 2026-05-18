@@ -1,6 +1,6 @@
 # 华为云 TaurusDB MCP 测试指南
 
-> 本文档面向测试同学，目标是把当前 `@huaweicloud/taurusdb-mcp` 项目的测试范围、观测点、测试用例设计、执行步骤和验收出口写清楚。
+> 本文档面向测试同学，目标是把当前 `taurusdb-mcp` 项目的测试范围、观测点、测试用例设计、执行步骤和验收出口写清楚。
 
 配套阅读：
 
@@ -33,7 +33,7 @@
 
 - `packages/core`：共享数据面能力与 `TaurusDBEngine`
 - `packages/mcp`：MCP `stdio` server、tool registry、tool handler、`init`
-- `packages/cli`：当前只有 scaffold，不属于本轮 MCP 测试主体
+- 当前仓库不提供独立 CLI，本轮测试主体只有 `core` 和 `mcp`
 
 当前 MCP 首阶段应纳入测试范围的能力：
 
@@ -69,7 +69,7 @@
 当前明确不在首阶段范围内：
 
 - SQL history / binlog / preflight
-- CLI REPL / ask / agent / doctor
+- 独立 CLI
 - 云控制面功能本身
 
 补充说明：
@@ -80,7 +80,6 @@
 结论：
 
 - 当前测试重点是 **MCP 协议适配 + 数据面主链路 + minimal guardrail + token confirmation + TaurusDB 首阶段差异化能力**
-- CLI 不作为本轮主测试对象
 - diagnostics 当前默认暴露；本地阶段重点验收 explain / digest / processlist / lock waits / table storage 这类数据面证据链；CES / Cloud Eye 指标源已有第一版配置与 collector，仍需在云端 TaurusDB 联调阶段验证真实指标返回、维度名、权限与时间窗口；`diagnose_lock_contention` 已补 MDL + latest deadlock collector 第一版，DAS / Top SQL / 全量 SQL 与 OS 级存储指标仍放到后续云侧补齐
 
 ---
@@ -319,15 +318,15 @@ npm test
 ### 8.2 只看 `core`
 
 ```bash
-npm run check --workspace @huaweicloud/taurusdb-core
-npm run test --workspace @huaweicloud/taurusdb-core
+npm run check --workspace taurusdb-core
+npm run test --workspace taurusdb-core
 ```
 
 ### 8.3 只看 `mcp`
 
 ```bash
-npm run check --workspace @huaweicloud/taurusdb-mcp
-npm run test --workspace @huaweicloud/taurusdb-mcp
+npm run check --workspace taurusdb-mcp
+npm run test --workspace taurusdb-mcp
 ```
 
 ### 8.4 开启本地 MySQL e2e
@@ -354,7 +353,7 @@ export TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN='mysql://root:root@127.0.0.1:3306/mysql
 执行：
 
 ```bash
-npm run test --workspace @huaweicloud/taurusdb-mcp
+npm run test --workspace taurusdb-mcp
 ```
 
 本地 MySQL 测试资产见：
@@ -399,7 +398,7 @@ export TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN='mysql://root:root@127.0.0.1:3306/mysql
 
 ```bash
 npm run build
-npm run test --workspace @huaweicloud/taurusdb-mcp
+npm run test --workspace taurusdb-mcp
 ```
 
 自动化重点覆盖：
@@ -650,8 +649,8 @@ CES 第一版默认假设：
 
 ```bash
 npm run build
-npm run test --workspace @huaweicloud/taurusdb-core
-npm run test --workspace @huaweicloud/taurusdb-mcp
+npm run test --workspace taurusdb-core
+npm run test --workspace taurusdb-mcp
 ```
 
 再跑云侧 preflight：
@@ -1432,7 +1431,6 @@ Follow-up: <next tool / config / evidence to check>
 
 这一阶段暂时不要做：
 
-- CLI runbook 命令
 - DAS / Top SQL / 全量 SQL 的复杂 merge ranking
 - OS 级磁盘指标 collector
 
@@ -1769,7 +1767,6 @@ mysql -uroot -p < testdata/mysql/local-mysql-users.sql
 
 - diagnostics 的云侧完整闭环与长历史补齐
 - history/binlog
-- CLI 真正落地
 
 ---
 

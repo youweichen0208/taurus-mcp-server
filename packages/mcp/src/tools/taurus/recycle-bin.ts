@@ -2,7 +2,7 @@ import { z } from "zod";
 import {
   buildRestoreRecycleBinTableSql,
   type RestoreRecycleBinTableInput,
-} from "@huaweicloud/taurusdb-core";
+} from "taurusdb-core";
 import {
   ErrorCode,
   formatConfirmationRequired,

@@ -39,7 +39,7 @@ test("init writes cursor config by merging server entry", async () => {
   assert.deepEqual(config.mcpServers.existing, { command: "node", args: ["existing"] });
   assert.deepEqual(config.mcpServers["huaweicloud-taurusdb"], {
     command: "npx",
-    args: ["-y", "@huaweicloud/taurusdb-mcp"],
+    args: ["-y", "taurusdb-mcp"],
   });
 });
 

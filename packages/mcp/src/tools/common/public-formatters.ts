@@ -14,7 +14,7 @@ import type {
   ServiceLatencyResult,
   TableInfo,
   TableSchema,
-} from "@huaweicloud/taurusdb-core";
+} from "taurusdb-core";
 
 export function toPublicDataSourceInfo(info: DataSourceInfo) {
   return {

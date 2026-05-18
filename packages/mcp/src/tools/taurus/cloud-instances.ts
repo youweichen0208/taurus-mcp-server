@@ -1,7 +1,7 @@
 import {
   createCloudTaurusInstanceClient,
   type CloudTaurusInstanceSummary,
-} from "@huaweicloud/taurusdb-core";
+} from "taurusdb-core";
 import { z } from "zod";
 import { formatSuccess, type ToolResponse } from "../../utils/formatter.js";
 import { formatToolError, ToolInputError } from "../error-handling.js";

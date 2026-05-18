@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createConfigFromEnv, FlashbackNoViewError } from "@huaweicloud/taurusdb-core";
+import { createConfigFromEnv, FlashbackNoViewError } from "taurusdb-core";
 import { ErrorCode } from "../dist/utils/formatter.js";
 import {
   executeReadonlySqlTool,

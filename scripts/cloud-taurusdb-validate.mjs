@@ -7,7 +7,7 @@ import {
   fetchHuaweiCloud,
   getHuaweiCloudAuthFromConfig,
   resolveHuaweiCloudProjectId,
-} from "@huaweicloud/taurusdb-core";
+} from "taurusdb-core";
 
 function optional(name, fallback = undefined) {
   const value = process.env[name]?.trim();

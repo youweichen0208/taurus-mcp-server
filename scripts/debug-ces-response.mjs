@@ -4,7 +4,7 @@ import {
   createConfigFromEnv,
   fetchHuaweiCloud,
   resolveHuaweiCloudProjectId,
-} from "@huaweicloud/taurusdb-core";
+} from "taurusdb-core";
 
 const config = createConfigFromEnv(process.env);
 const projectId = await resolveHuaweiCloudProjectId(config.cloud);

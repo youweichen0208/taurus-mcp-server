@@ -1,11 +1,10 @@
 # 华为云 TaurusDB 数据面 MCP Server — 实施计划
 
-> 本文档聚焦 `@huaweicloud/taurusdb-mcp` 的当前实现方向与第一阶段范围。
+> 本文档聚焦 `taurusdb-mcp` 的当前实现方向与第一阶段范围。
 >
 > 配套阅读：
 >
 > - [`architecture.md`](./architecture.md)
-> - [`taurusdb-cli-implementation.md`](./taurusdb-cli-implementation.md)
 
 ---
 
@@ -25,7 +24,7 @@
 
 - `packages/core` 已承载共享数据面能力
 - `packages/mcp` 已承载 MCP 协议层与动态 Tool 注册
-- `packages/cli` 目前仍是脚手架入口，尚未进入真实实现阶段
+- 当前仓库不提供独立 CLI，MCP 包是唯一前端入口
 
 MCP 当前已经具备：
 
@@ -220,7 +219,7 @@ type DiagnosticResult = {
 
 这样做的目的很简单：
 
-- MCP 和 CLI 共用同一份结果 contract
+- MCP 各 tool 共用同一份结果 contract
 - 前端可以稳定渲染 `summary / candidates / actions / evidence`
 - 后续新增 `diagnose_high_cpu` 一类 Tool 时不用重做结果协议
 
@@ -571,7 +570,7 @@ export type {
 } from "./diagnostics/types.js";
 ```
 
-这样 MCP handler 可以直接从 `@huaweicloud/taurusdb-core` 拿类型。
+这样 MCP handler 可以直接从 `taurusdb-core` 拿类型。
 
 #### 4.7.5 `packages/mcp/src/tools/taurus/diagnostics.ts`
 

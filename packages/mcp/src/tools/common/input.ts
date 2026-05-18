@@ -2,7 +2,7 @@ import type {
   ResponseMetadata,
   SessionContext,
   StatementType,
-} from "@huaweicloud/taurusdb-core";
+} from "taurusdb-core";
 import { z } from "zod";
 import {
   formatError,

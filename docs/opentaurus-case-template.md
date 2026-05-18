@@ -37,7 +37,7 @@
 
 ## 3. OpenTaurus 调用链
 
-按顺序记录你实际调用的 MCP Tool 或 CLI 命令。
+按顺序记录你实际调用的 MCP Tool。
 
 ```text
 1.

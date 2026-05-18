@@ -7,7 +7,7 @@ import {
   logger,
   withTaskContext,
   type Config,
-} from "@huaweicloud/taurusdb-core";
+} from "taurusdb-core";
 import type { ServerDeps } from "../server.js";
 import {
   executeReadonlySqlTool,

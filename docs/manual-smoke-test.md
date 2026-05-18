@@ -1,6 +1,6 @@
 # 华为云 TaurusDB MCP 手工 Smoke Test 指南
 
-> 本文档面向开发联调和本地自测，目标是让你从 0 开始，在本机把 `@huaweicloud/taurusdb-mcp` 的 MySQL 手工 smoke test 跑通。
+> 本文档面向开发联调和本地自测，目标是让你从 0 开始，在本机把 `taurusdb-mcp` 的 MySQL 手工 smoke test 跑通。
 
 配套文档：
 
@@ -226,7 +226,7 @@ TAURUSDB_TEST_MYSQL_PASSWORD=taurus_ro_password \
 TAURUSDB_TEST_MYSQL_MUTATION_USER=taurus_rw \
 TAURUSDB_TEST_MYSQL_MUTATION_PASSWORD=taurus_rw_password \
 TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN=mysql://root:root@127.0.0.1:3306/mysql \
-npm run test --workspace @huaweicloud/taurusdb-mcp
+npm run test --workspace taurusdb-mcp
 ```
 
 如果这一步全绿，再做下面的手工 smoke。

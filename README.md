@@ -1,5 +1,10 @@
 ## Quick Start
 
+当前对外发布的 npm 包：
+
+- `taurusdb-core`
+- `taurusdb-mcp`
+
 环境要求：
 
 - Node.js `>= 20`
@@ -32,22 +37,55 @@ npm test
 只看 MCP 包的检查 / 测试：
 
 ```bash
-npm run check --workspace @huaweicloud/taurusdb-mcp
-npm run test --workspace @huaweicloud/taurusdb-mcp
+npm run check --workspace taurusdb-mcp
+npm run test --workspace taurusdb-mcp
 ```
 
 查看版本：
 
 ```bash
-npx @huaweicloud/taurusdb-mcp --version
+npx taurusdb-mcp --version
 ```
 
 初始化 MCP 客户端配置：
 
 ```bash
-npx @huaweicloud/taurusdb-mcp init --client claude
-npx @huaweicloud/taurusdb-mcp init --client cursor
-npx @huaweicloud/taurusdb-mcp init --client vscode
+npx taurusdb-mcp init --client claude
+npx taurusdb-mcp init --client cursor
+npx taurusdb-mcp init --client vscode
+```
+
+## npm Publish
+
+发布前建议先检查包名是否可用：
+
+```bash
+npm view taurusdb-core name
+npm view taurusdb-mcp name
+```
+
+本地检查打包内容：
+
+```bash
+npm run build
+npm_config_cache=/private/tmp/taurus-npm-cache npm pack --workspace taurusdb-core --dry-run
+npm_config_cache=/private/tmp/taurus-npm-cache npm pack --workspace taurusdb-mcp --dry-run
+```
+
+发布顺序：
+
+```bash
+npm login
+npm run build
+npm publish --workspace taurusdb-core
+npm publish --workspace taurusdb-mcp
+```
+
+安装和运行：
+
+```bash
+npm install taurusdb-mcp
+npx taurusdb-mcp --version
 ```
 
 ## Claude Code Setup

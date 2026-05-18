@@ -302,9 +302,9 @@ node packages/mcp/dist/index.js
 stdio server 正常时会保持运行，不会打印 HTTP 地址。真实客户端接入建议用 `init`：
 
 ```bash
-npx @huaweicloud/taurusdb-mcp init --client claude
-npx @huaweicloud/taurusdb-mcp init --client cursor
-npx @huaweicloud/taurusdb-mcp init --client vscode
+npx taurusdb-mcp init --client claude
+npx taurusdb-mcp init --client cursor
+npx taurusdb-mcp init --client vscode
 ```
 
 如果你在仓库源码里联调，也可以让客户端直接指向：

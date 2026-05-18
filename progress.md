@@ -2,13 +2,13 @@
 
 ## 1. 当前状态
 
-当前仓库已经从“单包 MCP 原型”推进到“`core + mcp` 可运行、CLI 待接入”的状态。
+当前仓库已经从“单包 MCP 原型”推进到“`core + mcp` 可运行”的状态。
 
 当前可运行的主链路是：
 
 - `packages/core`: 共享数据面能力与 `TaurusDBEngine`
 - `packages/mcp`: MCP `stdio` server、tool registry、`init`
-- `packages/cli`: 只有 scaffold，还未进入真实实现阶段
+- 当前仓库不提供独立 CLI，MCP 包是唯一前端入口
 
 当前首阶段范围已经收敛为：
 
@@ -26,7 +26,7 @@
 当前明确不在首阶段范围内：
 
 - SQL history / Binlog / preflight
-- CLI REPL / ask / agent / doctor
+- 独立 CLI
 
 当前已经接上的 diagnostics 能力：
 
@@ -68,7 +68,6 @@
 - `README.md`
 - `docs/architecture.md`
 - `docs/taurusdb-mcp-implementation-plan.md`
-- `docs/taurusdb-cli-implementation.md`
 - `docs/testing.md`
 - `docs/manual-smoke-test.md`
 - `docs/cloud-taurusdb-testing.md`
@@ -80,7 +79,6 @@
 - 根目录改成 workspace 结构
 - 新建 `packages/core`
 - 新建 `packages/mcp`
-- 新建 `packages/cli` scaffold
 - 根 `package.json`、`tsconfig`、workspace 脚本已收口
 
 ### 2.3 Shared Core 收口
@@ -177,7 +175,7 @@
 - 在 `packages/mcp` 新增 `find_top_slow_sql`
 - 在 `packages/mcp` 新增 5 个诊断 Tool handler 与输入校验
 - diagnostics Tool 已改为默认注册，并直接纳入默认工具面
-- 统一了诊断结果的 public mapping，MCP/CLI 后续可复用同一套返回骨架
+- 统一了诊断结果的 public mapping，MCP 各工具复用同一套返回骨架
 - 增加了 `core` / `mcp` 侧测试
 - 新增 `show_processlist` MCP Tool，作为连接与锁排查的底层 evidence collector
 - `diagnose_slow_query` 已接入 explain-based 诊断，并支持通过 `digest_text` 从 `performance_schema` 解析 sample SQL
@@ -361,35 +359,9 @@
 
 ---
 
-## 5. CLI 还差哪些
+## 5. 当前缺口
 
-CLI 当前仍未开始真实实现，第一阶段目标已从“任务型数据面命令”进一步调整为“MCP companion”。
-
-新的方向是：CLI 不重新实现 SQL / diagnose / TaurusDB 专属命令客户端，而是负责 MCP 的安装、配置、验证、调试、CI smoke、runbook 编排和 context export。
-
-待完成：
-
-- CLI companion 命令框架
-- `config doctor` / `config show` / `config profiles`
-- `mcp serve` / `mcp tools` / `mcp call` / `mcp smoke`
-- 嵌入式 stdio MCP client，用于通过 MCP 协议调用真实 Tool
-- `cloud validate` / `cloud instances`
-- `runbook latency|locks|connections|slow-query|storage|replication`
-- `context snapshot|schema|export`
-- Markdown / JSON 报告输出与默认脱敏
-
-当前状态：
-
-- 只有 `packages/cli` 包骨架
-- 设计文档已从“按 core/MCP 能力平铺”调整为“MCP companion 协同模型”
-- 代码未落地
-
-后续阶段再考虑：
-
-- 远程 MCP Server 调试
-- 交互式 TUI
-- `ask`
-- `agent`
+当前剩余工作集中在 MCP 主链路和云端验证，不再包含独立 CLI 方向。
 
 ---
 
@@ -448,11 +420,4 @@ CLI 当前仍未开始真实实现，第一阶段目标已从“任务型数据�
    - OS 级磁盘 / IOPS / throughput 指标，用于增强 `diagnose_storage_pressure`
    - 更完整的复制拓扑 / 只读节点信息，用于增强 `diagnose_replication_lag`
 
-8. 云端 MCP 主链路和 diagnostics 第一版稳定后，再开始 CLI companion：
-   - 先做命令框架、help、`config doctor`、`config show`
-   - 再做嵌入式 stdio MCP client、`mcp tools`、`mcp call`、`mcp smoke`
-   - 再把现有 `npm run cloud:validate` 收口为 `cloud validate`
-   - 再做 `runbook latency` / `runbook locks` / `runbook connections` 等 MCP Tool 编排
-   - 最后做 `context snapshot` / `context export`，输出给 AI 客户端或工单使用的脱敏证据包
-
-9. history/binlog、CLI ask / agent、远程 MCP 调试、交互式 TUI 继续放到后续阶段，不进入当前云端联调闭环
+8. history/binlog 和更长历史证据链继续放到后续阶段，不进入当前云端联调闭环

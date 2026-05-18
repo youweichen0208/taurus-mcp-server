@@ -4,7 +4,7 @@ import {
   FlashbackNoViewError,
   SchemaIntrospectionError,
   UnsupportedFeatureError,
-} from "@huaweicloud/taurusdb-core";
+} from "taurusdb-core";
 import {
   ErrorCode,
   formatError,

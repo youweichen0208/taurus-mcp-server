@@ -9,9 +9,9 @@ import {
   type CapabilitySnapshot,
   type Config,
   type RuntimeTargetProfileLoader,
-} from "@huaweicloud/taurusdb-core";
+} from "taurusdb-core";
 import { registerTools } from "./tools/registry.js";
-import { logger } from "@huaweicloud/taurusdb-core";
+import { logger } from "taurusdb-core";
 import { VERSION } from "./version.js";
 
 export interface ServerDeps {

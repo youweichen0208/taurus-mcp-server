@@ -6,10 +6,7 @@
 
 构建一套围绕华为云 TaurusDB **数据面**的 AI 友好工具，让用户通过自然语言完成 schema 探查、只读 SQL 查询、Explain 分析和受控 SQL 执行。
 
-这套工具以两种形态交付：
-
-- **MCP Server 形态**：供 Claude Desktop、Cursor、VS Code 等 AI 客户端通过 MCP 协议接入
-- **CLI 形态**：作为独立的命令行工具，面向 DBA、开发者、支持人员，第一阶段先支持传统命令模式
+这套工具当前以 **MCP Server 形态** 交付，供 Claude Desktop、Cursor、VS Code 等 AI 客户端通过 MCP 协议接入。
 
 两种形态共享同一个核心引擎（core），核心链路是：
 
@@ -30,42 +27,38 @@
 
 - `packages/core` 已承载共享的数据面能力与 `TaurusDBEngine`
 - `packages/mcp` 已承载 MCP 启动、Tool 装配和 `init` 命令
-- `packages/cli` 仍在脚手架阶段，属于后续新增前端
+- 当前仓库不再提供独立 CLI
 
-这意味着后续工作不再是“从单包抽第一刀”，而是继续**稳固 core 与 mcp 的边界，并补齐 cli 前端**。目标形态仍然是本文档描述的 monorepo：
+这意味着后续工作不再是“从单包抽第一刀”，而是继续**稳固 core 与 mcp 的边界**。目标形态是当前这套 monorepo：
 
 - `packages/core`：沉淀数据面能力、类型、策略与执行引擎
 - `packages/mcp`：MCP 协议适配、Tool 注册、客户端 `init`
-- `packages/cli`：命令行前端（第一阶段以命令模式为主）
 
 实施时应优先保证两点：
 
 - 避免把 MCP 协议细节重新回灌到 `core`
-- CLI 作为新增前端，只复用 `core`，不复制 `mcp` 的装配逻辑
+- 让 `mcp` 只承担协议适配与 tool 装配，不把业务逻辑留在前端层
 
 ### 1.1.2 文档导航
 
-这三份文档现在分别承担不同职责：
+这两份文档现在分别承担不同职责：
 
 - [`architecture.md`](./architecture.md)：目标架构、包边界、核心抽象、能力映射
 - [`taurusdb-mcp-implementation-plan.md`](./taurusdb-mcp-implementation-plan.md)：从当前单包实现收敛出 `core + mcp` 的实施路线
-- [`taurusdb-cli-implementation.md`](./taurusdb-cli-implementation.md)：在共享 `core` 之上新增 CLI 前端的实施路线
 
 阅读顺序建议：
 
 1. 先看架构文档，统一边界和命名
 2. 再看 MCP 计划，确认 shared core 如何从当前代码里抽出
-3. 最后看 CLI 计划，确认新增前端如何复用 core 而不是复制逻辑
 
 ### 1.2 核心定位
 
 | 维度         | 决策                                                               |
 | ------------ | ------------------------------------------------------------------ |
-| 仓库结构     | 单 monorepo（pnpm workspace），三个 package：core / mcp / cli      |
+| 仓库结构     | 单 monorepo（npm workspace），两个 package：core / mcp             |
 | 语言         | TypeScript（npm 生态与 MCP SDK 最成熟）                            |
-| 分发         | npm 包，用户通过 `npx @huaweicloud/taurusdb-mcp` 或 `taurusdb-cli` |
+| 分发         | npm 包，用户通过 `npx taurusdb-mcp` 接入                           |
 | MCP 传输     | `stdio`，本地 JSON-RPC over stdin/stdout                           |
-| CLI 传输     | 本地进程，直接读写终端                                             |
 | 首要认证     | 数据库连接凭证或数据源 profile                                     |
 | 可选认证     | AK/SK 仅用于辅助发现实例、地址等管控面上下文                       |
 | 执行路径     | 直接建立数据库会话，由 TaurusDB 数据面执行 SQL                     |
@@ -84,48 +77,6 @@
 | 本项目优先级 | P2                       | P0                             |
 
 结论是：本套工具首先是一个 **SQL 执行与治理层**，不是一个数据库运维控制台；同时已经具备第一版 **管控面 + 内核 + SQL 现场** 的联合诊断能力，后续重点是补云侧证据、长历史与更强的多源归并。
-
-### 1.4 MCP 形态与 CLI 形态的定位
-
-| 维度 | MCP Server | CLI |
-| --- | --- | --- |
-| 谁是主动方 | LLM 通过 AI 客户端调用 | 人在终端触发配置、验证、调试、runbook |
-| 典型用户 | 使用 Claude / Cursor 的开发者、PM | 开发者、测试、DBA、运维、CI |
-| LLM 谁提供 | 由 AI 客户端提供（Claude / 其他） | 第一阶段不内建 |
-| 交互模式 | 单轮 Tool 调用 | Companion 命令：init / config / mcp / cloud / runbook / context |
-| 输出格式 | JSON-RPC（给模型消费） | 人类可读摘要 + JSON + Markdown report |
-| 确认方式 | 返回 `confirmation_token` | 不直接实现 mutation 客户端；调试时透传 MCP Tool 行为 |
-| 会话状态 | 无 | 可保存 smoke / runbook / context export 的本地证据包 |
-
-两种形态不是并列的数据面前端。MCP 是主要数据面 Tool 面；CLI 是 MCP 的本地伴随工具，用来安装、验证、调试、编排和导出上下文。
-
-### 1.4.1 云厂商 RDS CLI 竞品对照（阿里云 / AWS）
-
-为了校准 `taurusdb-cli` 的产品边界，可以先看两类成熟云 CLI 的公开命令面。下面结论基于官方 CLI / API 文档整理；其中“更偏控制面还是数据面”是**基于公开命令面的归纳判断**。
-
-| 维度                 | 阿里云 CLI                                                                                                  | AWS CLI                                                                                          | 对 `taurusdb-cli` 的启发                                                                                                                   |
-| -------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| CLI 形态             | 统一 `aliyun` CLI，按产品 + OpenAPI 动作调用，例如 `aliyun rds DescribeDBInstances`                         | 统一 `aws` CLI，按 service namespace + command 调用，例如 `aws rds describe-db-instances`        | 我们不需要再做一层“云 API 通用壳”，而应收口到 MCP companion 命令                                                                           |
-| RDS 典型入口         | 实例列表用 `DescribeDBInstances`，实例详情常见用 `DescribeDBInstanceAttribute`                              | 实例列表/详情常见从 `describe-db-instances` 进入，可按实例标识或过滤条件查询                     | 竞品 CLI 的主入口是“实例资源管理”，而不是“对库执行 SQL”                                                                                    |
-| 参数与过滤           | 偏 OpenAPI 参数风格，强调 `--region`、`--profile`、大小写敏感参数；支持 `--output` 用 JMESPath 抽取并表格化 | 命令参考原生支持 `--filters`、`--query`、`--output`，过滤和脚本集成体验成熟                      | 我们 CLI 也需要 profile / region / output，但主要服务 MCP 配置、smoke、cloud evidence 和 report，而不是资源 CRUD |
-| 输出能力             | 官方提供 JSON 返回，也支持 `--output` 提取字段并直接表格化                                                  | 官方支持 `json`、`yaml`、`yaml-stream`、`text`、`table`，并可结合 `--query` 做客户端过滤         | 我们 CLI 第一阶段保留 human / json / markdown report 即可；数据面表格输出交给 MCP Tool 或 runbook 摘要 |
-| 分页 / 轮询          | 支持 `--pager` 聚合分页结果、`--waiter` 轮询结果状态                                                        | 命令参考原生支持分页，`describe-db-instances` 可 `--no-paginate` / `--page-size` / `--max-items` | 对我们更重要的是 MCP Server lifecycle、tools/list、tool call、smoke 和 evidence 校验 |
-| 多凭证 / 多环境      | 官方文档强调多 profile、region、endpoint 切换，适合多账号多地域管控                                         | 官方文档强调 named profiles、config/credentials 文件、region/output 配置                         | 我们也需要稳定的数据源 profile，但重点是让 MCP 和 AI 客户端复用同一份上下文 |
-| 更偏控制面还是数据面 | 更偏控制面。公开命令面围绕实例、网络、参数、备份、属性等 OpenAPI 操作展开                                   | 更偏控制面。RDS CLI 公开命令面围绕 DB instance / snapshot / parameter group 等资源操作展开       | `taurusdb-cli` 的差异化是 **MCP companion**：不做完整云控制面，也不做第二套数据库客户端 |
-| 与本项目最直接的差异 | 更适合“查实例、改配置、做运维编排”                                                                          | 更适合“资源管理 + 自动化脚本”                                                                    | 我们的首要价值应放在 init、config doctor、mcp call/smoke、cloud validate、runbook report 和 context export |
-
-可直接参考的官方入口：
-
-- 阿里云 CLI 概览：Alibaba Cloud CLI is built based on API，并支持多 profile、多输出格式、自动重试与插件机制[^aliyun-overview]
-- 阿里云 CLI 选项：`--profile`、`--region`、`--output`、`--pager`、`--waiter`[^aliyun-options]
-- 阿里云 RDS API：`DescribeDBInstances`、`DescribeDBInstanceAttribute`[^aliyun-rds-list] [^aliyun-rds-attr]
-- AWS CLI RDS 命令参考：`aws rds describe-db-instances`，支持分页与过滤[^aws-rds]
-- AWS CLI 用户指南：输出格式、`--query` 过滤、named profiles[^aws-output] [^aws-filter] [^aws-profiles]
-
-基于这组竞品对照，`taurusdb-cli` 的定位应继续保持两个原则：
-
-1. 不与云厂商通用 CLI 正面竞争“控制面资源管理命令的完整度”。
-2. 不与 MCP Tool 正面竞争“数据库数据面入口”，而是把产品力集中在 MCP 安装、验证、调试、runbook 和上下文导出。
 
 ### 1.5 TaurusDB 差异化叙事
 
@@ -147,22 +98,6 @@
 | ----------------------- | --------------- | ------------------------------------------------------------ |
 | TaurusDB 能帮你定位故障 | 场景化诊断 Tool | “CPU 打满了怎么查？”“为什么主从延迟？”“为什么连接突然暴涨？” |
 
-[^aliyun-overview]: Alibaba Cloud CLI overview: https://www.alibabacloud.com/help/en/cli/overview
-
-[^aliyun-options]: Alibaba Cloud CLI command-line options: https://www.alibabacloud.com/help/en/cli/command-line-options
-
-[^aliyun-rds-list]: Alibaba Cloud RDS `DescribeDBInstances`: https://www.alibabacloud.com/help/en/rds/developer-reference/api-rds-2014-08-15-describedbinstances
-
-[^aliyun-rds-attr]: Alibaba Cloud RDS `DescribeDBInstanceAttribute`: https://www.alibabacloud.com/help/en/rds/developer-reference/api-rds-2014-08-15-describedbinstanceattribute
-
-[^aws-rds]: AWS CLI `describe-db-instances`: https://docs.aws.amazon.com/cli/latest/reference/rds/describe-db-instances.html
-
-[^aws-output]: AWS CLI output formats: https://docs.aws.amazon.com/cli/latest/userguide/cli-usage-output-format.html
-
-[^aws-filter]: AWS CLI filtering and `--query`: https://docs.aws.amazon.com/cli/latest/userguide/cli-usage-filter.html
-
-[^aws-profiles]: AWS CLI profiles and config files: https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html
-
 ---
 
 ## 2. 系统架构
@@ -176,17 +111,15 @@ flowchart TB
   classDef core fill:#ECFDF5,stroke:#10B981,color:#065F46;
   classDef data fill:#F8FAFC,stroke:#475569,color:#0F172A;
 
-  subgraph Clients["AI clients & Users"]
+  subgraph Clients["AI clients"]
     C1["Claude Desktop / Cursor / VS Code"]:::client
-    C2["DBA / Developer terminal"]:::client
   end
 
   subgraph Frontends["Frontend packages"]
-    MCP["@huaweicloud/taurusdb-mcp<br/>MCP Server (stdio)"]:::frontend
-    CLI["@huaweicloud/taurusdb-cli<br/>MCP companion CLI"]:::frontend
+    MCP["taurusdb-mcp<br/>MCP Server (stdio)"]:::frontend
   end
 
-  subgraph Core["@huaweicloud/taurusdb-core"]
+  subgraph Core["taurusdb-core"]
     direction TB
     AUTH["Auth & Profile<br/>Credential resolution"]:::core
     CTX["Context Resolver<br/>SessionContext"]:::core
@@ -208,8 +141,6 @@ flowchart TB
   end
 
   C1 -->|"stdio JSON-RPC"| MCP
-  C2 -->|"terminal"| CLI
-
   MCP --> AUTH
   MCP --> CTX
   MCP --> SCH
@@ -218,15 +149,6 @@ flowchart TB
   MCP --> EXEC
   MCP --> TAURUS
   MCP --> DIAG
-
-  CLI --> AUTH
-  CLI --> CTX
-  CLI --> SCH
-  CLI --> CAP
-  CLI --> SAFE
-  CLI --> EXEC
-  CLI --> TAURUS
-  CLI --> DIAG
 
   EXEC -->|"driver / pool"| DB --> KERNEL
   TAURUS -->|"uses"| EXEC
@@ -239,19 +161,18 @@ flowchart TB
 ### 2.2 Monorepo 包依赖
 
 ```text
-@huaweicloud/taurusdb-core    ← 业务内核,不依赖任何前端
-         ↑          ↑
-         │          │ 依赖(workspace:*)
-         │          │
-taurusdb-mcp    taurusdb-cli   ← 两个前端互不依赖
+taurusdb-core    ← 业务内核,不依赖任何前端
+         ↑
+         │ 依赖(workspace:*)
+         │
+taurusdb-mcp     ← 唯一前端,负责 MCP 协议适配
 ```
 
 **关键原则**：
 
-- `core` 包**完全不感知** MCP 协议和 CLI 命令格式，它只暴露 TypeScript SDK
+- `core` 包**完全不感知** MCP 协议格式，它只暴露 TypeScript SDK
 - `mcp` 包只把 core 的方法包装成 MCP Tool
-- `cli` 包只把 core 的方法包装成命令，REPL 和 AI 交互属于后续阶段
-- `mcp` 和 `cli` **互不依赖**，可独立发布、独立升级（尽管我们选择同步发版）
+- 当前仓库没有第二前端，所有对外行为都通过 `mcp` 暴露
 
 ### 2.3 主数据流（MCP 形态）
 
@@ -266,20 +187,6 @@ taurusdb-mcp    taurusdb-cli   ← 两个前端互不依赖
 → 返回 rows / columns / truncated / duration_ms / task_id / sql_hash
 → AI 组织最终自然语言回答
 ```
-
-### 2.4 主数据流（CLI companion 形态）
-
-```text
-用户在终端输入 config / mcp / cloud / runbook / context 命令
-→ CLI 解析本地配置和 flags
-→ 若是配置/环境命令，CLI 直接检查本地文件、环境变量和包版本
-→ 若是数据面调试或 runbook，CLI 启动或连接本地 MCP Server
-→ CLI 通过 MCP stdio 协议调用 tools/list 或 tools/call
-→ MCP Server 继续复用 core 完成 guardrail、执行、diagnostics、capability probe
-→ CLI 汇总 MCP response，输出 human / json / markdown report
-```
-
-**关键差异**：CLI 不绕过 MCP 直接实现另一套 SQL / diagnose / TaurusDB 命令。需要数据面行为时，CLI 优先作为 MCP client 调用真实 MCP Tool。
 
 ### 2.5 关键交互示例
 
@@ -317,31 +224,7 @@ sequenceDiagram
   AI-->>U: 自然语言结论 + 关键数据
 ```
 
-#### 2.5.2 CLI 形态：通过 MCP 协议调试 Tool
-
-```mermaid
-sequenceDiagram
-  autonumber
-  participant U as User (terminal)
-  participant CLI as taurusdb-cli
-  participant MS as MCP Server
-  participant CORE as core Engine
-  participant DB as TaurusDB
-
-  U->>CLI: taurusdb mcp call execute_readonly_sql --input input.json
-  CLI->>MS: start local MCP server over stdio
-  CLI->>MS: tools/call execute_readonly_sql
-  MS->>CORE: engine.inspectSql(sql, ctx)
-  CORE-->>MS: decision=allow
-  MS->>CORE: engine.executeReadonly(sql, ctx)
-  CORE->>DB: execute SELECT
-  DB-->>CORE: result set
-  CORE-->>MS: QueryResult
-  MS-->>CLI: MCP Tool response envelope
-  CLI-->>U: print debug summary or JSON
-```
-
-#### 2.5.3 TaurusDB 专属：闪回查询链路
+#### 2.5.2 TaurusDB 专属：闪回查询链路
 
 ```mermaid
 sequenceDiagram
@@ -364,7 +247,7 @@ sequenceDiagram
 
 ### 2.6 为什么强调"内核节点执行"
 
-这里说的"内核节点执行"不是要求 MCP Server 或 CLI 必须部署进数据库进程内部，而是强调：
+这里说的"内核节点执行"不是要求 MCP Server 必须部署进数据库进程内部，而是强调：
 
 - SQL 的最终执行落点是 TaurusDB 的数据库内核，而不是云管 API
 - 结果来自真实表数据，而不是资源元数据
@@ -386,7 +269,7 @@ sequenceDiagram
 huaweicloud-taurusdb/                        ← 仓库根
 ├── packages/
 │   │
-│   ├── core/                                ← @huaweicloud/taurusdb-core
+│   ├── core/                                ← taurusdb-core
 │   │   ├── src/
 │   │   │   ├── index.ts                     # 对外导出 TaurusDBEngine + 类型
 │   │   │   ├── engine.ts                    # TaurusDBEngine 主类
@@ -428,9 +311,9 @@ huaweicloud-taurusdb/                        ← 仓库根
 │   │   ├── tests/
 │   │   └── package.json
 │   │
-│   ├── mcp/                                 ← @huaweicloud/taurusdb-mcp
+│   ├── mcp/                                 ← taurusdb-mcp
 │   │   ├── src/
-│   │   │   ├── index.ts                     # CLI 入口(init 子命令 + MCP 启动)
+│   │   │   ├── index.ts                     # 包入口(init 子命令 + MCP 启动)
 │   │   │   ├── server.ts                    # MCP Server 初始化
 │   │   │   ├── tools/
 │   │   │   │   ├── registry.ts              # Tool 注册逻辑(支持按 feature 动态注册)
@@ -451,21 +334,13 @@ huaweicloud-taurusdb/                        ← 仓库根
 │   │   ├── tests/
 │   │   └── package.json
 │   │
-│   └── cli/                                 ← @huaweicloud/taurusdb-cli
-│       ├── src/
-│       │   └── index.ts                     # 当前仅有脚手架入口
-│       ├── tests/
-│       └── package.json
-│
 ├── examples/
 │   ├── mcp-with-claude/
-│   ├── cli-basic-usage/
-│   └── cli-agent-demo/
+│   └── local-debug/
 │
 ├── docs/
 │   ├── architecture.md                      (本文档)
-│   ├── taurusdb-mcp-implementation-plan.md
-│   └── taurusdb-cli-implementation.md
+│   └── taurusdb-mcp-implementation-plan.md
 │
 ├── .github/workflows/ci.yml
 ├── pnpm-workspace.yaml
@@ -476,7 +351,7 @@ huaweicloud-taurusdb/                        ← 仓库根
 
 ### 3.2 核心包职责
 
-#### 3.2.1 `@huaweicloud/taurusdb-core`
+#### 3.2.1 `taurusdb-core`
 
 对外只暴露一个主类 `TaurusDBEngine`，是整个项目的业务内核。
 
@@ -626,11 +501,11 @@ export interface FlashbackInput {
 **核心原则**：
 
 - 所有方法接受 `SessionContext`，不接受 raw 参数。前端负责构造 context
-- 所有方法返回结构化的 TypeScript 对象，**不返回 MCP envelope 或 CLI 格式**
+- 所有方法返回结构化的 TypeScript 对象，**不返回 MCP envelope**
 - 错误通过 typed error class 抛出，前端决定如何展示
 - **TaurusDB 专属方法在内核不支持时抛 `UnsupportedFeatureError`**,前端据此决定是否注册 Tool 或提示降级
 
-#### 3.2.2 `@huaweicloud/taurusdb-mcp`
+#### 3.2.2 `taurusdb-mcp`
 
 ```typescript
 // packages/mcp/src/server.ts
@@ -660,25 +535,6 @@ export async function bootstrapDependencies(): Promise<ServerDeps> {
 - **基于启动时 capability probe 动态注册 TaurusDB 专属 Tool**(非 TaurusDB 实例自动降级为纯 MySQL 模式)
 - `init` 子命令写入 Claude/Cursor 等客户端配置
 
-#### 3.2.3 `@huaweicloud/taurusdb-cli`
-
-```typescript
-// packages/cli/src/index.ts
-#!/usr/bin/env node
-process.stderr.write(
-  "@huaweicloud/taurusdb-cli is scaffolded but not implemented yet.\\n"
-);
-process.exit(1);
-```
-
-**职责**：
-
-- MCP companion 命令：`init`、`config`、`mcp`、`cloud`、`runbook`、`context`
-- 本地配置、环境检查、MCP server 启动与 smoke
-- 通过 MCP stdio 协议调试真实 Tool，而不是维护第二套数据面命令
-- runbook 把多个 MCP Tool 调用汇总成终端摘要或 Markdown 报告
-- 远程 MCP 调试、交互式 TUI、AI `ask` / `agent` 属于后续阶段
-
 ### 3.3 当前确认模型
 
 当前实现不再引入 `ConfirmationStrategy` 抽象。`core` 只保留一套 token-based confirmation 原语：
@@ -687,7 +543,7 @@ process.exit(1);
 - `validateConfirmation`
 - `handleConfirmation`
 
-MCP 直接把 token 返回给客户端，要求用户携带 `confirmation_token` 重试。CLI companion 默认不直接实现 mutation 客户端；如果通过 `mcp call` 调试 mutation Tool，应透传 MCP 的 token 流程，而不是在 CLI 中重写确认语义。
+MCP 直接把 token 返回给客户端，要求用户携带 `confirmation_token` 重试。
 
 ### 3.4 各模块职责（与原架构一致，仅强调归属）
 
@@ -706,10 +562,10 @@ MCP 直接把 token 返回给客户端，要求用户携带 `confirmation_token`
 建议的加载优先级：
 
 ```text
-1. 前端显式传入         → Tool 参数 / CLI flag
+1. 前端显式传入         → Tool 参数
 2. 命名 profile         → ~/.config/taurusdb/profiles.json
 3. 环境变量             → TAURUSDB_SQL_DSN / HOST / PORT / USER / PASSWORD
-4. init 写入的本地配置   → 面向 Claude / Cursor / CLI 的默认 profile
+4. init 写入的本地配置   → 面向 Claude / Cursor 的默认 profile
 ```
 
 核心要求：
@@ -1134,7 +990,7 @@ Guardrail 要把决策落成执行参数：
 
 ## 4. Tool 与命令设计
 
-### 4.1 MCP Tool 集合（由 `@huaweicloud/taurusdb-mcp` 实现）
+### 4.1 MCP Tool 集合（由 `taurusdb-mcp` 实现）
 
 #### 4.1.1 通用 MySQL Tool
 
@@ -1416,88 +1272,16 @@ type DiagnosticResult = {
 | `diagnose_replication_lag`  | 是大事务、DDL、热点写入、IO 压力还是回放线程跟不上                     |
 | `diagnose_storage_pressure` | 是容量压力还是 IO 压力，是业务 SQL 导致还是后台活动导致                |
 
-### 4.2 CLI 命令集合（由 `@huaweicloud/taurusdb-cli` 实现）
+### 4.2 当前对外入口
 
-CLI 的新定位是 MCP companion：它负责安装、配置、验证、调试和 runbook 编排，不再作为第二套 SQL / diagnose / TaurusDB 数据面客户端。
-
-#### 4.2.1 Config / Init
-
-| 命令 | 角色定位 |
-| --- | --- |
-| `taurusdb init --client <claude|cursor|vscode>` | 初始化 AI 客户端 MCP 配置与 datasource 模板 |
-| `taurusdb config doctor` | 检查 Node、MCP 包、profile、环境变量和权限提示 |
-| `taurusdb config show` | 打印脱敏后的有效配置 |
-| `taurusdb config profiles` | 列出 datasource profiles |
-| `taurusdb config write-profile` | 写入或更新 datasource profile |
-
-#### 4.2.2 MCP 调试与 CI
-
-| 命令 | 角色定位 |
-| --- | --- |
-| `taurusdb mcp serve` | 启动 MCP Server |
-| `taurusdb mcp inspect` | 打印 server 版本、配置摘要、默认 datasource、capability probe 摘要 |
-| `taurusdb mcp tools` | 列出当前真实注册的 MCP Tools |
-| `taurusdb mcp call <tool> --input input.json` | 通过 MCP 协议调用 Tool，用于调试和 CI |
-| `taurusdb mcp smoke` | 跑最小 MCP smoke：启动、tools/list、ping、可选 datasource probe |
-
-#### 4.2.3 Cloud Evidence
-
-| 命令 | 角色定位 |
-| --- | --- |
-| `taurusdb cloud validate` | 验证 IAM、project、instance、node、CES 指标源 |
-| `taurusdb cloud instances` | 列出可解析的 TaurusDB 实例，用于绑定 datasource 与 instance_id |
-
-这一组只验证云侧证据源连通性，不做完整云控制面资源管理。
-
-#### 4.2.4 Runbook
-
-| 命令 | 角色定位 |
-| --- | --- |
-| `taurusdb runbook latency` | 编排 `diagnose_service_latency` 及其下一步建议 |
-| `taurusdb runbook locks` | 编排锁等待、MDL、deadlock、processlist 证据 |
-| `taurusdb runbook connections` | 编排连接堆积与 processlist 证据 |
-| `taurusdb runbook slow-query` | 编排 Top SQL 与单 SQL 根因分析 |
-| `taurusdb runbook storage` | 编排存储压力诊断 |
-| `taurusdb runbook replication` | 编排复制延迟诊断 |
-
-runbook 通过 MCP Tool 调用链完成，不直接调用 `core` 执行数据面动作。
-
-#### 4.2.5 Context Export
-
-| 命令 | 角色定位 |
-| --- | --- |
-| `taurusdb context snapshot` | 生成 datasource、实例、capability、schema 摘要 |
-| `taurusdb context schema` | 导出指定库/表的 schema context |
-| `taurusdb context export` | 导出最近一次 runbook / smoke / cloud validate 的脱敏证据包 |
-
-当前 CLI 仍是脚手架状态，上表描述的是**目标协同命令面**，不是已全部交付的实现清单。
-
-### 4.3 两种形态的 Tool / 命令映射
-
-这张表描述的是协同关系。CLI 不再为每个 `core` 能力提供独立命令，而是通过 MCP 协议调试、验证或编排真实 Tool。
-
-| 能力来源 | MCP Tool / 行为 | CLI 协同命令 |
-| --- | --- | --- |
-| MCP server lifecycle | startup / stdio | `taurusdb mcp serve` |
-| MCP registry | `tools/list` | `taurusdb mcp tools` / `taurusdb mcp inspect` |
-| Any MCP Tool | tool call envelope | `taurusdb mcp call <tool> --input input.json` |
-| Basic MCP health | `ping`, `tools/list` | `taurusdb mcp smoke` |
-| Diagnostics Tools | `diagnose_*`, `find_top_slow_sql`, `show_processlist` | `taurusdb runbook <scenario>` |
-| Cloud context Tools / resolver | instance and metrics evidence | `taurusdb cloud validate` / `taurusdb cloud instances` |
-| Schema / capability context | discovery and TaurusDB capability Tools | `taurusdb context snapshot` / `taurusdb context schema` |
-
-**CLI 后续可选能力**（不计入第一阶段范围）：
-
-- 远程 MCP Server 调试
-- 交互式 TUI
-- `taurusdb ask` / `agent` — AI 前端编排
+当前仓库只保留 `taurusdb-mcp` 这一条对外入口。配置初始化、工具暴露、只读/写入执行、diagnostics 和 TaurusDB 专属能力都通过 MCP Tool 集合完成。
 
 ### 4.4 为什么不单独做 `generate_sql` Tool
 
 `generate_sql` 很容易变成"模型调模型"的重复层。更合理的分工：
 
-- **MCP 形态**：模型本身负责自然语言到 SQL，MCP 提供 schema + guardrail + execute
-- **CLI 形态**：CLI 内嵌的 Agent 负责自然语言到 SQL，core 提供 schema + guardrail + execute
+- 模型本身负责自然语言到 SQL
+- MCP 提供 schema + guardrail + execute
 
 真正应该产品化的是 **执行与治理**，不是把 SQL 文本生成本身封装成服务。
 
@@ -1687,54 +1471,6 @@ const server = new McpServer({
 }
 ```
 
-### 5.3 CLI companion 输出格式
-
-CLI 输出重点是配置检查、MCP 调试、runbook 报告和 context export，而不是直接展示 SQL 结果集。
-
-**MCP smoke（人类可读）**
-
-```
-$ taurusdb mcp smoke --profile prod-ro
-
-MCP smoke: ok
-Server: huaweicloud-taurusdb 0.1.0
-Tools: 18 registered
-Default profile: prod-ro
-Ping: ok
-Capability probe: TaurusDB 2.0.69.250900
-```
-
-**MCP Tool 调试（JSON）**
-
-```bash
-$ taurusdb mcp call diagnose_service_latency --input latency.json --json
-{
-  "ok": true,
-  "command": "mcp call",
-  "mcp": {
-    "tool": "diagnose_service_latency",
-    "server_version": "0.1.0"
-  },
-  "data": {
-    "status": "ok",
-    "severity": "high",
-    "summary": "Latency is likely driven by slow SQL plus connection buildup."
-  }
-}
-```
-
-**Runbook 报告**
-
-```
-$ taurusdb runbook latency --since 15m --report latency.md
-
-Runbook: latency
-Tools called: diagnose_service_latency, find_top_slow_sql, show_processlist
-Severity: high
-Report: latency.md
-Next: open the report in your AI client and continue from the suggested context block.
-```
-
 ### 5.4 结果裁剪策略
 
 结果必须有上限，否则模型上下文或终端都会失控。默认策略：
@@ -1755,7 +1491,7 @@ Next: open the report in your AI client and continue from the suggested context 
 
 | 策略                 | 说明                                                                   |
 | -------------------- | ---------------------------------------------------------------------- |
-| 默认只读             | 两种形态默认只注册 schema 和只读能力                                   |
+| 默认只读             | 默认只注册 schema 和只读能力                                            |
 | mutations 需显式开启 | 设置 `TAURUSDB_ENABLE_MUTATIONS=true` 后才暴露写入能力                 |
 | 单语句               | 不允许一次调用执行多条 SQL                                             |
 | 默认超时             | 每次查询都有最大执行时长                                               |
@@ -1809,17 +1545,15 @@ TAURUSDB_DISABLE_TAURUS_TOOLS=false       # 紧急开关,强制关闭所有专�
 
 不建议把拥有生产库写权限的工具暴露在公共网络中。
 
-### 6.5 数据出境防御（MCP 与 CLI 同等重要）
+### 6.5 数据出境防御
 
-**MCP 形态**、未来的 **CLI AI 形态**、以及 CLI companion 导出的 context/report 都可能流向 LLM 或工单系统，需要同样严格的数据出境控制：
+MCP 返回结果本身就可能流向 LLM 或工单系统，需要严格的数据出境控制：
 
 - 结果集行数和列数限制
 - 敏感字段自动脱敏
 - 审计只记 hash 不记原文
 - 大字段截断
 - 闪回查询的结果同样受 `max_rows` 限制
-
-**CLI companion 的本地输出** 默认不经 LLM，但 runbook report 和 context export 很容易被转发给 AI 客户端或工单系统，因此也应默认脱敏。
 
 ---
 
@@ -1851,7 +1585,6 @@ TAURUSDB_DISABLE_TAURUS_TOOLS=false       # 紧急开关,强制关闭所有专�
 - `query_sql_history`
 - `inspect_binlog_changes`
 - 基于 Binlog / 全量 SQL / SQL 审计的历史追溯闭环
-- CLI `doctor` / `ask` / `agent` / `repl`
 
 ### 7.3 为什么这样收敛
 
@@ -1883,7 +1616,7 @@ TAURUSDB_DISABLE_TAURUS_TOOLS=false       # 紧急开关,强制关闭所有专�
    - `core/diagnostics` 负责诊断编排与证据归一化
    - control-plane adapter 负责 CES / 实例元数据
    - data-plane collector 负责 `processlist`、锁等待、复制状态、慢 SQL / Top SQL 等内核证据
-   - `mcp` / `cli` 只负责把诊断结果包装成 Tool / 命令
+   - `mcp` 负责把诊断结果包装成 Tool
 
    当前进展补充：
    - `find_top_slow_sql` 已接入 digest ranking、Taurus external slow SQL ranking merge 与 DAS Top SQL merge 第一版
@@ -1901,10 +1634,7 @@ TAURUSDB_DISABLE_TAURUS_TOOLS=false       # 紧急开关,强制关闭所有专�
 3. 历史追溯链路
    先明确全量 SQL / SQL 审计 / Binlog 的真实接入面，再决定是否产品化 `history` / `binlog-changes`。
 
-4. CLI 高阶形态
-   在命令模式稳定后，再考虑 REPL、AI、doctor。
-
-5. 更多 TaurusDB 专属观测能力
+4. 更多 TaurusDB 专属观测能力
    如分区、Statement Outline、长事务、只读节点状态等。
 
 ## 8. 测试与演进
@@ -1927,10 +1657,6 @@ TAURUSDB_DISABLE_TAURUS_TOOLS=false       # 紧急开关,强制关闭所有专�
 - 动态 Tool 注册
 - 非 TaurusDB 实例上的降级行为
 
-**CLI 包测试**：
-
-- 当前仅需覆盖脚手架入口与后续命令面的基础约束
-
 **集成测试**：
 
 - 真实 MySQL 基线链路
@@ -1944,7 +1670,6 @@ Step 1: capability/ 模块
 Step 2: MCP 启动时 probe + 动态 Tool 注册
 Step 3: explain_sql_enhanced
 Step 4: flashback_query
-Step 5: CLI companion 基础骨架
 ```
 
 ### 8.3 后续演进方向
@@ -1957,6 +1682,4 @@ Step 5: CLI companion 基础骨架
   - `diagnose_storage_pressure`
 - 回收站 Tool
 - 全量 SQL / SQL 审计 / Binlog 驱动的历史追溯
-- CLI companion：MCP smoke、tool call、runbook、context export
-- CLI 远程 MCP 调试 / TUI / AI ask-agent
 - 更丰富的 TaurusDB 专属观测能力

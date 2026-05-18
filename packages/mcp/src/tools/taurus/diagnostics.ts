@@ -11,7 +11,7 @@ import type {
   DiagnoseSlowQueryInput,
   DiagnoseStoragePressureInput,
   FindTopSlowSqlInput,
-} from "@huaweicloud/taurusdb-core";
+} from "taurusdb-core";
 import { formatToolError, ToolInputError } from "../error-handling.js";
 import type { ToolDefinition } from "../registry.js";
 import {

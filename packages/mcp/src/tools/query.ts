@@ -16,7 +16,7 @@ import {
   toPublicMutationResult,
   toPublicQueryResult,
 } from "./common.js";
-import type { GuardrailDecision, SessionContext } from "@huaweicloud/taurusdb-core";
+import type { GuardrailDecision, SessionContext } from "taurusdb-core";
 
 function blockedReason(decision: GuardrailDecision): string {
   return decision.riskHints[0] ?? "The SQL statement is blocked by safety policy.";

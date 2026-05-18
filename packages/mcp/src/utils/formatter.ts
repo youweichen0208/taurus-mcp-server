@@ -1,5 +1,5 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import type { ToolResponse } from "@huaweicloud/taurusdb-core";
+import type { ToolResponse } from "taurusdb-core";
 
 export {
   ErrorCode,
@@ -7,12 +7,12 @@ export {
   formatConfirmationRequired,
   formatError,
   formatSuccess,
-} from "@huaweicloud/taurusdb-core";
+} from "taurusdb-core";
 export type {
   ResponseMetadata,
   ToolError,
   ToolResponse,
-} from "@huaweicloud/taurusdb-core";
+} from "taurusdb-core";
 
 export function toMcpToolResult<T>(response: ToolResponse<T>): CallToolResult {
   return {
