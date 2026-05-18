@@ -1,4 +1,4 @@
-## Quick Start
+# TaurusDB MCP Server
 
 当前对外发布的 npm 包：
 
@@ -9,6 +9,156 @@
 
 - Node.js `>= 20`
 - npm
+
+## Use From npm
+
+普通用户不需要 clone 或 build 当前仓库，直接通过 npm 启动 MCP server：
+
+```bash
+npx -y taurusdb-mcp --version
+```
+
+也可以先安装到项目里：
+
+```bash
+npm install taurusdb-mcp
+npx taurusdb-mcp --version
+```
+
+MCP 客户端里的启动命令统一使用：
+
+```json
+{
+  "command": "npx",
+  "args": ["-y", "taurusdb-mcp"]
+}
+```
+
+最小云控制面 + 数据面环境变量：
+
+```bash
+TAURUSDB_CLOUD_REGION=<your-region>
+TAURUSDB_CLOUD_ACCESS_KEY_ID=<your-ak>
+TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk>
+TAURUSDB_SQL_DATABASE=<your-database>
+TAURUSDB_SQL_USER=<your-readonly-user>
+TAURUSDB_SQL_PASSWORD=<your-readonly-password>
+```
+
+如果使用华为云临时凭证，再补：
+
+```bash
+TAURUSDB_CLOUD_SECURITY_TOKEN=<your-session-token>
+```
+
+## MCP Client Setup
+
+### Claude Code
+
+推荐把云控制面凭证和只读数据面模板直接写进 MCP 配置，避免依赖外部 shell 的 `export`：
+
+```bash
+claude mcp add huaweicloud-taurusdb \
+  --transport stdio \
+  -s local \
+  -e TAURUSDB_CLOUD_REGION=<your-region> \
+  -e TAURUSDB_CLOUD_ACCESS_KEY_ID=<your-ak> \
+  -e TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk> \
+  -e TAURUSDB_SQL_DATABASE=<your-database> \
+  -e TAURUSDB_SQL_USER=<your-readonly-user> \
+  -e TAURUSDB_SQL_PASSWORD=<your-readonly-password> \
+  -- npx -y taurusdb-mcp
+```
+
+验证：
+
+```bash
+claude mcp list
+claude mcp get huaweicloud-taurusdb
+```
+
+### Codex
+
+Codex 支持通过 CLI 添加 stdio MCP server，也可以直接写 `~/.codex/config.toml`。CLI 和 IDE extension 共享这份配置。
+
+```bash
+codex mcp add huaweicloud-taurusdb \
+  --env TAURUSDB_CLOUD_REGION=<your-region> \
+  --env TAURUSDB_CLOUD_ACCESS_KEY_ID=<your-ak> \
+  --env TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk> \
+  --env TAURUSDB_SQL_DATABASE=<your-database> \
+  --env TAURUSDB_SQL_USER=<your-readonly-user> \
+  --env TAURUSDB_SQL_PASSWORD=<your-readonly-password> \
+  -- npx -y taurusdb-mcp
+```
+
+验证：
+
+```bash
+codex mcp list
+```
+
+等价的 `~/.codex/config.toml`：
+
+```toml
+[mcp_servers.huaweicloud-taurusdb]
+command = "npx"
+args = ["-y", "taurusdb-mcp"]
+enabled = true
+
+[mcp_servers.huaweicloud-taurusdb.env]
+TAURUSDB_CLOUD_REGION = "<your-region>"
+TAURUSDB_CLOUD_ACCESS_KEY_ID = "<your-ak>"
+TAURUSDB_CLOUD_SECRET_ACCESS_KEY = "<your-sk>"
+TAURUSDB_SQL_DATABASE = "<your-database>"
+TAURUSDB_SQL_USER = "<your-readonly-user>"
+TAURUSDB_SQL_PASSWORD = "<your-readonly-password>"
+```
+
+### Cursor
+
+创建或编辑 `~/.cursor/mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "huaweicloud-taurusdb": {
+      "command": "npx",
+      "args": ["-y", "taurusdb-mcp"],
+      "env": {
+        "TAURUSDB_CLOUD_REGION": "<your-region>",
+        "TAURUSDB_CLOUD_ACCESS_KEY_ID": "<your-ak>",
+        "TAURUSDB_CLOUD_SECRET_ACCESS_KEY": "<your-sk>",
+        "TAURUSDB_SQL_DATABASE": "<your-database>",
+        "TAURUSDB_SQL_USER": "<your-readonly-user>",
+        "TAURUSDB_SQL_PASSWORD": "<your-readonly-password>"
+      }
+    }
+  }
+}
+```
+
+重启 Cursor 后，在 Agent 模式里让它调用：
+
+- `list_cloud_taurus_instances`
+- `select_cloud_taurus_instance`
+- `execute_readonly_sql` with `SELECT 1 AS ok`
+
+### Generated Client Config
+
+`taurusdb-mcp` 也提供初始化命令，可生成 Claude Desktop、Cursor、VS Code 的基础 MCP 配置：
+
+```bash
+npx -y taurusdb-mcp init --client claude
+npx -y taurusdb-mcp init --client cursor
+npx -y taurusdb-mcp init --client vscode
+```
+
+生成后按需把上面的 `env` 补进对应配置文件。
+
+## Local Development
+
+如果你要开发当前仓库，再使用下面的本地流程。
 
 安装依赖：
 
@@ -41,18 +191,10 @@ npm run check --workspace taurusdb-mcp
 npm run test --workspace taurusdb-mcp
 ```
 
-查看版本：
+查看本地 workspace 版本：
 
 ```bash
 npx taurusdb-mcp --version
-```
-
-初始化 MCP 客户端配置：
-
-```bash
-npx taurusdb-mcp init --client claude
-npx taurusdb-mcp init --client cursor
-npx taurusdb-mcp init --client vscode
 ```
 
 ## npm Publish
@@ -81,16 +223,16 @@ npm publish --workspace taurusdb-core
 npm publish --workspace taurusdb-mcp
 ```
 
-安装和运行：
+安装和运行已发布包：
 
 ```bash
 npm install taurusdb-mcp
 npx taurusdb-mcp --version
 ```
 
-## Claude Code Setup
+## Claude Code Setup From Source
 
-下面是一条最短可走通的 Claude Code 接入路径。
+下面是从本地源码构建并接入 Claude Code 的开发路径。普通用户优先使用上面的 npm 配置。
 
 ### 1. Build
 
@@ -338,16 +480,16 @@ claude mcp get huaweicloud-taurusdb
 如果 `env` 为空，直接重配：
 
 ```bash
-  claude mcp add "huaweicloud-taurusdb" \
-    --transport stdio \
-    -s local \
-    -e TAURUSDB_CLOUD_REGION=cn-east-3 \
-    -e TAURUSDB_CLOUD_ACCESS_KEY_ID=<your-ak> \
-    -e TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk> \
-    -e TAURUSDB_SQL_DATABASE=<your-database> \
-    -e TAURUSDB_SQL_USER=<your-readonly-user> \
-    -e TAURUSDB_SQL_PASSWORD=<your-readonly-password> \
-    -- node /Users/youweichen/projects/taurus-mcp-server/packages/mcp/dist/index.js
+claude mcp add "huaweicloud-taurusdb" \
+  --transport stdio \
+  -s local \
+  -e TAURUSDB_CLOUD_REGION=cn-east-3 \
+  -e TAURUSDB_CLOUD_ACCESS_KEY_ID=<your-ak> \
+  -e TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk> \
+  -e TAURUSDB_SQL_DATABASE=<your-database> \
+  -e TAURUSDB_SQL_USER=<your-readonly-user> \
+  -e TAURUSDB_SQL_PASSWORD=<your-readonly-password> \
+  -- npx -y taurusdb-mcp
 ```
 
 如果是临时凭证，再补：
