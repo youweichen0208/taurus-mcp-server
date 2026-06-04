@@ -8,7 +8,6 @@ function makeConfig(overrides = {}) {
   return {
     defaultDatasource: undefined,
     profilesPath: undefined,
-    enableMutations: false,
     limits: {
       maxRows: 200,
       maxColumns: 50,
@@ -134,11 +133,10 @@ test("engine lists datasources through profile loader and marks default datasour
         host: "beta.db.local",
         port: 3306,
         database: "app_beta",
-        readonlyUser: {
-          username: "reader",
+        user: {
+          username: "app_beta",
           password: { type: "plain", value: "secret" },
         },
-        mutationUser: undefined,
         poolSize: 4,
       },
     ],
@@ -150,12 +148,8 @@ test("engine lists datasources through profile loader and marks default datasour
         host: "alpha.db.local",
         port: 5432,
         database: "app_alpha",
-        readonlyUser: {
-          username: "reader",
-          password: { type: "plain", value: "secret" },
-        },
-        mutationUser: {
-          username: "writer",
+        user: {
+          username: "app_alpha",
           password: { type: "plain", value: "secret" },
         },
         poolSize: 8,
@@ -194,7 +188,6 @@ test("engine lists datasources through profile loader and marks default datasour
       host: "alpha.db.local",
       port: 5432,
       database: "app_alpha",
-      hasMutationUser: true,
       poolSize: 8,
       isDefault: true,
     },
@@ -204,7 +197,6 @@ test("engine lists datasources through profile loader and marks default datasour
       host: "beta.db.local",
       port: 3306,
       database: "app_beta",
-      hasMutationUser: false,
       poolSize: 4,
       isDefault: false,
     },

@@ -90,10 +90,8 @@ async function createProfilesFile() {
   const host = requiredEnv("TAURUSDB_TEST_MYSQL_HOST");
   const port = parseInteger(process.env.TAURUSDB_TEST_MYSQL_PORT, 3306);
   const database = requiredEnv("TAURUSDB_TEST_MYSQL_DATABASE");
-  const readonlyUser = requiredEnv("TAURUSDB_TEST_MYSQL_USER");
-  const readonlyPassword = requiredEnv("TAURUSDB_TEST_MYSQL_PASSWORD");
-  const mutationUser = process.env.TAURUSDB_TEST_MYSQL_MUTATION_USER?.trim() || readonlyUser;
-  const mutationPassword = process.env.TAURUSDB_TEST_MYSQL_MUTATION_PASSWORD?.trim() || readonlyPassword;
+  const user = requiredEnv("TAURUSDB_TEST_MYSQL_USER");
+  const password = requiredEnv("TAURUSDB_TEST_MYSQL_PASSWORD");
 
   const profile = {
     defaultDatasource: "local_mysql_e2e",
@@ -103,13 +101,9 @@ async function createProfilesFile() {
         host,
         port,
         database,
-        readonlyUser: {
-          username: readonlyUser,
-          password: readonlyPassword,
-        },
-        mutationUser: {
-          username: mutationUser,
-          password: mutationPassword,
+        user: {
+          username: user,
+          password: password,
         },
         poolSize: 4,
       },
@@ -121,14 +115,13 @@ async function createProfilesFile() {
 }
 
 function mysqlConnectionConfig({ mutation = false } = {}) {
+  void mutation;
   return {
     host: requiredEnv("TAURUSDB_TEST_MYSQL_HOST"),
     port: parseInteger(process.env.TAURUSDB_TEST_MYSQL_PORT, 3306),
     database: requiredEnv("TAURUSDB_TEST_MYSQL_DATABASE"),
-    user: requiredEnv(mutation ? "TAURUSDB_TEST_MYSQL_MUTATION_USER" : "TAURUSDB_TEST_MYSQL_USER"),
-    password: requiredEnv(
-      mutation ? "TAURUSDB_TEST_MYSQL_MUTATION_PASSWORD" : "TAURUSDB_TEST_MYSQL_PASSWORD",
-    ),
+    user: requiredEnv("TAURUSDB_TEST_MYSQL_USER"),
+    password: requiredEnv("TAURUSDB_TEST_MYSQL_PASSWORD"),
   };
 }
 
@@ -219,7 +212,6 @@ async function withClient(run, options = {}) {
     env: {
       TAURUSDB_SQL_PROFILES: profilesPath,
       TAURUSDB_DEFAULT_DATASOURCE: "local_mysql_e2e",
-      TAURUSDB_MCP_ENABLE_MUTATIONS: "true",
       TAURUSDB_MCP_LOG_LEVEL: "error",
     },
   });

@@ -23,9 +23,13 @@ import { showProcesslistTool } from "./processlist.js";
 import { pingTool } from "./ping.js";
 import { getKernelInfoTool, listTaurusFeaturesTool } from "./taurus/capability.js";
 import {
+  clearSqlCredentialsTool,
+  getSessionBindingTool,
   selectCloudTaurusInstanceTool,
   setCloudAccessKeysTool,
   setCloudRegionTool,
+  setDefaultDatabaseTool,
+  setSqlCredentialsTool,
 } from "./taurus/cloud-context.js";
 import { listCloudTaurusInstancesTool } from "./taurus/cloud-instances.js";
 import { diagnosticToolDefinitions } from "./taurus/diagnostics.js";
@@ -153,30 +157,29 @@ export const capabilityToolDefinitions: ToolDefinition[] = [
   listTaurusFeaturesTool,
   setCloudRegionTool,
   setCloudAccessKeysTool,
+  getSessionBindingTool,
+  setSqlCredentialsTool,
+  clearSqlCredentialsTool,
+  setDefaultDatabaseTool,
   listCloudTaurusInstancesTool,
   selectCloudTaurusInstanceTool,
 ];
 
+export const taurusToolDefinitions: ToolDefinition[] = [
+  explainSqlEnhancedTool,
+  flashbackQueryTool,
+  listRecycleBinTool,
+  restoreRecycleBinTableTool,
+];
+
 function buildDefaultToolDefinitions(_config: Config, probe?: ToolRegistrationProbe): ToolDefinition[] {
-  const tools: ToolDefinition[] = [
+  void probe;
+  return [
     ...commonToolDefinitions,
     ...capabilityToolDefinitions,
     ...diagnosticToolDefinitions,
+    ...taurusToolDefinitions,
   ];
-
-  if (probe?.features) {
-    if (probe.features.ndp_pushdown.available || probe.features.parallel_query.available) {
-      tools.push(explainSqlEnhancedTool);
-    }
-    if (probe.features.flashback_query.available) {
-      tools.push(flashbackQueryTool);
-    }
-    if (probe.features.recycle_bin.available) {
-      tools.push(listRecycleBinTool, restoreRecycleBinTableTool);
-    }
-  }
-
-  return tools;
 }
 
 function isToolDefinitionArray(value: ToolRegistrationProbe | ToolDefinition[] | undefined): value is ToolDefinition[] {

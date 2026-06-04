@@ -18,7 +18,6 @@ export interface DataSourceInfo {
   host?: string;
   port: number;
   database?: string;
-  hasMutationUser: boolean;
   poolSize?: number;
   isDefault: boolean;
 }

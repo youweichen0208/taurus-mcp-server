@@ -19,7 +19,7 @@
 → 结构化结果
 ```
 
-除了通用的 MySQL 数据面能力以外，首版还会专门暴露一组 **TaurusDB 专属 Tool**，用来让 AI 和用户感知到 TaurusDB 相对社区 MySQL 的差异化内核能力（闪回查询、NDP/PQ 执行计划增强、能力发现）。当前已经落地第一版 **诊断线**，把管控面指标、TaurusDB 内核状态和 SQL 现场联合起来做故障分析，并继续补齐云侧证据和长历史源。详见 [4.1.2 TaurusDB 专属 Tool](#412--taurusdb-专属-tool当前首阶段) 与 [7.4 当前已落地的诊断增量](#74-当前已落地的诊断增量)。
+除了通用的 MySQL 数据面能力以外，首版还会专门暴露一组 **TaurusDB 专属 Tool**，用来让 AI 和用户感知到 TaurusDB 相对社区 MySQL 的差异化内核能力（闪回查询、NDP/PQ 执行计划增强、能力发现）。这些 Tool 现在默认出现在 `tools/list` 中；如果当前实例不支持、系统参数未开启或能力条件不满足，会在调用时返回结构化 unsupported-feature 错误和必要的参数提示。当前已经落地第一版 **诊断线**，把管控面指标、TaurusDB 内核状态和 SQL 现场联合起来做故障分析，并继续补齐云侧证据和长历史源。详见 [4.1.2 TaurusDB 专属 Tool](#412--taurusdb-专属-tool当前首阶段) 与 [7.4 当前已落地的诊断增量](#74-当前已落地的诊断增量)。
 
 ### 1.1.1 当前仓库状态与目标形态
 
@@ -63,7 +63,7 @@
 | 可选认证     | AK/SK 仅用于辅助发现实例、地址等管控面上下文                       |
 | 执行路径     | 直接建立数据库会话，由 TaurusDB 数据面执行 SQL                     |
 | 安全边界     | SQL AST 分类、结果限制、超时限制、确认流、审计日志                 |
-| 差异化层     | 基于内核版本的能力发现 + TaurusDB 专属 Tool 动态注册               |
+| 差异化层     | 基于内核版本的能力发现 + TaurusDB 专属 Tool 默认暴露、调用时校验   |
 | 推荐部署位点 | 与 TaurusDB 同 VPC、同可达网络的跳板机 / Sidecar / 本地安全环境    |
 
 ### 1.3 管控面与数据面的边界
@@ -316,7 +316,7 @@ huaweicloud-taurusdb/                        ← 仓库根
 │   │   │   ├── index.ts                     # 包入口(init 子命令 + MCP 启动)
 │   │   │   ├── server.ts                    # MCP Server 初始化
 │   │   │   ├── tools/
-│   │   │   │   ├── registry.ts              # Tool 注册逻辑(支持按 feature 动态注册)
+│   │   │   │   ├── registry.ts              # Tool 注册逻辑(默认注册,调用时按 capability 校验)
 │   │   │   │   ├── common.ts
 │   │   │   │   ├── discovery.ts
 │   │   │   │   ├── query.ts
@@ -430,7 +430,6 @@ export class TaurusDBEngine {
 export interface EngineConfig {
   profiles: ProfileSource; // 数据源来源
   defaultDatasource?: string;
-  enableMutations: boolean; // 全局开关
   limits: RuntimeLimits;
 }
 
@@ -532,7 +531,7 @@ export async function bootstrapDependencies(): Promise<ServerDeps> {
 - 把每个 core 方法包装成一个 MCP Tool
 - 构造统一响应 envelope
 - 处理 MCP 协议特有的错误和重试语义
-- **基于启动时 capability probe 动态注册 TaurusDB 专属 Tool**(非 TaurusDB 实例自动降级为纯 MySQL 模式)
+- **TaurusDB 专属 Tool 默认注册,调用时基于 capability probe 返回清晰降级结果**(非 TaurusDB 实例会返回 unsupported-feature，而不是在工具面消失)
 - `init` 子命令写入 Claude/Cursor 等客户端配置
 
 ### 3.3 当前确认模型
@@ -608,7 +607,7 @@ Schema 层负责：
 当前实现刻意保持简单：
 
 - `probe()` 每次直接探测,**不在 core 内做 capability cache**
-- MCP 启动时只对默认数据源做一次 probe,把结果用于动态注册 Tool
+- MCP 启动时会对默认数据源做 probe，用于初始化 capability 上下文；Tool 是否可见不再依赖这次 probe 结果
 - 后续单次调用仍可按需再次探测,保证行为和当前连接状态一致
 
 当前首阶段真正依赖的能力门控只有三类：
@@ -884,7 +883,7 @@ type GuardrailDecision = {
 决策逻辑：
 
 - `blocked`:直接拒绝
-- `high`:默认拒绝,或在开启 mutations 时进入确认流
+- `high`:默认拒绝,或在受控写操作场景下进入确认流
 - `medium`:返回风险说明 + 确认提示
 - `low`:直接执行
 
@@ -1007,8 +1006,8 @@ Guardrail 要把决策落成执行参数：
 
 #### 4.1.2 🆕 TaurusDB 专属 Tool（当前首阶段）
 
-> 以下 Tool 仅在连接到 TaurusDB 实例时暴露，依赖启动时能力探测的结果动态注册。
-> 连接到自建 MySQL / RDS for MySQL 时，这些 Tool 自动不注册，MCP 优雅降级为纯 MySQL 模式。
+> 以下 Tool 默认暴露在 `tools/list` 中；如果当前实例不是 TaurusDB、能力未开启或系统参数不满足，调用时返回结构化 unsupported-feature 错误。
+> 连接到自建 MySQL / RDS for MySQL 时，这些 Tool 仍然可见，但会在调用时返回清晰的降级结果，MCP 维持一致的工具面。
 
 当前首阶段围绕三条主线，只保留 4 个专属 Tool：
 
@@ -1497,16 +1496,16 @@ const server = new McpServer({
 | 默认超时             | 每次查询都有最大执行时长                                               |
 | 结果上限             | 返回行数、列数、文本长度都有限制                                       |
 | 审计必达             | 至少记录 `task_id`、`sql_hash` 和决策结果                              |
-| 专属能力门控         | TaurusDB 专属写操作(回收站恢复)同样受 `TAURUSDB_ENABLE_MUTATIONS` 控制 |
+| 专属能力门控         | TaurusDB 专属写操作(回收站恢复)同样受 confirmation、guardrail 和数据库权限约束 |
 
 ### 6.2 数据库权限建议
 
-建议至少区分两套账号：
+建议至少保证默认账号权限可控：
 
-- 只读账号：默认运行使用
-- 写账号：仅在明确开启 mutations 的环境使用
+- 只读分析场景：使用只具备查询权限的账号
+- 受控写入场景：使用具备最小必要写权限的账号
 
-不要让默认 profile 直接使用 DBA 账号。
+不建议让默认 profile 直接使用 DBA 账号。
 
 对 TaurusDB 专属能力:
 
@@ -1592,7 +1591,7 @@ MCP 返回结果本身就可能流向 LLM 或工单系统，需要严格的数�
 
 - 这些能力依赖真实的 TaurusDB 语法、视图、日志源和运维配置，文档级设想不足以支撑稳定实现。
 - 把 schema cache、capability cache、confirmation strategy、history orchestration 一次性塞进首版，会显著抬高理解和维护成本。
-- 首阶段更重要的是先把 `core` / `mcp` 的边界、动态注册和最小安全模型做扎实。
+- 首阶段更重要的是先把 `core` / `mcp` 的边界、能力校验和最小安全模型做扎实。
 
 ### 7.4 当前已落地的诊断增量
 

@@ -101,15 +101,19 @@ export function formatToolError(error: unknown, context: ToolErrorContext): Tool
   }
 
   if (error instanceof UnsupportedFeatureError) {
+    const parameterHint = error.parameterHint
+      ? ` Enable or verify ${error.parameterHint} on the target instance if this feature should be available.`
+      : "";
     return formatError({
       code: ErrorCode.UNSUPPORTED_FEATURE,
-      message: error.message,
+      message: `${error.message}${parameterHint}`,
       summary: "The requested TaurusDB feature is not available on this instance.",
       metadata: context.metadata,
       details: {
         feature: error.feature,
         required_version: error.requiredVersion,
         current_version: error.currentVersion,
+        parameter_hint: error.parameterHint,
       },
     });
   }

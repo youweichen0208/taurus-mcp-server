@@ -34,15 +34,12 @@ MCP 客户端里的启动命令统一使用：
 }
 ```
 
-最小云控制面 + 数据面环境变量：
+最小云控制面环境变量：
 
 ```bash
 TAURUSDB_CLOUD_REGION=<your-region>
 TAURUSDB_CLOUD_ACCESS_KEY_ID=<your-ak>
 TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk>
-TAURUSDB_SQL_DATABASE=<your-database>
-TAURUSDB_SQL_USER=<your-readonly-user>
-TAURUSDB_SQL_PASSWORD=<your-readonly-password>
 ```
 
 如果使用华为云临时凭证，再补：
@@ -55,7 +52,7 @@ TAURUSDB_CLOUD_SECURITY_TOKEN=<your-session-token>
 
 ### Claude Code
 
-推荐把云控制面凭证和只读数据面模板直接写进 MCP 配置，避免依赖外部 shell 的 `export`：
+推荐把云控制面凭证直接写进 MCP 配置，避免依赖外部 shell 的 `export`：
 
 ```bash
 claude mcp add huaweicloud-taurusdb \
@@ -64,9 +61,6 @@ claude mcp add huaweicloud-taurusdb \
   -e TAURUSDB_CLOUD_REGION=<your-region> \
   -e TAURUSDB_CLOUD_ACCESS_KEY_ID=<your-ak> \
   -e TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk> \
-  -e TAURUSDB_SQL_DATABASE=<your-database> \
-  -e TAURUSDB_SQL_USER=<your-readonly-user> \
-  -e TAURUSDB_SQL_PASSWORD=<your-readonly-password> \
   -- npx -y taurusdb-mcp
 ```
 
@@ -86,9 +80,6 @@ codex mcp add huaweicloud-taurusdb \
   --env TAURUSDB_CLOUD_REGION=<your-region> \
   --env TAURUSDB_CLOUD_ACCESS_KEY_ID=<your-ak> \
   --env TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk> \
-  --env TAURUSDB_SQL_DATABASE=<your-database> \
-  --env TAURUSDB_SQL_USER=<your-readonly-user> \
-  --env TAURUSDB_SQL_PASSWORD=<your-readonly-password> \
   -- npx -y taurusdb-mcp
 ```
 
@@ -110,9 +101,6 @@ enabled = true
 TAURUSDB_CLOUD_REGION = "<your-region>"
 TAURUSDB_CLOUD_ACCESS_KEY_ID = "<your-ak>"
 TAURUSDB_CLOUD_SECRET_ACCESS_KEY = "<your-sk>"
-TAURUSDB_SQL_DATABASE = "<your-database>"
-TAURUSDB_SQL_USER = "<your-readonly-user>"
-TAURUSDB_SQL_PASSWORD = "<your-readonly-password>"
 ```
 
 ### Cursor
@@ -128,20 +116,21 @@ TAURUSDB_SQL_PASSWORD = "<your-readonly-password>"
       "env": {
         "TAURUSDB_CLOUD_REGION": "<your-region>",
         "TAURUSDB_CLOUD_ACCESS_KEY_ID": "<your-ak>",
-        "TAURUSDB_CLOUD_SECRET_ACCESS_KEY": "<your-sk>",
-        "TAURUSDB_SQL_DATABASE": "<your-database>",
-        "TAURUSDB_SQL_USER": "<your-readonly-user>",
-        "TAURUSDB_SQL_PASSWORD": "<your-readonly-password>"
+        "TAURUSDB_CLOUD_SECRET_ACCESS_KEY": "<your-sk>"
       }
     }
   }
 }
 ```
 
-重启 Cursor 后，在 Agent 模式里让它调用：
+重启 Cursor 后，在 Agent 模式里让它按下面顺序调用：
 
 - `list_cloud_taurus_instances`
 - `select_cloud_taurus_instance`
+- `set_sql_credentials`
+- `list_databases`
+- `set_default_database`
+- `get_session_binding`
 - `execute_readonly_sql` with `SELECT 1 AS ok`
 
 ### Generated Client Config
@@ -295,9 +284,14 @@ claude mcp get huaweicloud-taurusdb
 
 ### 5. Verify Database Data Plane
 
-控制面通过后，再补最小数据面模板，然后在 Claude Code 里直接调用：
+控制面通过后，推荐直接走会话式绑定：
 
-- `execute_readonly_sql` with `SELECT 1 AS ok`
+1. `select_cloud_taurus_instance`
+2. `set_sql_credentials`
+3. `list_databases`
+4. `set_default_database`
+5. `get_session_binding`
+6. `execute_readonly_sql` with `SELECT 1 AS ok`
 
 如果 `SELECT 1` 成功，说明数据库数据面也已连通。
 
@@ -307,7 +301,11 @@ claude mcp get huaweicloud-taurusdb
 
 - 只把 datasource 当作模板
 - 不要求模板里预先写死 `host`
+- 不要求模板里预先写死 `database`
+- 不要求模板里预先写死 `user/password`
 - 通过 `select_cloud_taurus_instance` 在运行时把当前实例的 `host/port` 绑定到这个模板
+- 通过 `set_sql_credentials` 在运行时把数据库账号绑定到当前会话
+- 通过 `set_default_database` 在运行时把默认库绑定到当前会话
 
 这意味着客户不需要每切一个实例就重新改一遍：
 
@@ -315,14 +313,21 @@ claude mcp get huaweicloud-taurusdb
 - `TAURUSDB_SQL_PORT`
 - `TAURUSDB_SQL_ENGINE`
 - `TAURUSDB_SQL_DATASOURCE`
+- `TAURUSDB_SQL_DATABASE`
+- `TAURUSDB_SQL_USER`
+- `TAURUSDB_SQL_PASSWORD`
 
 更推荐的方式是：
 
 1. 先配一次云控制面凭证
-2. 再配一次数据面模板
-3. 后续切实例时只调用：
+2. 保留一个最小 datasource template
+3. 每次会话内按顺序调用：
    - `list_cloud_taurus_instances`
    - `select_cloud_taurus_instance`
+   - `set_sql_credentials`
+   - `list_databases`
+   - `set_default_database`
+   - `get_session_binding`
 
 ### Minimal Template
 
@@ -332,18 +337,20 @@ claude mcp get huaweicloud-taurusdb
 - 默认 `datasource = taurus_mcp`
 - 只要检测到最小 SQL 模板输入，就会自动把 `taurus_mcp` 作为默认 datasource
 
-所以如果你使用环境变量，客户侧最小只需要：
+所以如果你希望预置一个长期可复用的 SQL 模板，环境变量最小只需要：
 
 ```bash
-export TAURUSDB_SQL_DATABASE=<default-database>
-export TAURUSDB_SQL_USER=<readonly-user>
-export TAURUSDB_SQL_PASSWORD=<readonly-password>
+export TAURUSDB_SQL_USER=<database-user>
+export TAURUSDB_SQL_PASSWORD=<database-password>
 ```
+
+如果你更希望完全走会话式登录，这两个变量也可以不预先配置，改为在客户端里调用 `set_sql_credentials`。
 
 这里的关键点是：
 
-- `database / user / password` 来自模板
 - `host / port` 来自当前选中的云实例
+- `user / password` 可以来自模板，也可以来自 `set_sql_credentials`
+- `database` 可以来自模板，也可以来自 `set_default_database`
 - `engine` 默认按 `mysql` 处理，因为 TaurusDB for MySQL 走的是 MySQL 协议
 - `datasource` 默认使用 `taurus_mcp`
 
@@ -405,7 +412,11 @@ curl ifconfig.me; echo
 
 1. 在 Claude Code 里调用 `list_cloud_taurus_instances`
 2. 调用 `select_cloud_taurus_instance`
-3. 再调用 `execute_readonly_sql`，例如：
+3. 调用 `set_sql_credentials`
+4. 调用 `list_databases`
+5. 调用 `set_default_database`
+6. 调用 `get_session_binding`
+7. 再调用 `execute_readonly_sql`，例如：
 
 ```json
 {
@@ -417,9 +428,27 @@ curl ifconfig.me; echo
 
 ![Claude Code 中的 TaurusDB MCP 调用示例](image.png)
 
-### What `select_cloud_taurus_instance` Does Now
+### Session Binding Model
 
-除了设置当前会话的：
+当前版本里，实例、账号和默认库都可以按会话维度绑定，不需要回到配置文件改环境变量。
+
+相关 tool：
+
+- `select_cloud_taurus_instance`
+- `set_sql_credentials`
+- `clear_sql_credentials`
+- `set_default_database`
+- `get_session_binding`
+
+其中：
+
+- `select_cloud_taurus_instance` 负责绑定实例地址
+- `set_sql_credentials` 负责绑定数据库账号密码
+- `set_default_database` 负责绑定默认库
+- `get_session_binding` 负责把当前绑定状态显式返回出来
+- `clear_sql_credentials` 用于清理当前会话里临时注入的数据库账号
+
+`select_cloud_taurus_instance` 除了设置当前会话的：
 
 - `project_id`
 - `instance_id`
@@ -437,11 +466,11 @@ curl ifconfig.me; echo
 
 这套模型更适合 DBA 统一兜底：
 
-- DBA 维护模板中的 `database / readonly user / password / tls`
-- 用户只需要选实例
-- MCP 自动把实例地址绑定到模板
+- DBA 维护模板中的 `tls / datasource / engine`
+- 用户在会话里选实例、输入账号、选择数据库
+- MCP 自动把实例地址、账号和默认库绑定到当前会话
 
-如果不同实例共用同一套只读账号和默认库名，这种方式会明显比“每次切实例都重新 export 一组 SQL env”更顺畅。
+如果不同实例共用同一套数据库账号和默认库名，也仍然可以预写 `TAURUSDB_SQL_USER/PASSWORD` 或默认库名；只是现在不再要求必须提前写死。
 
 如果你需要覆盖默认值，仍然可以显式设置：
 
@@ -486,9 +515,6 @@ claude mcp add "huaweicloud-taurusdb" \
   -e TAURUSDB_CLOUD_REGION=cn-east-3 \
   -e TAURUSDB_CLOUD_ACCESS_KEY_ID=<your-ak> \
   -e TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk> \
-  -e TAURUSDB_SQL_DATABASE=<your-database> \
-  -e TAURUSDB_SQL_USER=<your-readonly-user> \
-  -e TAURUSDB_SQL_PASSWORD=<your-readonly-password> \
   -- npx -y taurusdb-mcp
 ```
 

@@ -10,8 +10,10 @@ export function applyRuntimeTarget(
   }
   return withRedactedToString({
     ...profile,
-    host: target.host,
+    host: target.host ?? profile.host,
     port: target.port ?? profile.port,
+    database: target.database ?? profile.database,
+    user: target.user ?? profile.user,
   });
 }
 
@@ -24,12 +26,16 @@ export class RuntimeOverrideProfileLoader implements RuntimeTargetProfileLoader 
   }
 
   setRuntimeTarget(name: string, target: RuntimeDataSourceTarget): void {
-    this.runtimeTargets.set(name, {
-      host: target.host,
-      port: target.port,
-      instanceId: target.instanceId,
-      nodeId: target.nodeId,
-    });
+    const current = this.runtimeTargets.get(name);
+    const next: RuntimeDataSourceTarget = {
+      host: target.host ?? current?.host,
+      port: target.port ?? current?.port,
+      database: target.database ?? current?.database,
+      user: target.user ?? current?.user,
+      instanceId: target.instanceId ?? current?.instanceId,
+      nodeId: target.nodeId ?? current?.nodeId,
+    };
+    this.runtimeTargets.set(name, next);
   }
 
   clearRuntimeTarget(name: string): void {

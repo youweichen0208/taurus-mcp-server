@@ -192,7 +192,6 @@ export class SqlExecutorImpl implements SqlExecutor {
     const timeoutMs = opts.timeoutMs ?? ctx.limits.timeoutMs;
 
     const session = await this.connectionPool.acquire(ctx.datasource, "rw", {
-      allowWithoutGlobalMutations: opts.allowWithoutGlobalMutations,
       allowReadonlyFallbackForMutations: opts.allowReadonlyFallbackForMutations,
     });
     const active = this.beginQuery(queryId, session, ctx, "rw", startedAt);

@@ -28,8 +28,7 @@ export interface DataSourceProfile {
   host?: string;
   port: number;
   database?: string;
-  readonlyUser: UserCredential;
-  mutationUser?: UserCredential;
+  user: UserCredential;
   tls?: TlsOptions;
   poolSize?: number;
   toString(): string;
@@ -42,8 +41,10 @@ export interface ProfileLoader {
 }
 
 export interface RuntimeDataSourceTarget {
-  host: string;
+  host?: string;
   port?: number;
+  database?: string;
+  user?: UserCredential;
   instanceId?: string;
   nodeId?: string;
 }

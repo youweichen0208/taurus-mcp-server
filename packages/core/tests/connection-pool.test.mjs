@@ -10,8 +10,7 @@ function makeProfile({
   host = "127.0.0.1",
   port = 3306,
   database = "demo",
-  readonlyUser = { username: "ro", password: { type: "plain", value: "ro_pwd" } },
-  mutationUser = { username: "rw", password: { type: "plain", value: "rw_pwd" } },
+  user = { username: "app", password: { type: "plain", value: "app_pwd" } },
 } = {}) {
   return {
     name,
@@ -19,10 +18,9 @@ function makeProfile({
     host,
     port,
     database,
-    readonlyUser,
-    mutationUser,
+    user,
     toString() {
-      return JSON.stringify({ name, engine, host, port, database, readonlyUser, mutationUser });
+      return JSON.stringify({ name, engine, host, port, database, user });
     },
   };
 }
@@ -130,7 +128,7 @@ test("connection pool acquires readonly sessions and reuses underlying pool", as
 
 test("connection pool resolves credentials before creating pool", async () => {
   const profile = makeProfile({
-    readonlyUser: { username: "ro", password: { type: "env", key: "DB_PWD" } },
+    user: { username: "app", password: { type: "env", key: "DB_PWD" } },
   });
   const profiles = new Map([[profile.name, profile]]);
   const { adapter, state } = makeMockAdapter();
@@ -149,88 +147,51 @@ test("connection pool resolves credentials before creating pool", async () => {
   assert.equal(state.createPoolCalls[0].password, "env-DB_PWD");
 });
 
-test("connection pool blocks mutation acquire when mutation mode disabled", async () => {
-  const profile = makeProfile();
-  const profiles = new Map([[profile.name, profile]]);
-  const { adapter } = makeMockAdapter();
-
-  const manager = new ConnectionPoolManager({
-    config: createConfigFromEnv({ TAURUSDB_MCP_ENABLE_MUTATIONS: "false" }),
-    profileLoader: makeProfileLoader(profiles),
-    secretResolver: makeSecretResolver(),
-    adapters: { mysql: adapter },
-  });
-
-  await assert.rejects(async () => manager.acquire(profile.name, "rw"), /Mutation mode is disabled/);
-});
-
-test("connection pool allows explicit rw acquire bypass for recycle-bin restore", async () => {
+test("connection pool acquires rw sessions with the configured datasource user", async () => {
   const profile = makeProfile();
   const profiles = new Map([[profile.name, profile]]);
   const { adapter, state } = makeMockAdapter();
 
   const manager = new ConnectionPoolManager({
-    config: createConfigFromEnv({ TAURUSDB_MCP_ENABLE_MUTATIONS: "false" }),
+    config: createConfigFromEnv({}),
     profileLoader: makeProfileLoader(profiles),
     secretResolver: makeSecretResolver(),
     adapters: { mysql: adapter },
   });
 
-  const session = await manager.acquire(profile.name, "rw", {
-    allowWithoutGlobalMutations: true,
-  });
+  const session = await manager.acquire(profile.name, "rw");
   await session.close();
 
   assert.equal(state.createPoolCalls.length, 1);
-  assert.equal(state.createPoolCalls[0].username, "rw");
+  assert.equal(state.createPoolCalls[0].username, "app");
 });
 
-test("connection pool allows recycle-bin restore to fall back to readonly user", async () => {
+test("connection pool reuses configured datasource user for rw sessions", async () => {
   const profile = makeProfile();
-  delete profile.mutationUser;
   const profiles = new Map([[profile.name, profile]]);
   const { adapter, state } = makeMockAdapter();
 
   const manager = new ConnectionPoolManager({
-    config: createConfigFromEnv({ TAURUSDB_MCP_ENABLE_MUTATIONS: "false" }),
+    config: createConfigFromEnv({}),
     profileLoader: makeProfileLoader(profiles),
     secretResolver: makeSecretResolver(),
     adapters: { mysql: adapter },
   });
 
-  const session = await manager.acquire(profile.name, "rw", {
-    allowWithoutGlobalMutations: true,
-    allowReadonlyFallbackForMutations: true,
-  });
+  const session = await manager.acquire(profile.name, "rw");
   await session.close();
 
   assert.equal(state.createPoolCalls.length, 1);
-  assert.equal(state.createPoolCalls[0].username, "ro");
+  assert.equal(state.createPoolCalls[0].username, "app");
 });
 
-test("connection pool blocks mutation acquire when mutation user is missing", async () => {
-  const profile = makeProfile();
-  delete profile.mutationUser;
-  const profiles = new Map([[profile.name, profile]]);
-  const { adapter } = makeMockAdapter();
-
-  const manager = new ConnectionPoolManager({
-    config: createConfigFromEnv({ TAURUSDB_MCP_ENABLE_MUTATIONS: "true" }),
-    profileLoader: makeProfileLoader(profiles),
-    secretResolver: makeSecretResolver(),
-    adapters: { mysql: adapter },
-  });
-
-  await assert.rejects(async () => manager.acquire(profile.name, "rw"), /Mutation user is not configured/);
-});
-
-test("connection pool health check returns readonly result and skips mutation when disabled", async () => {
+test("connection pool health check returns readonly and mutation results", async () => {
   const profile = makeProfile();
   const profiles = new Map([[profile.name, profile]]);
   const { adapter } = makeMockAdapter();
 
   const manager = new ConnectionPoolManager({
-    config: createConfigFromEnv({ TAURUSDB_MCP_ENABLE_MUTATIONS: "false" }),
+    config: createConfigFromEnv({}),
     profileLoader: makeProfileLoader(profiles),
     secretResolver: makeSecretResolver(),
     adapters: { mysql: adapter },
@@ -242,7 +203,7 @@ test("connection pool health check returns readonly result and skips mutation wh
   assert.equal(health.modes[0].mode, "ro");
   assert.equal(health.modes[0].status, "ok");
   assert.equal(health.modes[1].mode, "rw");
-  assert.equal(health.modes[1].status, "skipped");
+  assert.equal(health.modes[1].status, "ok");
 });
 
 test("connection pool close releases active sessions and closes created pools", async () => {

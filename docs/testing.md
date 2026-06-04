@@ -74,8 +74,8 @@
 
 补充说明：
 
-- `list_recycle_bin` 和 `restore_recycle_bin_table` 属于 TaurusDB 专属能力，只有在 capability probe 命中 `recycle_bin` 时才会进入工具面
-- `restore_recycle_bin_table` 第一次调用必须走 confirmation token；执行恢复时优先使用 `mutationUser`，未配置时会对该工具单独回退到 `readonlyUser`
+- `list_recycle_bin` 和 `restore_recycle_bin_table` 默认进入工具面；如果当前实例不支持或系统参数未开启，调用时会返回结构化 unsupported-feature 错误
+- `restore_recycle_bin_table` 第一次调用必须走 confirmation token；执行恢复时复用 datasource 配置中的数据库账号
 
 结论：
 
@@ -169,8 +169,8 @@
 需要观察：
 
 - `tools/list` 是否返回预期工具集合
-- `execute_sql` 是否只在 `enableMutations=true` 时暴露
-- TaurusDB 专属 Tool 是否仅在 probe 成功且 feature 可用时暴露
+- `execute_sql` 是否默认暴露，并由 guardrail / confirmation / 数据库权限共同约束
+- TaurusDB 专属 Tool 是否默认暴露，并在实例不支持时返回清晰的 capability/parameter hint
 - diagnostics Tool 当前是否默认暴露
 
 ### 5.2 Response Envelope
@@ -415,8 +415,8 @@ npm run test --workspace taurusdb-mcp
 通过标准：
 
 - 本地 MySQL e2e 全绿
-- readonly / mutation 账号分离符合预期
-- `execute_sql` 只在开启 mutations 时暴露
+- 单账号模型和确认流符合预期
+- `execute_sql` 默认暴露
 - confirmation token 主链路稳定
 
 #### 阶段二：本地手工 smoke
@@ -444,14 +444,13 @@ export TAURUSDB_SQL_ENGINE=mysql
 export TAURUSDB_SQL_DATASOURCE=local_mysql
 export TAURUSDB_SQL_HOST=127.0.0.1
 export TAURUSDB_SQL_PORT=3306
-export TAURUSDB_SQL_DATABASE=taurus_mcp_test
-export TAURUSDB_SQL_USER=taurus_ro
-export TAURUSDB_SQL_PASSWORD='taurus_ro_password'
-export TAURUSDB_SQL_MUTATION_USER=taurus_rw
-export TAURUSDB_SQL_MUTATION_PASSWORD='taurus_rw_password'
+export TAURUSDB_SQL_USER=taurus_app
+export TAURUSDB_SQL_PASSWORD='taurus_app_password'
 export TAURUSDB_DEFAULT_DATASOURCE=local_mysql
 export TAURUSDB_MCP_LOG_LEVEL=info
 ```
+
+如果你想模拟云端的会话式使用模型，也可以不预先设置 `TAURUSDB_SQL_DATABASE`，而是在 MCP 启动后调用 `set_default_database`。
 
 然后构建并启动 MCP：
 
@@ -547,8 +546,7 @@ node packages/mcp/dist/index.js
 至少准备：
 
 - 可直连的 TaurusDB / GaussDB(for MySQL) 实例
-- readonly 账号
-- mutation 账号
+- 数据库账号
 - 目标数据库名
 - DAS 可用 token
 - CES 可用 token
@@ -560,12 +558,12 @@ node packages/mcp/dist/index.js
 
 - 安全组 / 白名单 / VPC / 跳板机链路已放通
 - 数据库 TLS 策略与 profile 配置一致
-- readonly 账号至少可执行：
+- 数据库账号至少可执行：
   - `SHOW PROCESSLIST`
   - `SHOW REPLICA STATUS` 或 `SHOW SLAVE STATUS`
   - `SHOW ENGINE INNODB STATUS`
   - `performance_schema` 相关只读查询
-- mutation 账号具备受控写权限，可完成 `UPDATE ... WHERE ...` 的最小确认流验证
+- 用于验证 `execute_sql` 的数据库账号具备受控写权限，可完成 `UPDATE ... WHERE ...` 的最小确认流验证
 
 ##### 8.5.2 云端环境变量
 
@@ -1450,8 +1448,7 @@ Follow-up: <next tool / config / evidence to check>
 | ---- | ----------------------- | ---------------------- | ------------------------------------------- |
 | A-01 | 启动 MCP server         | 进程成功启动并完成握手 | 无异常退出；stdout 可被 MCP client 正常消费 |
 | A-02 | `tools/list`            | 返回默认工具集合       | 工具数量和名称正确                          |
-| A-03 | `enableMutations=false` | `execute_sql` 不暴露   | tool list 中无 `execute_sql`                |
-| A-04 | `enableMutations=true`  | `execute_sql` 暴露     | tool list 中有 `execute_sql`                |
+| A-03 | `execute_sql` 注册检查 | `execute_sql` 暴露     | tool list 中有 `execute_sql`                |
 | A-05 | 日志边界                | 日志不污染 stdout      | stderr 有日志，stdout 仅协议输出            |
 | A-06 | 异常 handler            | 返回结构化错误         | `ok=false`，`error.code` 合理               |
 
@@ -1721,8 +1718,6 @@ mysql -uroot -p < testdata/mysql/local-mysql-users.sql
 
 优先怀疑：
 
-- `enableMutations` 配置未开启
-- mutation 用户未配置
 - confirmation token 不匹配
 - guardrail 静态规则阻断
 - 数据库写权限不足

@@ -68,6 +68,16 @@ function normalizePort(port: string | number | undefined): number | undefined {
   return undefined;
 }
 
+function maskUsername(username: string | undefined): string | undefined {
+  if (!username) {
+    return undefined;
+  }
+  if (username.length <= 2) {
+    return `${username[0]}*`;
+  }
+  return `${username.slice(0, 1)}***${username.slice(-1)}`;
+}
+
 export const setCloudRegionTool: ToolDefinition = {
   name: "set_cloud_region",
   description:
@@ -163,6 +173,285 @@ export const setCloudAccessKeysTool: ToolDefinition = {
     } catch (error) {
       return formatToolError(error, {
         action: "set_cloud_access_keys",
+        metadata: metadata(context.taskId),
+      });
+    }
+  },
+};
+
+export const setDefaultDatabaseTool: ToolDefinition = {
+  name: "set_default_database",
+  description:
+    "Set the default database for a datasource in the current MCP session so later tool calls can omit input.database.",
+  inputSchema: {
+    database: z
+      .string()
+      .trim()
+      .min(1)
+      .describe("Database name to bind as the session default for the selected datasource."),
+    datasource: z
+      .string()
+      .trim()
+      .min(1)
+      .optional()
+      .describe("Optional datasource template to bind. Defaults to the current default datasource."),
+  },
+  async handler(input, deps, context): Promise<ToolResponse> {
+    try {
+      const database = typeof input.database === "string" ? input.database.trim() : "";
+      if (!database) {
+        throw new ToolInputError("database is required.");
+      }
+
+      const datasource = await resolveBindingDatasource(
+        deps,
+        typeof input.datasource === "string" ? input.datasource : undefined,
+      );
+      if (!datasource) {
+        throw new ToolInputError(
+          "No datasource selected. Configure a default datasource or pass datasource explicitly.",
+        );
+      }
+
+      const ctx = await deps.engine.resolveContext(
+        {
+          datasource,
+          readonly: true,
+        },
+        context.taskId,
+      );
+      const databases = await deps.engine.listDatabases(ctx);
+      if (!databases.some((item) => item.name === database)) {
+        throw new ToolInputError(
+          `Database "${database}" was not found on datasource "${datasource}". Run list_databases first and choose one of the returned names.`,
+        );
+      }
+
+      const profile = await deps.profileLoader.get(datasource);
+      if (!profile) {
+        throw new ToolInputError(`Datasource "${datasource}" was not found.`);
+      }
+      const currentTarget = deps.profileLoader.getRuntimeTarget(datasource);
+      deps.profileLoader.setRuntimeTarget(datasource, {
+        host: currentTarget?.host ?? profile.host,
+        port: currentTarget?.port ?? profile.port,
+        instanceId: currentTarget?.instanceId,
+        nodeId: currentTarget?.nodeId,
+        database,
+      });
+
+      await reloadEngine(deps);
+
+      return formatSuccess(
+        {
+          datasource,
+          database,
+        },
+        {
+          summary: `Default database for ${datasource} set to ${database} in the current session.`,
+          metadata: metadata(context.taskId),
+        },
+      );
+    } catch (error) {
+      return formatToolError(error, {
+        action: "set_default_database",
+        metadata: metadata(context.taskId),
+      });
+    }
+  },
+};
+
+export const setSqlCredentialsTool: ToolDefinition = {
+  name: "set_sql_credentials",
+  description:
+    "Set the SQL username and password for a datasource in the current MCP session without writing credentials to disk.",
+  inputSchema: {
+    username: z
+      .string()
+      .trim()
+      .min(1)
+      .describe("Database username to use for the selected datasource in this session."),
+    password: z
+      .string()
+      .trim()
+      .min(1)
+      .describe("Database password to use for the selected datasource in this session."),
+    datasource: z
+      .string()
+      .trim()
+      .min(1)
+      .optional()
+      .describe("Optional datasource template to bind. Defaults to the current default datasource."),
+  },
+  async handler(input, deps, context): Promise<ToolResponse> {
+    try {
+      const username = typeof input.username === "string" ? input.username.trim() : "";
+      const password = typeof input.password === "string" ? input.password.trim() : "";
+      if (!username || !password) {
+        throw new ToolInputError("username and password are required.");
+      }
+
+      const datasource = await resolveBindingDatasource(
+        deps,
+        typeof input.datasource === "string" ? input.datasource : undefined,
+      );
+      if (!datasource) {
+        throw new ToolInputError(
+          "No datasource selected. Configure a default datasource or pass datasource explicitly.",
+        );
+      }
+
+      const profile = await deps.profileLoader.get(datasource);
+      if (!profile) {
+        throw new ToolInputError(`Datasource "${datasource}" was not found.`);
+      }
+      const currentTarget = deps.profileLoader.getRuntimeTarget(datasource);
+      deps.profileLoader.setRuntimeTarget(datasource, {
+        host: currentTarget?.host ?? profile.host,
+        port: currentTarget?.port ?? profile.port,
+        database: currentTarget?.database ?? profile.database,
+        instanceId: currentTarget?.instanceId,
+        nodeId: currentTarget?.nodeId,
+        user: {
+          username,
+          password: { type: "plain", value: password },
+        },
+      });
+
+      await reloadEngine(deps);
+
+      return formatSuccess(
+        {
+          datasource,
+          username,
+        },
+        {
+          summary: `SQL credentials for ${datasource} updated in the current session.`,
+          metadata: metadata(context.taskId),
+        },
+      );
+    } catch (error) {
+      return formatToolError(error, {
+        action: "set_sql_credentials",
+        metadata: metadata(context.taskId),
+      });
+    }
+  },
+};
+
+export const clearSqlCredentialsTool: ToolDefinition = {
+  name: "clear_sql_credentials",
+  description:
+    "Clear any session-scoped SQL credential override for a datasource and fall back to the configured profile credentials.",
+  inputSchema: {
+    datasource: z
+      .string()
+      .trim()
+      .min(1)
+      .optional()
+      .describe("Optional datasource template to clear. Defaults to the current default datasource."),
+  },
+  async handler(input, deps, context): Promise<ToolResponse> {
+    try {
+      const datasource = await resolveBindingDatasource(
+        deps,
+        typeof input.datasource === "string" ? input.datasource : undefined,
+      );
+      if (!datasource) {
+        throw new ToolInputError(
+          "No datasource selected. Configure a default datasource or pass datasource explicitly.",
+        );
+      }
+
+      const profile = await deps.profileLoader.get(datasource);
+      if (!profile) {
+        throw new ToolInputError(`Datasource "${datasource}" was not found.`);
+      }
+      const currentTarget = deps.profileLoader.getRuntimeTarget(datasource);
+      deps.profileLoader.setRuntimeTarget(datasource, {
+        host: currentTarget?.host ?? profile.host,
+        port: currentTarget?.port ?? profile.port,
+        database: currentTarget?.database ?? profile.database,
+        instanceId: currentTarget?.instanceId,
+        nodeId: currentTarget?.nodeId,
+        user: profile.user,
+      });
+
+      await reloadEngine(deps);
+
+      return formatSuccess(
+        {
+          datasource,
+        },
+        {
+          summary: `Session SQL credential override cleared for ${datasource}.`,
+          metadata: metadata(context.taskId),
+        },
+      );
+    } catch (error) {
+      return formatToolError(error, {
+        action: "clear_sql_credentials",
+        metadata: metadata(context.taskId),
+      });
+    }
+  },
+};
+
+export const getSessionBindingTool: ToolDefinition = {
+  name: "get_session_binding",
+  description:
+    "Return the current session binding for a datasource, including selected instance, host, database, and whether SQL credentials are overridden in memory.",
+  inputSchema: {
+    datasource: z
+      .string()
+      .trim()
+      .min(1)
+      .optional()
+      .describe("Optional datasource template to inspect. Defaults to the current default datasource."),
+  },
+  async handler(input, deps, context): Promise<ToolResponse> {
+    try {
+      const datasource = await resolveBindingDatasource(
+        deps,
+        typeof input.datasource === "string" ? input.datasource : undefined,
+      );
+      if (!datasource) {
+        throw new ToolInputError(
+          "No datasource selected. Configure a default datasource or pass datasource explicitly.",
+        );
+      }
+
+      const profile = await deps.profileLoader.get(datasource);
+      if (!profile) {
+        throw new ToolInputError(`Datasource "${datasource}" was not found.`);
+      }
+      const target = deps.profileLoader.getRuntimeTarget(datasource);
+
+      return formatSuccess(
+        {
+          datasource,
+          host: profile.host,
+          port: profile.port,
+          database: profile.database,
+          username_masked: maskUsername(profile.user.username),
+          runtime_override: {
+            instance_id: target?.instanceId,
+            node_id: target?.nodeId,
+            host: target?.host,
+            port: target?.port,
+            database: target?.database,
+            has_sql_credentials_override: Boolean(target?.user),
+            username_masked: maskUsername(target?.user?.username),
+          },
+        },
+        {
+          summary: `Returned current session binding for ${datasource}.`,
+          metadata: metadata(context.taskId),
+        },
+      );
+    } catch (error) {
+      return formatToolError(error, {
+        action: "get_session_binding",
         metadata: metadata(context.taskId),
       });
     }

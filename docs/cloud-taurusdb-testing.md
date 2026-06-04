@@ -17,13 +17,13 @@
 
 - 一台能访问 TaurusDB 内网地址的机器，推荐和实例同 VPC，或在跳板机 / ECS / Sidecar 上运行 MCP。
 - Node.js `>=20`，并已在仓库根目录执行 `npm install`。
-- TaurusDB 数据库连接信息：host、port、database、readonly user、可选 mutation user。
+- TaurusDB 数据库连接信息：host、port、可选默认 database、数据库账号密码。
 - 如果要测 diagnostics 云侧证据，推荐至少准备华为云 `region + AK/SK`；底层 DAS / CES endpoint、project_id、instance_id、node_id、IAM token 现在都可以作为 override 或联调兜底，而不是默认必填。
 
 数据库账号建议权限：
 
-- readonly user：目标库 `SELECT`，`SHOW PROCESSLIST`，`SHOW REPLICA STATUS` 或 `SHOW SLAVE STATUS`，`SHOW ENGINE INNODB STATUS`，以及 `performance_schema` 相关只读权限。
-- mutation user：只给测试表或最小业务表的受控写权限，用于验证 confirmation token，不建议一开始给全库写权限。
+- 用于日常分析的账号至少具备目标库 `SELECT`，`SHOW PROCESSLIST`，`SHOW REPLICA STATUS` 或 `SHOW SLAVE STATUS`，`SHOW ENGINE INNODB STATUS`，以及 `performance_schema` 相关只读权限。
+- 如果要验证 `execute_sql`，同一个账号或会话内切换的另一个账号还需要具备受控写权限。MCP 不再区分 `readonly user` / `mutation user` 配置字段，是否能真正写入由数据库权限决定。
 
 ---
 
@@ -36,22 +36,14 @@ export TAURUSDB_SQL_ENGINE=mysql
 export TAURUSDB_SQL_DATASOURCE=taurus_mcp
 export TAURUSDB_SQL_HOST='<taurusdb-private-host>'
 export TAURUSDB_SQL_PORT=3306
-export TAURUSDB_SQL_DATABASE='<database>'
-export TAURUSDB_SQL_USER='<readonly-user>'
-export TAURUSDB_SQL_PASSWORD='<readonly-password>'
+export TAURUSDB_SQL_USER='<database-user>'
+export TAURUSDB_SQL_PASSWORD='<database-password>'
 export TAURUSDB_DEFAULT_DATASOURCE=taurus_mcp
-```
-
-如果要验证写操作确认流，再补：
-
-```bash
-export TAURUSDB_SQL_MUTATION_USER='<mutation-user>'
-export TAURUSDB_SQL_MUTATION_PASSWORD='<mutation-password>'
 ```
 
 注意：
 
-- `restore_recycle_bin_table` 默认暴露；只有在显式设置 `TAURUSDB_MCP_ENABLE_MUTATIONS=false` 时才会隐藏。
+- `restore_recycle_bin_table` 默认暴露。
 - 该 Tool 的第一次调用不会直接执行恢复，而是先返回 `confirmation_token`。
 
 如果你的云端连接需要 TLS，建议用 profile 文件，而不是把所有配置塞进环境变量：
@@ -64,14 +56,9 @@ export TAURUSDB_SQL_MUTATION_PASSWORD='<mutation-password>'
       "engine": "mysql",
       "host": "<taurusdb-private-host>",
       "port": 3306,
-      "database": "<database>",
-      "readonlyUser": {
-        "username": "<readonly-user>",
+      "user": {
+        "username": "<database-user>",
         "password": "env:TAURUSDB_SQL_PASSWORD"
-      },
-      "mutationUser": {
-        "username": "<mutation-user>",
-        "password": "env:TAURUSDB_SQL_MUTATION_PASSWORD"
       },
       "tls": {
         "enabled": true,
@@ -177,7 +164,11 @@ export TAURUSDB_CLOUD_SECURITY_TOKEN='<session-token>'
 然后在 MCP 客户端里调用：
 
 1. `list_cloud_taurus_instances`
-2. 可选：`select_cloud_taurus_instance`
+2. `select_cloud_taurus_instance`
+3. `set_sql_credentials`
+4. `list_databases`
+5. `set_default_database`
+6. `get_session_binding`
 
 `list_cloud_taurus_instances` 成功时，说明当前 MCP 会话已经拿着环境变量中的凭证成功访问华为云控制面。重点观察：
 
@@ -198,6 +189,9 @@ export TAURUSDB_CLOUD_SECURITY_TOKEN='<session-token>'
 2. `set_cloud_access_keys`
 3. `list_cloud_taurus_instances`
 4. `select_cloud_taurus_instance`
+5. `set_sql_credentials`
+6. `set_default_database`
+7. `get_session_binding`
 
 这组 Tool 会在当前 MCP 会话里更新 region、AK/SK、默认 `project_id`、默认 `instance_id` 和默认 `node_id`。切换 region 或 AK/SK 后，server 会重建 cloud-aware engine，后续 diagnostics 会自动沿用新的会话上下文。
 
@@ -238,9 +232,14 @@ npm run cloud:validate
 
 第二步：再验证数据面。
 
-先配置 datasource，然后在 MCP 客户端里直接调用：
+先配置 datasource 模板或准备好会话级账号，然后在 MCP 客户端里按顺序调用：
 
-1. `execute_readonly_sql`，执行 `SELECT 1 AS ok`
+1. `select_cloud_taurus_instance`
+2. `set_sql_credentials`
+3. `list_databases`
+4. `set_default_database`
+5. `get_session_binding`
+6. `execute_readonly_sql`，执行 `SELECT 1 AS ok`
 
 通过标准：
 
@@ -263,7 +262,7 @@ npm run cloud:validate
 - readonly context 是否能解析
 - `SELECT 1` 是否能执行
 - `list_databases` 是否可用
-- 默认数据库存在时，`list_tables` 是否可用
+- 默认数据库存在或已通过 `set_default_database` 绑定时，`list_tables` 是否可用
 - `explain_sql` 底层链路是否可用
 - capability probe 是否能返回 kernel / feature 信息
 - 如果启用了 cloud evidence，但没显式给 `project_id` / `instance_id` / `node_id`，会尝试自动解析
@@ -379,7 +378,6 @@ node /path/to/taurus-mcp-server/packages/mcp/dist/index.js
 | 连接失败 | VPC、白名单、安全组、host、port、TLS、账号密码 |
 | `list_tables` 失败 | 默认 database 缺失或账号无目标库权限 |
 | Taurus 专属 Tool 不暴露 | capability probe 判定 feature unavailable，或当前实例不是 TaurusDB 内核 |
-| `execute_sql` 不暴露 | `TAURUSDB_MCP_ENABLE_MUTATIONS` 未启用 |
 | confirmation token 无效 | 第二次 SQL 文本、datasource、database 与第一次不一致，或 token 已使用 |
 | diagnostics 没有云侧 evidence | DAS / CES 未启用，token / endpoint / dimension 错误，或时间窗口无数据 |
 | `diagnose_replication_lag` 返回 `not_applicable` | 单机实例、无只读节点、复制状态命令不可用，属于可接受降级 |

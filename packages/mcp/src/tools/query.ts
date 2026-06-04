@@ -220,7 +220,6 @@ export const executeSqlTool: ToolDefinition = {
     sql: requiredSqlSchema("Mutation SQL to execute."),
     confirmation_token: optionalTokenSchema(),
   },
-  exposeWhen: (config) => config.enableMutations,
   async handler(input, deps, context): Promise<ToolResponse> {
     const sql = asRequiredString(input.sql, "sql");
     const statementType = statementTypeFromSql(sql);

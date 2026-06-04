@@ -23,7 +23,6 @@ export function toPublicDataSourceInfo(info: DataSourceInfo) {
     host: info.host,
     port: info.port,
     database: info.database,
-    has_mutation_user: info.hasMutationUser,
     pool_size: info.poolSize,
     is_default: info.isDefault,
   };

@@ -59,6 +59,10 @@ test("stdio transport exposes expected tools and keeps logs on stderr", async ()
       "list_taurus_features",
       "set_cloud_region",
       "set_cloud_access_keys",
+      "get_session_binding",
+      "set_sql_credentials",
+      "clear_sql_credentials",
+      "set_default_database",
       "list_cloud_taurus_instances",
       "select_cloud_taurus_instance",
       "diagnose_service_latency",
@@ -68,6 +72,10 @@ test("stdio transport exposes expected tools and keeps logs on stderr", async ()
       "diagnose_connection_spike",
       "diagnose_lock_contention",
       "diagnose_storage_pressure",
+      "explain_sql_enhanced",
+      "flashback_query",
+      "list_recycle_bin",
+      "restore_recycle_bin_table",
     ]);
 
     const ping = await client.callTool({

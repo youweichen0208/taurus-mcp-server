@@ -12,7 +12,6 @@ test("config uses documented defaults when env is empty", () => {
 
   assert.equal(config.defaultDatasource, undefined);
   assert.equal(config.profilesPath, undefined);
-  assert.equal(config.enableMutations, true);
   assert.equal(config.cloud.provider, "huaweicloud");
   assert.equal(config.cloud.region, undefined);
   assert.equal(config.cloud.projectId, undefined);
@@ -59,7 +58,6 @@ test("config maps env vars into typed fields", () => {
   const config = createConfigFromEnv({
     TAURUSDB_DEFAULT_DATASOURCE: "local_mysql",
     TAURUSDB_SQL_PROFILES: "~/profiles.json",
-    TAURUSDB_MCP_ENABLE_MUTATIONS: "true",
     TAURUSDB_MCP_MAX_ROWS: "123",
     TAURUSDB_MCP_MAX_COLUMNS: "12",
     TAURUSDB_MCP_MAX_STATEMENT_MS: "3000",
@@ -109,7 +107,6 @@ test("config maps env vars into typed fields", () => {
 
   assert.equal(config.defaultDatasource, "local_mysql");
   assert.equal(config.profilesPath, `${os.homedir()}/profiles.json`);
-  assert.equal(config.enableMutations, true);
   assert.equal(config.cloud.provider, "huaweicloud");
   assert.equal(config.cloud.region, "cn-north-4");
   assert.equal(config.cloud.accessKeyId, "ak-1");
@@ -286,16 +283,6 @@ test("explicit per-source env values override shared cloud defaults", () => {
   );
 });
 
-test("config throws on invalid boolean env values", () => {
-  assert.throws(
-    () =>
-      createConfigFromEnv({
-        TAURUSDB_MCP_ENABLE_MUTATIONS: "sometimes",
-      }),
-    /Invalid boolean for TAURUSDB_MCP_ENABLE_MUTATIONS/,
-  );
-});
-
 test("config throws when integer env value is invalid", () => {
   assert.throws(
     () =>
@@ -310,7 +297,6 @@ test("redactConfigForLog redacts sensitive keys recursively", () => {
   const redacted = redactConfigForLog({
     defaultDatasource: "a",
     profilesPath: "/tmp/profiles.json",
-    enableMutations: false,
     cloud: {
       provider: "huaweicloud",
       authToken: "token_000",

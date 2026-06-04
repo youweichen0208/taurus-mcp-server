@@ -181,10 +181,6 @@ export function buildRawConfigFromEnv(
     defaultDatasource:
       readString(env.TAURUSDB_DEFAULT_DATASOURCE) ?? inferredDatasourceName,
     profilesPath: expandTildePath(readString(env.TAURUSDB_SQL_PROFILES)),
-    enableMutations: parseBoolean(
-      env.TAURUSDB_MCP_ENABLE_MUTATIONS,
-      "TAURUSDB_MCP_ENABLE_MUTATIONS",
-    ),
     cloud: {
       provider: "huaweicloud",
       region: cloudRegion,

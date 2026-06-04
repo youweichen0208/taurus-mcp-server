@@ -467,6 +467,7 @@ export async function flashbackQuery(
           `Flashback query requires kernel version >= ${flashbackFeature.minVersion ?? "unknown"}.`,
         {
           requiredVersion: flashbackFeature.minVersion,
+          parameterHint: flashbackFeature.param,
           currentVersion: (await engine.capabilityProbe.getKernelInfo(ctx))
             .kernelVersion,
         },
@@ -525,6 +526,7 @@ export async function listRecycleBin(
           `Recycle bin requires kernel version >= ${recycleBinFeature.minVersion ?? "unknown"}.`,
         {
           requiredVersion: recycleBinFeature.minVersion,
+          parameterHint: recycleBinFeature.param,
           currentVersion: (await engine.capabilityProbe.getKernelInfo(ctx))
             .kernelVersion,
         },
@@ -549,6 +551,7 @@ export async function restoreRecycleBinTable(
           `Recycle bin requires kernel version >= ${recycleBinFeature.minVersion ?? "unknown"}.`,
         {
           requiredVersion: recycleBinFeature.minVersion,
+          parameterHint: recycleBinFeature.param,
           currentVersion: (await engine.capabilityProbe.getKernelInfo(ctx))
             .kernelVersion,
         },
@@ -560,7 +563,6 @@ export async function restoreRecycleBinTable(
       ctx,
       {
         ...recycleBinMutationOptions(opts),
-        allowWithoutGlobalMutations: true,
         allowReadonlyFallbackForMutations: true,
       },
     );

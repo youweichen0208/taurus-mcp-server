@@ -222,15 +222,16 @@ export function parseProfileRecord(name: string, value: unknown, context: string
     throw new Error(`Invalid datasource profile ${name} in ${context}: poolSize must be positive.`);
   }
 
-  const readonlyRaw = value.readonlyUser ?? value.readonly ?? value.readOnlyUser;
-  if (readonlyRaw === undefined) {
-    throw new Error(`Invalid datasource profile ${name} in ${context}: missing readonlyUser.`);
+  // Backward compatibility for older profile field names. New configs should use `user`.
+  const userRaw =
+    value.user ??
+    value.readonlyUser ??
+    value.readonly ??
+    value.readOnlyUser;
+  if (userRaw === undefined) {
+    throw new Error(`Invalid datasource profile ${name} in ${context}: missing user.`);
   }
-  const readonlyUser = parseUserCredential(readonlyRaw, `${context}.${name}.readonlyUser`);
-
-  const mutationRaw = value.mutationUser ?? value.writeUser ?? value.rwUser;
-  const mutationUser =
-    mutationRaw !== undefined ? parseUserCredential(mutationRaw, `${context}.${name}.mutationUser`) : undefined;
+  const user = parseUserCredential(userRaw, `${context}.${name}.user`);
 
   const tls = parseTlsOptions(value.tls, `${context}.${name}.tls`);
 
@@ -240,8 +241,7 @@ export function parseProfileRecord(name: string, value: unknown, context: string
     host,
     port,
     database,
-    readonlyUser,
-    mutationUser,
+    user,
     tls,
     poolSize,
   });

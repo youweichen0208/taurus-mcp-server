@@ -51,7 +51,7 @@ npm install
 - 启动 MySQL 8
 - 初始化数据库 `taurus_mcp_test`
 - 导入 schema 和 seed 数据
-- 创建只读 / 写入测试账号
+- 创建测试账号
 
 ### 3.1 启动 MySQL
 
@@ -82,8 +82,7 @@ docker compose -f testdata/mysql/compose.yaml ps
 - port: `3306`
 - database: `taurus_mcp_test`
 - root: `root / root`
-- readonly user: `taurus_ro / taurus_ro_password`
-- mutation user: `taurus_rw / taurus_rw_password`
+- app user: `taurus_app / taurus_app_password`
 
 ### 3.4 如果要彻底重建本地数据
 
@@ -114,10 +113,8 @@ export TAURUSDB_SQL_DATASOURCE=local_mysql
 export TAURUSDB_SQL_HOST=127.0.0.1
 export TAURUSDB_SQL_PORT=3306
 export TAURUSDB_SQL_DATABASE=taurus_mcp_test
-export TAURUSDB_SQL_USER=taurus_ro
-export TAURUSDB_SQL_PASSWORD='taurus_ro_password'
-export TAURUSDB_SQL_MUTATION_USER=taurus_rw
-export TAURUSDB_SQL_MUTATION_PASSWORD='taurus_rw_password'
+export TAURUSDB_SQL_USER=taurus_app
+export TAURUSDB_SQL_PASSWORD='taurus_app_password'
 export TAURUSDB_DEFAULT_DATASOURCE=local_mysql
 export TAURUSDB_MCP_LOG_LEVEL=info
 ```
@@ -138,6 +135,7 @@ env | rg '^TAURUSDB_' | sed 's/=.*$/=<set>/'
 - diagnostics 本地 smoke 依赖 `PROCESS` 和 `SELECT ON performance_schema.*`
 - 仓库里的 [local-mysql-users.sql](../testdata/mysql/local-mysql-users.sql) 已包含这两项授权
 - 上云联调请按 [cloud-taurusdb-testing.md](./cloud-taurusdb-testing.md) 准备 datasource、DAS/CES 环境变量和 `npm run cloud:validate`
+- 如果你不想预先写死数据库账号或默认库，也可以启动 MCP 后通过 `set_sql_credentials` 和 `set_default_database` 在当前会话里绑定
 
 ---
 
@@ -276,11 +274,8 @@ env TAURUSDB_SQL_ENGINE=mysql \
 TAURUSDB_SQL_DATASOURCE=local_mysql \
 TAURUSDB_SQL_HOST=127.0.0.1 \
 TAURUSDB_SQL_PORT=3306 \
-TAURUSDB_SQL_DATABASE=taurus_mcp_test \
-TAURUSDB_SQL_USER=taurus_ro \
-TAURUSDB_SQL_PASSWORD=taurus_ro_password \
-TAURUSDB_SQL_MUTATION_USER=taurus_rw \
-TAURUSDB_SQL_MUTATION_PASSWORD=taurus_rw_password \
+TAURUSDB_SQL_USER=taurus_app \
+TAURUSDB_SQL_PASSWORD=taurus_app_password \
 TAURUSDB_DEFAULT_DATASOURCE=local_mysql \
 TAURUSDB_MCP_LOG_LEVEL=info \
 npx @modelcontextprotocol/inspector \
@@ -637,7 +632,7 @@ SQL：
 
 ### 7.4.12 `list_recycle_bin` / `restore_recycle_bin_table`
 
-这两个 Tool 只在 TaurusDB 且 capability probe 命中 `recycle_bin` 时暴露，所以不要在本地 MySQL 环境里测。
+这两个 Tool 现在默认会出现在 tool list 里，但在本地 MySQL 环境下调用只会得到 unsupported-feature 错误，所以不要把它们当作本地 smoke 主链路的一部分。
 
 推荐验证方式：
 
@@ -938,13 +933,9 @@ claude mcp add --transport stdio --scope local \
   --env TAURUSDB_SQL_DATASOURCE="$TAURUSDB_SQL_DATASOURCE" \
   --env TAURUSDB_SQL_HOST="$TAURUSDB_SQL_HOST" \
   --env TAURUSDB_SQL_PORT="$TAURUSDB_SQL_PORT" \
-  --env TAURUSDB_SQL_DATABASE="$TAURUSDB_SQL_DATABASE" \
   --env TAURUSDB_SQL_USER="$TAURUSDB_SQL_USER" \
   --env TAURUSDB_SQL_PASSWORD="$TAURUSDB_SQL_PASSWORD" \
-  --env TAURUSDB_SQL_MUTATION_USER="$TAURUSDB_SQL_MUTATION_USER" \
-  --env TAURUSDB_SQL_MUTATION_PASSWORD="$TAURUSDB_SQL_MUTATION_PASSWORD" \
   --env TAURUSDB_DEFAULT_DATASOURCE="$TAURUSDB_DEFAULT_DATASOURCE" \
-  --env TAURUSDB_MCP_ENABLE_MUTATIONS="$TAURUSDB_MCP_ENABLE_MUTATIONS" \
   --env TAURUSDB_MCP_LOG_LEVEL="$TAURUSDB_MCP_LOG_LEVEL" \
   huaweicloud-taurusdb-local -- \
   node packages/mcp/dist/index.js
@@ -1040,13 +1031,6 @@ claude mcp get huaweicloud-taurusdb-local
 检查：
 
 ```bash
-echo $TAURUSDB_MCP_ENABLE_MUTATIONS
-```
-
-它应该是：
-
-```bash
-true
 ```
 
 ### 10.4 `npx @modelcontextprotocol/inspector` 启动失败

@@ -47,7 +47,6 @@ function makeMockConnectionPool(queryHandler, cancelHandler) {
         datasource,
         mode,
         sessionId,
-        allowWithoutGlobalMutations: opts?.allowWithoutGlobalMutations,
         allowReadonlyFallbackForMutations: opts?.allowReadonlyFallbackForMutations,
       });
 
@@ -204,7 +203,6 @@ test("sql executor executeMutation wraps sql in begin/commit", async () => {
   );
 
   assert.equal(state.acquires[0].mode, "rw");
-  assert.equal(state.acquires[0].allowWithoutGlobalMutations, undefined);
   assert.deepEqual(executedSql, [
     "BEGIN",
     "UPDATE users SET status='done' WHERE id=1",
@@ -218,7 +216,7 @@ test("sql executor executeMutation wraps sql in begin/commit", async () => {
   assert.equal(status.mode, "rw");
 });
 
-test("sql executor executeMutation can bypass global mutation gate for scoped tools", async () => {
+test("sql executor executeMutation forwards mutation-session options for scoped tools", async () => {
   const { pool, state } = makeMockConnectionPool(({ sql }) => {
     if (sql === "BEGIN" || sql === "COMMIT") {
       return { rows: [] };
@@ -242,13 +240,11 @@ test("sql executor executeMutation can bypass global mutation gate for scoped to
       },
     }),
     {
-      allowWithoutGlobalMutations: true,
       allowReadonlyFallbackForMutations: true,
     },
   );
 
   assert.equal(state.acquires[0].mode, "rw");
-  assert.equal(state.acquires[0].allowWithoutGlobalMutations, true);
   assert.equal(state.acquires[0].allowReadonlyFallbackForMutations, true);
   assert.equal(result.affectedRows, 1);
 });

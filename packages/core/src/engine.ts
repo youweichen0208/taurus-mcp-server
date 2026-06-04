@@ -165,7 +165,6 @@ function toDataSourceInfo(
     host: profile.host,
     port: profile.port,
     database: profile.database,
-    hasMutationUser: profile.mutationUser !== undefined,
     poolSize: profile.poolSize,
     isDefault: profile.name === defaultDatasource,
   };

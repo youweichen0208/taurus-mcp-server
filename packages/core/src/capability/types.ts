@@ -42,6 +42,7 @@ export class UnsupportedFeatureError extends Error {
   readonly feature: TaurusFeatureName;
   readonly requiredVersion?: string;
   readonly currentVersion?: string;
+  readonly parameterHint?: string;
 
   constructor(
     feature: TaurusFeatureName,
@@ -49,6 +50,7 @@ export class UnsupportedFeatureError extends Error {
     options: {
       requiredVersion?: string;
       currentVersion?: string;
+      parameterHint?: string;
       cause?: unknown;
     } = {},
   ) {
@@ -57,6 +59,7 @@ export class UnsupportedFeatureError extends Error {
     this.feature = feature;
     this.requiredVersion = options.requiredVersion;
     this.currentVersion = options.currentVersion;
+    this.parameterHint = options.parameterHint;
     if (options.cause !== undefined) {
       (this as Error & { cause?: unknown }).cause = options.cause;
     }

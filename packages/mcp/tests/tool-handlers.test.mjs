@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createConfigFromEnv, FlashbackNoViewError } from "taurusdb-core";
+import { createConfigFromEnv, FlashbackNoViewError, UnsupportedFeatureError } from "taurusdb-core";
 import { ErrorCode } from "../dist/utils/formatter.js";
 import {
   executeReadonlySqlTool,
@@ -28,7 +28,13 @@ import {
 } from "../dist/tools/taurus/diagnostics.js";
 import { explainSqlEnhancedTool } from "../dist/tools/taurus/explain.js";
 import { flashbackQueryTool } from "../dist/tools/taurus/flashback.js";
-import { selectCloudTaurusInstanceTool } from "../dist/tools/taurus/cloud-context.js";
+import {
+  clearSqlCredentialsTool,
+  getSessionBindingTool,
+  selectCloudTaurusInstanceTool,
+  setDefaultDatabaseTool,
+  setSqlCredentialsTool,
+} from "../dist/tools/taurus/cloud-context.js";
 import {
   listRecycleBinTool,
   restoreRecycleBinTableTool,
@@ -45,8 +51,8 @@ function createDeps(engineOverrides = {}) {
         host: undefined,
         port: 3306,
         database: "app",
-        readonlyUser: {
-          username: "ro",
+        user: {
+          username: "app",
           password: { type: "plain", value: "pwd" },
         },
         toString() {
@@ -57,7 +63,6 @@ function createDeps(engineOverrides = {}) {
   ]);
   return {
     config: createConfigFromEnv({
-      TAURUSDB_MCP_ENABLE_MUTATIONS: "true",
       TAURUSDB_CLOUD_REGION: "cn-north-4",
       TAURUSDB_CLOUD_AUTH_TOKEN: "token-1",
     }),
@@ -72,7 +77,11 @@ function createDeps(engineOverrides = {}) {
         return profiles.get(name);
       },
       setRuntimeTarget(name, target) {
-        runtimeTargets.set(name, target);
+        const current = runtimeTargets.get(name) ?? {};
+        runtimeTargets.set(name, {
+          ...current,
+          ...target,
+        });
       },
       clearRuntimeTarget(name) {
         runtimeTargets.delete(name);
@@ -102,7 +111,7 @@ function createDeps(engineOverrides = {}) {
           maxFieldChars: 256,
         },
       }),
-      listDatabases: async () => [],
+      listDatabases: async () => [{ name: "app" }, { name: "analytics" }],
       listTables: async () => [],
       describeTable: async () => ({
         database: "app",
@@ -902,6 +911,151 @@ test("list_recycle_bin returns structured readonly result", async () => {
   assert.equal(result.data.datasource, "main");
   assert.equal(result.data.row_count, 1);
   assert.equal(result.data.rows[0][0], "orders@123");
+});
+
+test("list_recycle_bin returns parameter hint when TaurusDB feature is disabled", async () => {
+  const deps = createDeps({
+    listRecycleBin: async () => {
+      throw new UnsupportedFeatureError(
+        "recycle_bin",
+        "Recycle bin is available but disabled on this instance.",
+        {
+          currentVersion: "2.0.69.250900",
+          parameterHint: "rds_recycle_bin_mode=ON",
+        },
+      );
+    },
+  });
+
+  const result = await listRecycleBinTool.handler({}, deps, context);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, ErrorCode.UNSUPPORTED_FEATURE);
+  assert.equal(result.error.details.parameter_hint, "rds_recycle_bin_mode=ON");
+});
+
+test("set_default_database binds a session-scoped default database after instance selection", async () => {
+  const deps = createDeps();
+
+  deps.profileLoader.setRuntimeTarget("taurus_mcp", {
+    host: "1.2.3.4",
+    port: 3306,
+    instanceId: "instance-1",
+    nodeId: "node-1",
+  });
+
+  const result = await setDefaultDatabaseTool.handler(
+    {
+      datasource: "taurus_mcp",
+      database: "analytics",
+    },
+    deps,
+    { taskId: "task_set_default_database" },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data.datasource, "taurus_mcp");
+  assert.equal(result.data.database, "analytics");
+  assert.deepEqual(deps.profileLoader.getRuntimeTarget("taurus_mcp"), {
+    host: "1.2.3.4",
+    port: 3306,
+    database: "analytics",
+    instanceId: "instance-1",
+    nodeId: "node-1",
+  });
+});
+
+test("set_sql_credentials binds session-scoped SQL credentials", async () => {
+  const deps = createDeps();
+
+  const result = await setSqlCredentialsTool.handler(
+    {
+      datasource: "taurus_mcp",
+      username: "session_app",
+      password: "session_pwd",
+    },
+    deps,
+    { taskId: "task_set_sql_credentials" },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data.datasource, "taurus_mcp");
+  assert.equal(result.data.username, "session_app");
+  assert.deepEqual(deps.profileLoader.getRuntimeTarget("taurus_mcp"), {
+    host: undefined,
+    port: 3306,
+    database: "app",
+    user: {
+      username: "session_app",
+      password: { type: "plain", value: "session_pwd" },
+    },
+    instanceId: undefined,
+    nodeId: undefined,
+  });
+});
+
+test("clear_sql_credentials restores datasource profile credentials", async () => {
+  const deps = createDeps();
+  deps.profileLoader.setRuntimeTarget("taurus_mcp", {
+    host: "1.2.3.4",
+    port: 3306,
+    database: "analytics",
+    user: {
+      username: "session_app",
+      password: { type: "plain", value: "session_pwd" },
+    },
+    instanceId: "instance-1",
+    nodeId: "node-1",
+  });
+
+  const result = await clearSqlCredentialsTool.handler(
+    { datasource: "taurus_mcp" },
+    deps,
+    { taskId: "task_clear_sql_credentials" },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data.datasource, "taurus_mcp");
+  assert.deepEqual(deps.profileLoader.getRuntimeTarget("taurus_mcp"), {
+    host: "1.2.3.4",
+    port: 3306,
+    database: "analytics",
+    user: {
+      username: "app",
+      password: { type: "plain", value: "pwd" },
+    },
+    instanceId: "instance-1",
+    nodeId: "node-1",
+  });
+});
+
+test("get_session_binding returns current runtime binding with masked username", async () => {
+  const deps = createDeps();
+  deps.profileLoader.setRuntimeTarget("taurus_mcp", {
+    host: "1.2.3.4",
+    port: 3306,
+    database: "analytics",
+    user: {
+      username: "session_app",
+      password: { type: "plain", value: "session_pwd" },
+    },
+    instanceId: "instance-1",
+    nodeId: "node-1",
+  });
+
+  const result = await getSessionBindingTool.handler(
+    { datasource: "taurus_mcp" },
+    deps,
+    { taskId: "task_get_session_binding" },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.data.datasource, "taurus_mcp");
+  assert.equal(result.data.username_masked, "a***p");
+  assert.equal(result.data.runtime_override.instance_id, "instance-1");
+  assert.equal(result.data.runtime_override.database, "analytics");
+  assert.equal(result.data.runtime_override.has_sql_credentials_override, true);
+  assert.equal(result.data.runtime_override.username_masked, "s***p");
 });
 
 test("list_cloud_taurus_instances returns structured cloud instance list", async () => {

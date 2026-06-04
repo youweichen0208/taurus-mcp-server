@@ -18,8 +18,7 @@ function makeProfile({
     host: "127.0.0.1",
     port: 3306,
     database,
-    readonlyUser: { username: "ro", password: { type: "plain", value: "ro_pwd" } },
-    mutationUser: { username: "rw", password: { type: "plain", value: "rw_pwd" } },
+    user: { username: "app", password: { type: "plain", value: "app_pwd" } },
     toString() {
       return JSON.stringify({ name, engine, database });
     },

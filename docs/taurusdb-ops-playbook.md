@@ -27,7 +27,7 @@
 - `list_recycle_bin` 用于确认可恢复对象。
 - `restore_recycle_bin_table` 的 `native_restore` 调用 TaurusDB 原生回收站恢复能力。
 - `restore_recycle_bin_table` 的 `insert_select` 适合需要保留 Binlog / DRS 链路可见性的恢复，但要求先建好兼容结构的目标表。
-- `restore_recycle_bin_table` 在 capability probe 命中 `recycle_bin` 时暴露；执行恢复时优先使用 `mutationUser`，未配置时会对该工具单独回退到 `readonlyUser`。
+- `restore_recycle_bin_table` 默认暴露；如果当前实例不支持回收站或相关系统参数未开启，调用时会返回结构化 unsupported-feature 错误；执行恢复时复用 datasource 配置中的数据库账号。
 - 不提供 purge 类 Tool，因为 purge 是不可恢复删除，不适合作为 MCP 默认能力。
 
 ---

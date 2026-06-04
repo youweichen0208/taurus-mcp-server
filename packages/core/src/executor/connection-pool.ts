@@ -49,7 +49,6 @@ export interface ConnectionPool {
     datasource: string,
     mode: PoolMode,
     opts?: {
-      allowWithoutGlobalMutations?: boolean;
       allowReadonlyFallbackForMutations?: boolean;
     },
   ): Promise<Session>;
@@ -158,29 +157,12 @@ async function resolveTls(
   return resolved;
 }
 
-function ensureMutationAllowed(config: Config): void {
-  if (!config.enableMutations) {
-    throw new ConnectionPoolError("Mutation mode is disabled by configuration.");
-  }
-}
-
 function selectCredential(
   profile: DataSourceProfile,
   mode: PoolMode,
-  opts: { allowReadonlyFallbackForMutations?: boolean } = {},
+  _opts: { allowReadonlyFallbackForMutations?: boolean } = {},
 ) {
-  if (mode === "ro") {
-    return profile.readonlyUser;
-  }
-  if (!profile.mutationUser) {
-    if (opts.allowReadonlyFallbackForMutations) {
-      return profile.readonlyUser;
-    }
-    throw new ConnectionPoolError(
-      `Mutation user is not configured for datasource "${profile.name}".`,
-    );
-  }
-  return profile.mutationUser;
+  return profile.user;
 }
 
 async function resolveCredentialValue(
@@ -214,17 +196,12 @@ export class ConnectionPoolManager implements ConnectionPool {
     datasource: string,
     mode: PoolMode,
     opts: {
-      allowWithoutGlobalMutations?: boolean;
       allowReadonlyFallbackForMutations?: boolean;
     } = {},
   ): Promise<Session> {
     const profile = await this.profileLoader.get(datasource);
     if (!profile) {
       throw new ConnectionPoolError(`Datasource profile not found: "${datasource}".`);
-    }
-
-    if (mode === "rw" && !opts.allowWithoutGlobalMutations) {
-      ensureMutationAllowed(this.config);
     }
 
     const entry = await this.getOrCreatePool(profile, mode, opts);
@@ -278,16 +255,7 @@ export class ConnectionPoolManager implements ConnectionPool {
     const modes: ModeHealth[] = [];
 
     modes.push(await this.healthCheckMode(datasource, "ro"));
-
-    if (!this.config.enableMutations) {
-      modes.push({
-        mode: "rw",
-        status: "skipped",
-        message: "Mutation mode disabled by config.",
-      });
-    } else {
-      modes.push(await this.healthCheckMode(datasource, "rw"));
-    }
+    modes.push(await this.healthCheckMode(datasource, "rw"));
 
     return {
       datasource,
@@ -327,9 +295,6 @@ export class ConnectionPoolManager implements ConnectionPool {
       await this.release(session);
       return { mode, status: "ok" };
     } catch (error) {
-      if (mode === "rw" && error instanceof ConnectionPoolError && /not configured/.test(error.message)) {
-        return { mode, status: "skipped", message: error.message };
-      }
       return {
         mode,
         status: "error",

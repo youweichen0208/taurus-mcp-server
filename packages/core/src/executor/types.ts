@@ -18,7 +18,6 @@ export interface ReadonlyOptions {
 
 export interface MutationOptions {
   timeoutMs?: number;
-  allowWithoutGlobalMutations?: boolean;
   allowReadonlyFallbackForMutations?: boolean;
 }
 

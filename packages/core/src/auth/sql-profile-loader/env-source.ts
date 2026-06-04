@@ -21,8 +21,8 @@ export function parseEnvProfile(env: NodeJS.ProcessEnv): DataSourceProfile | und
   let host: string | undefined;
   let port: number;
   let database: string | undefined;
-  let readonlyUsername: string | undefined;
-  let readonlyPasswordRef: CredentialRef | undefined;
+  let username: string | undefined;
+  let passwordRef: CredentialRef | undefined;
 
   if (dsn) {
     const url = new URL(dsn);
@@ -30,10 +30,10 @@ export function parseEnvProfile(env: NodeJS.ProcessEnv): DataSourceProfile | und
     host = url.hostname;
     port = url.port ? Number.parseInt(url.port, 10) : defaultPortForEngine(engine);
     database = asString(url.pathname.replace(/^\//, ""));
-    readonlyUsername = asString(decodeURIComponent(url.username));
+    username = asString(decodeURIComponent(url.username));
     const dsnPassword = asString(decodeURIComponent(url.password));
     if (dsnPassword) {
-      readonlyPasswordRef = parseCredentialRef(dsnPassword, "TAURUSDB_SQL_DSN.password");
+      passwordRef = parseCredentialRef(dsnPassword, "TAURUSDB_SQL_DSN.password");
     }
   } else {
     engine = parseEngine(asString(env.TAURUSDB_SQL_ENGINE) ?? "mysql", "TAURUSDB_SQL_ENGINE");
@@ -43,17 +43,12 @@ export function parseEnvProfile(env: NodeJS.ProcessEnv): DataSourceProfile | und
     database = asString(env.TAURUSDB_SQL_DATABASE);
   }
 
-  const mutationUserName = asString(env.TAURUSDB_SQL_MUTATION_USER);
-  const mutationPasswordRaw = asString(env.TAURUSDB_SQL_MUTATION_PASSWORD);
-
   if (
     !dsn &&
     !explicitHost &&
     !asString(env.TAURUSDB_SQL_USER) &&
     !asString(env.TAURUSDB_SQL_PASSWORD) &&
-    !database &&
-    !mutationUserName &&
-    !mutationPasswordRaw
+    !database
   ) {
     return undefined;
   }
@@ -62,32 +57,19 @@ export function parseEnvProfile(env: NodeJS.ProcessEnv): DataSourceProfile | und
     throw new Error("Failed to resolve SQL port from environment.");
   }
 
-  readonlyUsername = readonlyUsername ?? asString(env.TAURUSDB_SQL_USER);
-  if (!readonlyUsername) {
-    throw new Error("Missing readonly username in environment. Set TAURUSDB_SQL_USER or include it in DSN.");
+  username = username ?? asString(env.TAURUSDB_SQL_USER);
+  if (!username) {
+    throw new Error("Missing SQL username in environment. Set TAURUSDB_SQL_USER or include it in DSN.");
   }
 
-  readonlyPasswordRef =
-    readonlyPasswordRef ??
+  passwordRef =
+    passwordRef ??
     (Object.hasOwn(env, "TAURUSDB_SQL_PASSWORD")
       ? parseCredentialRef(env.TAURUSDB_SQL_PASSWORD, "TAURUSDB_SQL_PASSWORD")
       : undefined);
 
-  if (!readonlyPasswordRef) {
-    throw new Error("Missing readonly password in environment. Set TAURUSDB_SQL_PASSWORD or include it in DSN.");
-  }
-
-  let mutationUser: UserCredential | undefined;
-  if (mutationUserName || mutationPasswordRaw) {
-    if (!mutationUserName || !mutationPasswordRaw) {
-      throw new Error(
-        "Invalid mutation credentials in environment: TAURUSDB_SQL_MUTATION_USER and TAURUSDB_SQL_MUTATION_PASSWORD must be set together.",
-      );
-    }
-    mutationUser = {
-      username: mutationUserName,
-      password: parseCredentialRef(mutationPasswordRaw, "TAURUSDB_SQL_MUTATION_PASSWORD"),
-    };
+  if (!passwordRef) {
+    throw new Error("Missing SQL password in environment. Set TAURUSDB_SQL_PASSWORD or include it in DSN.");
   }
 
   const poolSize = asInteger(env.TAURUSDB_SQL_POOL_SIZE);
@@ -101,11 +83,10 @@ export function parseEnvProfile(env: NodeJS.ProcessEnv): DataSourceProfile | und
     host,
     port,
     database,
-    readonlyUser: {
-      username: readonlyUsername,
-      password: readonlyPasswordRef,
+    user: {
+      username,
+      password: passwordRef,
     },
-    mutationUser,
     poolSize,
   });
 }
