@@ -145,6 +145,58 @@ npx -y taurusdb-mcp init --client vscode
 
 生成后按需把上面的 `env` 补进对应配置文件。
 
+## Available Tools
+
+当前 `0.2.0` 默认注册并暴露下面这些 MCP tools。
+
+### Common Tools
+
+- `ping`
+- `list_data_sources`
+- `list_databases`
+- `list_tables`
+- `describe_table`
+- `show_processlist`
+- `execute_readonly_sql`
+- `explain_sql`
+- `execute_sql`
+
+### Cloud Session And Capability Tools
+
+- `get_kernel_info`
+- `list_taurus_features`
+- `set_cloud_region`
+- `set_cloud_access_keys`
+- `list_cloud_taurus_instances`
+- `select_cloud_taurus_instance`
+- `set_sql_credentials`
+- `clear_sql_credentials`
+- `set_default_database`
+- `get_session_binding`
+
+### TaurusDB-Specific Tools
+
+- `explain_sql_enhanced`
+- `flashback_query`
+- `list_recycle_bin`
+- `restore_recycle_bin_table`
+
+### Diagnostic Tools
+
+- `find_top_slow_sql`
+- `diagnose_service_latency`
+- `diagnose_db_hotspot`
+- `diagnose_slow_query`
+- `diagnose_connection_spike`
+- `diagnose_lock_contention`
+- `diagnose_storage_pressure`
+
+说明：
+
+- TaurusDB 专属 tools 在 `tools/list` 中默认可见。
+- 如果当前实例不是 TaurusDB，或者某项能力未开启，调用时会返回结构化 unsupported-feature 错误，而不是直接把 tool 隐藏掉。
+- `execute_sql` 默认可见；真正能否写成功，取决于 confirmation、guardrail 和数据库账号本身的写权限。
+
 ## Local Development
 
 如果你要开发当前仓库，再使用下面的本地流程。
