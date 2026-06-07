@@ -52,9 +52,8 @@ test("tool registry registers default MCP tools through legacy tool API", async 
       "get_kernel_info",
       "list_taurus_features",
       "set_cloud_region",
-      "set_cloud_access_keys",
       "get_session_binding",
-      "set_sql_credentials",
+      "begin_sql_login",
       "clear_sql_credentials",
       "set_default_database",
       "list_cloud_taurus_instances",
@@ -133,43 +132,6 @@ test("tool registry registers cloud instance discovery tools even when cloud con
   );
 });
 
-test("tool registry keeps TaurusDB-specific tools registered regardless of startup probe", () => {
-  const { server, calls } = createLegacyToolServerRecorder();
-
-  registerTools(
-    server,
-    { pingResponse: "pong" },
-    createConfigFromEnv({}),
-    {
-      kernelInfo: {
-        isTaurusDB: true,
-        kernelVersion: "2.0.69.250900",
-        mysqlCompat: "8.0",
-        rawVersion: "8.0.32 TaurusDB 2.0.69.250900",
-      },
-      features: {
-        flashback_query: { available: true, enabled: true, minVersion: "2.0.69.250900" },
-        parallel_query: { available: true, enabled: false, param: "force_parallel_execute=OFF" },
-        ndp_pushdown: { available: true, enabled: true, mode: "REPLICA_ON" },
-        offset_pushdown: { available: true, enabled: true },
-        recycle_bin: { available: true, enabled: true, minVersion: "2.0.57.240900" },
-        statement_outline: { available: true, enabled: false, minVersion: "2.0.42.230600" },
-        column_compression: { available: true, minVersion: "2.0.54.240600" },
-        multi_tenant: { available: true, enabled: false, active: false, minVersion: "2.0.54.240600" },
-        partition_mdl: { available: true, minVersion: "2.0.57.240900" },
-        dynamic_masking: { available: true, minVersion: "2.0.69.250900" },
-        nonblocking_ddl: { available: true, minVersion: "2.0.54.240600" },
-        hot_row_update: { available: true, minVersion: "2.0.54.240600" },
-      },
-    },
-  );
-
-  assert.equal(calls.some((call) => call.name === "explain_sql_enhanced"), true);
-  assert.equal(calls.some((call) => call.name === "flashback_query"), true);
-  assert.equal(calls.some((call) => call.name === "list_recycle_bin"), true);
-  assert.equal(calls.some((call) => call.name === "restore_recycle_bin_table"), true);
-});
-
 test("tool registry registers tools through registerTool API when available", async () => {
   const { server, calls } = createModernToolServerRecorder();
   const customTool = {
@@ -199,23 +161,10 @@ test("tool registry registers tools through registerTool API when available", as
   assert.match(result.structuredContent.metadata.task_id, /^task_/);
 });
 
-test("tool registry skips hidden tools and wraps unhandled errors", async () => {
+test("tool registry wraps unhandled errors", async () => {
   const { server, calls } = createLegacyToolServerRecorder();
   const config = createConfigFromEnv({});
   const tools = [
-    {
-      name: "hidden_tool",
-      description: "hidden",
-      inputSchema: {},
-      exposeWhen: () => false,
-      async handler(_input, _deps, context) {
-        return {
-          ok: true,
-          summary: "hidden",
-          metadata: { task_id: context.taskId },
-        };
-      },
-    },
     {
       name: "boom_tool",
       description: "boom",
@@ -234,6 +183,6 @@ test("tool registry skips hidden tools and wraps unhandled errors", async () => 
   assert.equal(result.isError, true);
   assert.equal(result.structuredContent.ok, false);
   assert.equal(result.structuredContent.error.code, ErrorCode.CONNECTION_FAILED);
-  assert.match(result.structuredContent.error.message, /boom/);
+  assert.equal(result.structuredContent.error.message, "Tool execution failed unexpectedly.");
   assert.match(result.structuredContent.metadata.task_id, /^task_/);
 });

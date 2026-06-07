@@ -47,6 +47,10 @@ test("logger redacts sensitive fields", async () => {
       {
         password: "plain",
         token: "abc",
+        accessKeyId: "ak",
+        secretAccessKey: "sk",
+        securityToken: "security-token",
+        authToken: "auth-token",
         credentials: { password: "p1", token: "p2", apiKey: "keep" },
       },
       "redaction test",
@@ -59,6 +63,10 @@ test("logger redacts sensitive fields", async () => {
   const log = JSON.parse(line);
   assert.equal(log.password, "[REDACTED]");
   assert.equal(log.token, "[REDACTED]");
+  assert.equal(log.accessKeyId, "[REDACTED]");
+  assert.equal(log.secretAccessKey, "[REDACTED]");
+  assert.equal(log.securityToken, "[REDACTED]");
+  assert.equal(log.authToken, "[REDACTED]");
   assert.equal(log.credentials.password, "[REDACTED]");
   assert.equal(log.credentials.token, "[REDACTED]");
   assert.equal(log.credentials.apiKey, "[REDACTED]");

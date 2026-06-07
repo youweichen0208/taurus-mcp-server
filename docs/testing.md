@@ -583,7 +583,7 @@ export TAURUSDB_CLOUD_SECRET_ACCESS_KEY=...
 - `instance_id` 不是首选手工输入项。`npm run cloud:validate` 会优先使用显式 `instance_id`，否则尝试根据 datasource `host/port` 自动解析唯一实例。
 - 如果自动解析失败或出现多实例歧义，先调用 `list_cloud_taurus_instances`，再通过 `select_cloud_taurus_instance` 固定当前会话的默认 `instance_id`。
 - `instance_name` 只用于展示和人工选择，不应作为唯一键。
-- `set_cloud_region` 和 `set_cloud_access_keys` 适合在 MCP 会话内切换云侧上下文，避免反复改 `export`。
+- `set_cloud_region` 适合在 MCP 会话内切换 region；AK/SK 必须通过进程配置提供，切换后重启 MCP Server。
 - 云侧 evidence 默认启用；如果只想关闭某一类云源，优先使用 `TAURUSDB_CLOUD_ENABLE_DAS=false` 或 `TAURUSDB_CLOUD_ENABLE_CES=false`。
 
 如果使用临时 AK/SK，再补：
@@ -1536,17 +1536,17 @@ Follow-up: <next tool / config / evidence to check>
 
 ### 9.7 G 组：TaurusDB 能力探测与专属 Tool
 
-目标：确认 TaurusDB 差异化能力不是硬编码暴露，而是由 capability probe 驱动。
+目标：确认 TaurusDB 专属 Tool 默认静态注册、稳定出现在 tool list，差异化能力由运行时 capability probe 在调用时驱动降级（而不是靠隐藏 Tool）。
 
 核心用例：
 
 | 编号 | 用例                               | 期望结果                   | 关键观测点                                     |
 | ---- | ---------------------------------- | -------------------------- | ---------------------------------------------- |
-| G-01 | 非 Taurus 环境启动                 | 专属 Tool 按能力缺失隐藏   | tool list 不应错误暴露                         |
+| G-01 | 非 Taurus 环境启动                 | 专属 Tool 仍默认出现，调用时返回 `UNSUPPORTED_FEATURE` | tool list 稳定固定，不随实例类型变化           |
 | G-02 | Taurus 环境 capability probe 成功  | 返回 kernel / feature 信息 | `get_kernel_info`、`list_taurus_features` 可用 |
 | G-03 | `explain_sql_enhanced`             | 返回增强提示               | `taurusHints`、`optimizationSuggestions` 存在  |
 | G-04 | `flashback_query` 在支持环境下执行 | 返回历史只读数据           | 当前表数据不被修改                             |
-| G-05 | 不支持 flashback 的环境调用        | 返回合理错误或不暴露 tool  | 行为与 feature gate 一致                       |
+| G-05 | 不支持 flashback 的环境调用        | 返回结构化 `UNSUPPORTED_FEATURE` 错误（Tool 仍可见） | 行为与运行时 feature gate 一致                 |
 
 ### 9.8 H 组：Diagnostics
 
@@ -1676,7 +1676,7 @@ mysql -uroot -p < testdata/mysql/local-mysql-users.sql
 
 手工关注：
 
-- `tools/list` 暴露面是否与 capability probe 一致
+- `tools/list` 暴露面是否稳定固定（专属 Tool 默认出现，不随启动时探测变化），且不支持的能力在调用时返回 `UNSUPPORTED_FEATURE` 降级
 - DAS / Taurus API / CES 失败时是否都能收敛到结构化 `limitations` 或可解释错误
 - `diagnose_replication_lag`、`diagnose_storage_pressure`、`diagnose_connection_spike` 的 `ces_metrics` evidence 是否真有数据，不只是空壳 source 名
 - `recommended_next_tools` / `next_tool_inputs` 是否适合客户端直接串联下钻

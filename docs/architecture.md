@@ -511,18 +511,7 @@ export interface FlashbackInput {
 export async function bootstrapDependencies(): Promise<ServerDeps> {
   const config = loadConfigFromEnv();
   const engine = await TaurusDBEngine.create({ config });
-  const defaultDatasource = await engine.getDefaultDataSource();
-  let startupProbe: CapabilitySnapshot | undefined;
-
-  if (defaultDatasource) {
-    const bootstrapContext = await engine.resolveContext(
-      { datasource: defaultDatasource, readonly: true },
-      "task_bootstrap_probe",
-    );
-    startupProbe = await engine.probeCapabilities(bootstrapContext);
-  }
-
-  return { config, engine, startupProbe };
+  return { config, engine };
 }
 ```
 
@@ -607,7 +596,7 @@ Schema 层负责：
 当前实现刻意保持简单：
 
 - `probe()` 每次直接探测,**不在 core 内做 capability cache**
-- MCP 启动时会对默认数据源做 probe，用于初始化 capability 上下文；Tool 是否可见不再依赖这次 probe 结果
+- MCP 启动时不主动连接数据源做 capability probe；TaurusDB 专属 Tool 默认可见，并在调用时探测能力、返回清晰降级结果
 - 后续单次调用仍可按需再次探测,保证行为和当前连接状态一致
 
 当前首阶段真正依赖的能力门控只有三类：
@@ -1284,28 +1273,24 @@ type DiagnosticResult = {
 
 真正应该产品化的是 **执行与治理**，不是把 SQL 文本生成本身封装成服务。
 
-### 4.5 动态 Tool 注册机制 🆕
+### 4.5 Tool 注册与运行时能力探测
 
-MCP Server 启动时按以下顺序决定注册集合：
+MCP Server 启动时注册完整稳定的 Tool 集合：
 
 ```text
 1. 创建 engine
-2. 若存在默认数据源，对默认数据源做一次 capability probe
-3. 通用 Tool 总是注册
-4. capability Tool 总是注册
-5. 如果 probe 结果表明是 TaurusDB：
-   - `parallel_query` 或 `ndp_pushdown` 可用 → 注册 `explain_sql_enhanced`
-   - `flashback_query` 可用 → 注册 `flashback_query`
-6. 其余专属 Tool 作为后续阶段扩展，不在当前首阶段注册
+2. 注册通用 Tool、capability Tool 和 TaurusDB 专属 Tool
+3. 专属 Tool 调用时执行 capability probe
+4. 不支持的能力返回 `UNSUPPORTED_FEATURE` 和参数提示
 ```
 
 这个机制保证了：
 
-- 非 TaurusDB 实例不会看到专属 Tool
-- 低版本 TaurusDB 只看到它真正支持的 Tool
+- Tool 列表稳定，不会因启动时数据库暂时不可达而变化
+- 非 TaurusDB 或低版本实例获得结构化降级结果
 - `list_taurus_features` 始终可用，用于回答“当前支持什么”
 
-当前注册逻辑已经落在 `packages/mcp/src/tools/registry.ts`，方向是“通用 Tool 常驻，专属 Tool 薄门控”，而不是维护一大套复杂注册状态机。
+当前注册逻辑已经落在 `packages/mcp/src/tools/registry.ts`，能力判断由 core 运行时负责。
 
 ---
 
@@ -1653,7 +1638,7 @@ MCP 返回结果本身就可能流向 LLM 或工单系统，需要严格的数�
 
 - Tool schema 与 envelope 稳定性
 - `execute_sql` 的确认流
-- 动态 Tool 注册
+- 稳定 Tool 注册与运行时能力降级
 - 非 TaurusDB 实例上的降级行为
 
 **集成测试**：
@@ -1666,7 +1651,7 @@ MCP 返回结果本身就可能流向 LLM 或工单系统，需要严格的数�
 
 ```text
 Step 1: capability/ 模块
-Step 2: MCP 启动时 probe + 动态 Tool 注册
+Step 2: MCP 稳定 Tool 注册 + 运行时 capability probe
 Step 3: explain_sql_enhanced
 Step 4: flashback_query
 ```

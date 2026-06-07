@@ -38,6 +38,15 @@ export class RuntimeOverrideProfileLoader implements RuntimeTargetProfileLoader 
     this.runtimeTargets.set(name, next);
   }
 
+  clearRuntimeUser(name: string): void {
+    const current = this.runtimeTargets.get(name);
+    if (!current) {
+      return;
+    }
+    const { user: _user, ...next } = current;
+    this.runtimeTargets.set(name, next);
+  }
+
   clearRuntimeTarget(name: string): void {
     this.runtimeTargets.delete(name);
   }

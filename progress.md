@@ -98,8 +98,8 @@
 
 - `capability/` 模块
 - TaurusDB kernel / feature probe
-- 启动时 capability probe
-- 动态 Tool 注册
+- 运行时 capability probe（专属 Tool 调用时探测，不在启动时连接数据源）
+- 稳定 Tool 注册（专属 Tool 默认注册，调用时按能力降级，不再由 probe 控制是否注册）
 - `get_kernel_info`
 - `list_taurus_features`
 - `explain_sql_enhanced`
@@ -189,7 +189,7 @@
   - `TAURUSDB_CLOUD_ENABLE_EVIDENCE`
 - 已新增会话级 cloud context Tool：
   - `set_cloud_region`
-  - `set_cloud_access_keys`
+  - `begin_sql_login`（安全本地一次性登录页绑定数据库账号；云端 AK/SK 改为仅通过环境变量配置，已移除 `set_cloud_access_keys`）
   - `list_cloud_taurus_instances`
   - `select_cloud_taurus_instance`
 - `list_cloud_taurus_instances` 可列出当前云账号下的实例 `name/id/host/port/default_node_id`
@@ -398,7 +398,7 @@
    - `list_taurus_features`
    - `explain_sql_enhanced`
    - `flashback_query`
-   - 重点确认 capability probe 是否正确控制 Tool 暴露，以及低版本 / 不支持特性时是否正确降级
+   - 重点确认专属 Tool 默认注册、调用时由运行时 capability probe 判定能力，低版本 / 不支持特性时返回 `UNSUPPORTED_FEATURE` 正确降级
 
 5. 在云端 TaurusDB 验证 CES / Cloud Eye 指标源第一版：
    - 配置 `TAURUSDB_METRICS_SOURCE_CES_*`

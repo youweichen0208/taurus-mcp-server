@@ -2,6 +2,7 @@ import {
   ConnectionPoolError,
   DatasourceResolutionError,
   FlashbackNoViewError,
+  logger,
   SchemaIntrospectionError,
   UnsupportedFeatureError,
 } from "taurusdb-core";
@@ -147,11 +148,14 @@ export function formatToolError(error: unknown, context: ToolErrorContext): Tool
     });
   }
 
+  logger.error(
+    { err: error, action: context.action },
+    "Tool execution failed unexpectedly",
+  );
   return formatError({
     code: ErrorCode.CONNECTION_FAILED,
-    message: messageOf(error),
+    message: `${context.action} failed unexpectedly.`,
     summary: `${context.action} failed unexpectedly.`,
     metadata: context.metadata,
-    details: detailsOf(error),
   });
 }

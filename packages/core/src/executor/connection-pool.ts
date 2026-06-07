@@ -162,6 +162,12 @@ function selectCredential(
   mode: PoolMode,
   _opts: { allowReadonlyFallbackForMutations?: boolean } = {},
 ) {
+  void mode;
+  if (!profile.user) {
+    throw new ConnectionPoolError(
+      `Datasource "${profile.name}" does not define SQL credentials. Call begin_sql_login and complete the secure local login form before executing SQL.`,
+    );
+  }
   return profile.user;
 }
 

@@ -36,7 +36,6 @@ async function inspectSql(
 }
 
 async function ensureConfirmation(
-  sql: string,
   decision: GuardrailDecision,
   ctx: SessionContext,
   deps: Parameters<ToolDefinition["handler"]>[1],
@@ -49,11 +48,15 @@ async function ensureConfirmation(
 
   const responseMetadata = metadata(taskId, {
     sql_hash: decision.sqlHash,
-    statement_type: statementTypeFromSql(sql),
+    statement_type: statementTypeFromSql(decision.normalizedSql),
   });
 
   if (confirmationToken) {
-    const validation = await deps.engine.validateConfirmation(confirmationToken, sql, ctx);
+    const validation = await deps.engine.validateConfirmation(
+      confirmationToken,
+      decision.normalizedSql,
+      ctx,
+    );
     if (validation.valid) {
       return undefined;
     }
@@ -115,7 +118,6 @@ export const executeReadonlySqlTool: ToolDefinition = {
       }
 
       const confirmationResponse = await ensureConfirmation(
-        sql,
         decision,
         ctx,
         deps,
@@ -126,7 +128,7 @@ export const executeReadonlySqlTool: ToolDefinition = {
         return confirmationResponse;
       }
 
-      const result = await deps.engine.executeReadonly(sql, ctx, {
+      const result = await deps.engine.executeReadonly(decision.normalizedSql, ctx, {
         timeoutMs: decision.runtimeLimits.timeoutMs,
         maxRows: decision.runtimeLimits.maxRows,
         maxColumns: decision.runtimeLimits.maxColumns,
@@ -186,7 +188,7 @@ export const explainSqlTool: ToolDefinition = {
         });
       }
 
-      const result = await deps.engine.explain(sql, ctx);
+      const result = await deps.engine.explain(decision.normalizedSql, ctx);
       return formatSuccess(
         toPublicExplainResult(result, decision),
         {
@@ -245,7 +247,6 @@ export const executeSqlTool: ToolDefinition = {
       }
 
       const confirmationResponse = await ensureConfirmation(
-        sql,
         decision,
         ctx,
         deps,
@@ -256,7 +257,7 @@ export const executeSqlTool: ToolDefinition = {
         return confirmationResponse;
       }
 
-      const result = await deps.engine.executeMutation(sql, ctx, {
+      const result = await deps.engine.executeMutation(decision.normalizedSql, ctx, {
         timeoutMs: decision.runtimeLimits.timeoutMs,
       });
       return formatSuccess(

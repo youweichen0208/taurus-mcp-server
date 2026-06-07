@@ -1,9 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
-  type FeatureMatrix,
   generateTaskId,
-  type KernelInfo,
   logger,
   withTaskContext,
   type Config,
@@ -26,11 +24,10 @@ import {
   clearSqlCredentialsTool,
   getSessionBindingTool,
   selectCloudTaurusInstanceTool,
-  setCloudAccessKeysTool,
   setCloudRegionTool,
   setDefaultDatabaseTool,
-  setSqlCredentialsTool,
 } from "./taurus/cloud-context.js";
+import { beginSqlLoginTool } from "./taurus/sql-login.js";
 import { listCloudTaurusInstancesTool } from "./taurus/cloud-instances.js";
 import { diagnosticToolDefinitions } from "./taurus/diagnostics.js";
 import { explainSqlEnhancedTool } from "./taurus/explain.js";
@@ -45,11 +42,6 @@ import {
 
 export type ToolDeps = ServerDeps;
 
-export interface ToolRegistrationProbe {
-  kernelInfo?: KernelInfo;
-  features?: FeatureMatrix;
-}
-
 export type ToolInvokeContext = {
   taskId: string;
 };
@@ -62,7 +54,6 @@ export interface ToolDefinition<
   description: string;
   inputSchema: Record<string, unknown>;
   handler: (input: I, deps: ToolDeps, context: ToolInvokeContext) => Promise<ToolResponse<O>>;
-  exposeWhen?: (config: Config) => boolean;
 }
 
 type ToolHandler = (input: Record<string, unknown>) => Promise<CallToolResult>;
@@ -85,10 +76,10 @@ type ToolRegistrar = {
 };
 
 function formatUnhandledToolError(error: unknown, taskId: string): CallToolResult {
-  const message = error instanceof Error ? error.message : String(error);
+  void error;
   const response = formatError({
     code: ErrorCode.CONNECTION_FAILED,
-    message,
+    message: "Tool execution failed unexpectedly.",
     summary: "Tool execution failed unexpectedly.",
     metadata: { task_id: taskId },
     retryable: false,
@@ -156,9 +147,8 @@ export const capabilityToolDefinitions: ToolDefinition[] = [
   getKernelInfoTool,
   listTaurusFeaturesTool,
   setCloudRegionTool,
-  setCloudAccessKeysTool,
   getSessionBindingTool,
-  setSqlCredentialsTool,
+  beginSqlLoginTool,
   clearSqlCredentialsTool,
   setDefaultDatabaseTool,
   listCloudTaurusInstancesTool,
@@ -172,8 +162,7 @@ export const taurusToolDefinitions: ToolDefinition[] = [
   restoreRecycleBinTableTool,
 ];
 
-function buildDefaultToolDefinitions(_config: Config, probe?: ToolRegistrationProbe): ToolDefinition[] {
-  void probe;
+function buildDefaultToolDefinitions(_config: Config): ToolDefinition[] {
   return [
     ...commonToolDefinitions,
     ...capabilityToolDefinitions,
@@ -182,25 +171,13 @@ function buildDefaultToolDefinitions(_config: Config, probe?: ToolRegistrationPr
   ];
 }
 
-function isToolDefinitionArray(value: ToolRegistrationProbe | ToolDefinition[] | undefined): value is ToolDefinition[] {
-  return Array.isArray(value);
-}
-
 export function registerTools(
   server: McpServer,
   deps: ToolDeps,
   config: Config,
-  probeOrTools?: ToolRegistrationProbe | ToolDefinition[],
-  maybeTools?: ToolDefinition[],
+  tools: ToolDefinition[] = buildDefaultToolDefinitions(config),
 ): void {
-  const probe = isToolDefinitionArray(probeOrTools) ? undefined : probeOrTools;
-  const tools = maybeTools
-    ?? (isToolDefinitionArray(probeOrTools) ? probeOrTools : buildDefaultToolDefinitions(config, probe));
-
   for (const tool of tools) {
-    if (tool.exposeWhen && !tool.exposeWhen(config)) {
-      continue;
-    }
     registerOneTool(server, tool, deps);
   }
 }

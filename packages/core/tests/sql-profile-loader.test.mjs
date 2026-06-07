@@ -87,6 +87,29 @@ test("profile loader uses env profile when file is absent", async () => {
   assert.equal(await loader.getDefault(), "taurus_mcp");
 });
 
+test("profile loader creates an implicit session datasource when SQL config is absent", async () => {
+  const loader = new SqlProfileLoader({
+    config: makeConfig({ profilesPath: "/path/that/does/not/exist.json" }),
+    env: {
+      TAURUSDB_CLOUD_REGION: "cn-north-4",
+      TAURUSDB_CLOUD_ACCESS_KEY_ID: "ak",
+      TAURUSDB_CLOUD_SECRET_ACCESS_KEY: "sk",
+    },
+  });
+
+  const profiles = await loader.load();
+  assert.equal(profiles.size, 1);
+
+  const profile = profiles.get("taurus_mcp");
+  assert.ok(profile);
+  assert.equal(profile.engine, "mysql");
+  assert.equal(profile.host, undefined);
+  assert.equal(profile.port, 3306);
+  assert.equal(profile.database, undefined);
+  assert.equal(profile.user, undefined);
+  assert.equal(await loader.getDefault(), "taurus_mcp");
+});
+
 test("profiles.json overrides env profile with same datasource name", async () => {
   const profilesPath = await createTempProfilesFile({
     dataSources: {
@@ -210,6 +233,36 @@ test("runtime override profile loader applies host, port, database, and user bin
       username: "runtime_app",
       password: { type: "plain", value: "runtime_pwd" },
     },
+    instanceId: "instance-1",
+    nodeId: undefined,
+  });
+});
+
+test("runtime override profile loader clears only the session SQL credential binding", async () => {
+  const base = new SqlProfileLoader({
+    config: makeConfig({ profilesPath: "/path/that/does/not/exist.json" }),
+    env: {},
+  });
+  const loader = new RuntimeOverrideProfileLoader(base);
+
+  loader.setRuntimeTarget("taurus_mcp", {
+    host: "10.0.0.8",
+    instanceId: "instance-1",
+    user: {
+      username: "runtime_app",
+      password: { type: "plain", value: "runtime_pwd" },
+    },
+  });
+  loader.clearRuntimeUser("taurus_mcp");
+
+  const profile = await loader.get("taurus_mcp");
+  assert.ok(profile);
+  assert.equal(profile.host, "10.0.0.8");
+  assert.equal(profile.user, undefined);
+  assert.deepEqual(loader.getRuntimeTarget("taurus_mcp"), {
+    host: "10.0.0.8",
+    port: undefined,
+    database: undefined,
     instanceId: "instance-1",
     nodeId: undefined,
   });

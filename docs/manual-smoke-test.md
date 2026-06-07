@@ -135,7 +135,7 @@ env | rg '^TAURUSDB_' | sed 's/=.*$/=<set>/'
 - diagnostics 本地 smoke 依赖 `PROCESS` 和 `SELECT ON performance_schema.*`
 - 仓库里的 [local-mysql-users.sql](../testdata/mysql/local-mysql-users.sql) 已包含这两项授权
 - 上云联调请按 [cloud-taurusdb-testing.md](./cloud-taurusdb-testing.md) 准备 datasource、DAS/CES 环境变量和 `npm run cloud:validate`
-- 如果你不想预先写死数据库账号或默认库，也可以启动 MCP 后通过 `set_sql_credentials` 和 `set_default_database` 在当前会话里绑定
+- 如果你不想预先写死数据库账号或默认库，也可以启动 MCP 后通过 `begin_sql_login` 的本地一次性页面和 `set_default_database` 在当前会话里绑定
 
 ---
 

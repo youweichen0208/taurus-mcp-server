@@ -10,6 +10,7 @@ import {
   FlashbackNoViewError,
   flashbackReadonlyOptions,
   formatTimestamp,
+  normalizeFlashbackWhereClause,
   resolveRelativeTimestampFromBase,
   resolveFlashbackTimestamp,
   type FlashbackInput,
@@ -154,8 +155,9 @@ async function buildFlashbackNoViewError(
 
   if (input.where?.trim()) {
     try {
+      const where = normalizeFlashbackWhereClause(input.where);
       const updatedAtResult = await engine.executor.executeReadonly(
-        `SELECT ${quoteIdentifier("updated_at")} FROM ${quoteIdentifier(database)}.${quoteIdentifier(input.table)} WHERE (${input.where.trim()}) LIMIT 1`,
+        `SELECT ${quoteIdentifier("updated_at")} FROM ${quoteIdentifier(database)}.${quoteIdentifier(input.table)} WHERE (${where}) LIMIT 1`,
         ctx,
         { maxRows: 1, maxColumns: 1, maxFieldChars: 128 },
       );

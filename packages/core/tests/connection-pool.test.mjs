@@ -242,3 +242,22 @@ test("connection pool reports missing adapter as connection failure", async () =
     /No driver adapter registered for engine/,
   );
 });
+
+test("connection pool prompts for session SQL credentials when datasource user is absent", async () => {
+  const profile = makeProfile();
+  delete profile.user;
+  const profiles = new Map([[profile.name, profile]]);
+  const { adapter } = makeMockAdapter();
+
+  const manager = new ConnectionPoolManager({
+    config: createConfigFromEnv({}),
+    profileLoader: makeProfileLoader(profiles),
+    secretResolver: makeSecretResolver(),
+    adapters: { mysql: adapter },
+  });
+
+  await assert.rejects(
+    async () => manager.acquire(profile.name, "ro"),
+    /does not define SQL credentials.*begin_sql_login/,
+  );
+});

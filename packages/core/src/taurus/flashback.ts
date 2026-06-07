@@ -1,4 +1,6 @@
 import type { ReadonlyOptions } from "../executor/sql-executor.js";
+import { createSqlParser } from "../safety/parser/index.js";
+import { normalizeSql } from "../utils/hash.js";
 
 export interface FlashbackInput {
   database?: string;
@@ -49,6 +51,16 @@ function quoteIdentifier(identifier: string, fieldName: string): string {
     throw new Error(`Invalid ${fieldName}: "${identifier}".`);
   }
   return `\`${identifier}\``;
+}
+
+export function normalizeFlashbackWhereClause(where: string): string {
+  const parser = createSqlParser("mysql");
+  const candidate = parser.normalize(`SELECT 1 FROM placeholder WHERE (${where})`);
+  const parsed = parser.parse(candidate.normalizedSql);
+  if (!parsed.ok || parsed.isMultiStatement || parsed.ast.kind !== "select") {
+    throw new Error("Invalid flashback where clause. Provide a single SQL expression.");
+  }
+  return normalizeSql(where);
 }
 
 export type FlashbackNoViewDetails = {
@@ -192,7 +204,7 @@ export function buildFlashbackSql(
 
   const whereClause = input.where?.trim();
   if (whereClause) {
-    clauses.push(`WHERE (${whereClause})`);
+    clauses.push(`WHERE (${normalizeFlashbackWhereClause(whereClause)})`);
   }
 
   if (input.limit !== undefined) {
@@ -202,7 +214,7 @@ export function buildFlashbackSql(
     clauses.push(`LIMIT ${input.limit}`);
   }
 
-  return clauses.join(" ");
+  return normalizeSql(clauses.join(" "));
 }
 
 export function flashbackReadonlyOptions(limit: number | undefined): ReadonlyOptions | undefined {

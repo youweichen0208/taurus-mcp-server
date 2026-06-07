@@ -23,15 +23,15 @@
 仓库已经完成 `core + mcp + cli` 的 package 切分，其中：
 
 - `packages/core` 已承载共享数据面能力
-- `packages/mcp` 已承载 MCP 协议层与动态 Tool 注册
+- `packages/mcp` 已承载 MCP 协议层与稳定 Tool 注册
 - 当前仓库不提供独立 CLI，MCP 包是唯一前端入口
 
 MCP 当前已经具备：
 
 - 通用 MySQL Tool 集合
 - 最小 Guardrail + token confirmation
-- TaurusDB capability probe
-- 基于 probe 的动态 Tool 注册
+- TaurusDB 运行时 capability probe
+- 稳定 Tool 注册（专属 Tool 默认注册，调用时按能力降级）
 - TaurusDB 首阶段 Tool：
   - `get_kernel_info`
   - `list_taurus_features`
@@ -139,8 +139,8 @@ diagnostics 产品线已经落地第一版，并按两层组织：
 - stdio server 生命周期
 - Tool schema 与 handler
 - envelope / error mapping
-- 启动时默认数据源 probe
-- 动态 Tool 注册
+- 运行时 capability probe（专属 Tool 调用时探测，不在启动时连接数据源）
+- 稳定 Tool 注册
 - `init` 命令
 
 简单说，`mcp` 是薄壳，不是第二个业务层。
@@ -751,7 +751,7 @@ MCP 启动流程当前应保持如下简单链路：
 ### M2
 
 - 稳定 capability probe
-- 稳定动态 Tool 注册
+- 稳定 Tool 注册（静态注册 + 运行时能力降级）
 - 稳定 `get_kernel_info` / `list_taurus_features`
 
 ### M3
@@ -765,7 +765,7 @@ MCP 启动流程当前应保持如下简单链路：
 满足以下条件，可认为 MCP 第一阶段完成：
 
 - MCP Tool 全部通过 `TaurusDBEngine` 调用，不再绕过 `core`
-- 启动时 capability probe 与动态 Tool 注册稳定可用
+- 运行时 capability probe 与稳定 Tool 注册可用（专属 Tool 默认注册，调用时按能力降级）
 - TaurusDB 首阶段 Tool 行为稳定，包括 capability、enhanced explain、flashback query 和 recycle bin
 - token confirmation 链路稳定
 - 文档不再把 history / doctor 写成已交付能力

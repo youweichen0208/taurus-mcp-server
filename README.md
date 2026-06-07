@@ -127,7 +127,7 @@ TAURUSDB_CLOUD_SECRET_ACCESS_KEY = "<your-sk>"
 
 - `list_cloud_taurus_instances`
 - `select_cloud_taurus_instance`
-- `set_sql_credentials`
+- `begin_sql_login`
 - `list_databases`
 - `set_default_database`
 - `get_session_binding`
@@ -166,10 +166,9 @@ npx -y taurusdb-mcp init --client vscode
 - `get_kernel_info`
 - `list_taurus_features`
 - `set_cloud_region`
-- `set_cloud_access_keys`
 - `list_cloud_taurus_instances`
 - `select_cloud_taurus_instance`
-- `set_sql_credentials`
+- `begin_sql_login`
 - `clear_sql_credentials`
 - `set_default_database`
 - `get_session_binding`
@@ -339,7 +338,7 @@ claude mcp get huaweicloud-taurusdb
 控制面通过后，推荐直接走会话式绑定：
 
 1. `select_cloud_taurus_instance`
-2. `set_sql_credentials`
+2. `begin_sql_login`，然后在返回的 `127.0.0.1` 页面中输入数据库账号密码
 3. `list_databases`
 4. `set_default_database`
 5. `get_session_binding`
@@ -356,7 +355,7 @@ claude mcp get huaweicloud-taurusdb
 - 不要求模板里预先写死 `database`
 - 不要求模板里预先写死 `user/password`
 - 通过 `select_cloud_taurus_instance` 在运行时把当前实例的 `host/port` 绑定到这个模板
-- 通过 `set_sql_credentials` 在运行时把数据库账号绑定到当前会话
+- 通过 `begin_sql_login` 打开本地一次性登录页，并把数据库账号绑定到当前会话
 - 通过 `set_default_database` 在运行时把默认库绑定到当前会话
 
 这意味着客户不需要每切一个实例就重新改一遍：
@@ -376,7 +375,7 @@ claude mcp get huaweicloud-taurusdb
 3. 每次会话内按顺序调用：
    - `list_cloud_taurus_instances`
    - `select_cloud_taurus_instance`
-   - `set_sql_credentials`
+   - `begin_sql_login`，然后在本地登录页中完成认证
    - `list_databases`
    - `set_default_database`
    - `get_session_binding`
@@ -396,12 +395,12 @@ export TAURUSDB_SQL_USER=<database-user>
 export TAURUSDB_SQL_PASSWORD=<database-password>
 ```
 
-如果你更希望完全走会话式登录，这两个变量也可以不预先配置，改为在客户端里调用 `set_sql_credentials`。
+如果你更希望完全走会话式登录，这两个变量也可以不预先配置。调用 `begin_sql_login` 后，在返回的 `127.0.0.1` 一次性页面中输入账号密码；密码不会经过 Agent 或 MCP tool arguments。
 
 这里的关键点是：
 
 - `host / port` 来自当前选中的云实例
-- `user / password` 可以来自模板，也可以来自 `set_sql_credentials`
+- `user / password` 可以来自模板，也可以来自 `begin_sql_login` 创建的本地安全登录页
 - `database` 可以来自模板，也可以来自 `set_default_database`
 - `engine` 默认按 `mysql` 处理，因为 TaurusDB for MySQL 走的是 MySQL 协议
 - `datasource` 默认使用 `taurus_mcp`
@@ -464,7 +463,7 @@ curl ifconfig.me; echo
 
 1. 在 Claude Code 里调用 `list_cloud_taurus_instances`
 2. 调用 `select_cloud_taurus_instance`
-3. 调用 `set_sql_credentials`
+3. 调用 `begin_sql_login`，并在返回的本地页面中完成认证
 4. 调用 `list_databases`
 5. 调用 `set_default_database`
 6. 调用 `get_session_binding`
@@ -487,7 +486,7 @@ curl ifconfig.me; echo
 相关 tool：
 
 - `select_cloud_taurus_instance`
-- `set_sql_credentials`
+- `begin_sql_login`
 - `clear_sql_credentials`
 - `set_default_database`
 - `get_session_binding`
@@ -495,7 +494,7 @@ curl ifconfig.me; echo
 其中：
 
 - `select_cloud_taurus_instance` 负责绑定实例地址
-- `set_sql_credentials` 负责绑定数据库账号密码
+- `begin_sql_login` 负责生成本地一次性登录页，数据库密码不会发送给 Agent
 - `set_default_database` 负责绑定默认库
 - `get_session_binding` 负责把当前绑定状态显式返回出来
 - `clear_sql_credentials` 用于清理当前会话里临时注入的数据库账号

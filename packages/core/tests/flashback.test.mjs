@@ -44,6 +44,37 @@ test("buildFlashbackSql keeps database-local timestamp values in AS OF TIMESTAMP
   );
 });
 
+test("buildFlashbackSql rejects multi-statement where clauses", () => {
+  assert.throws(
+    () =>
+      buildFlashbackSql(
+        {
+          table: "orders",
+          asOf: { timestamp: "2026-05-13 10:32:29" },
+          where: "id = 1); DELETE FROM orders WHERE (1 = 1",
+        },
+        "app",
+      ),
+    /Invalid flashback where clause/,
+  );
+});
+
+test("buildFlashbackSql strips executable comments from where clauses", () => {
+  const sql = buildFlashbackSql(
+    {
+      table: "orders",
+      asOf: { timestamp: "2026-05-13 10:32:29" },
+      where: "id = 1 /*! OR 1 = 1 */",
+    },
+    "app",
+  );
+
+  assert.equal(
+    sql,
+    "SELECT * FROM `app`.`orders` AS OF TIMESTAMP '2026-05-13 10:32:29' WHERE (id = 1)",
+  );
+});
+
 test("resolveRelativeTimestampFromBase keeps database-local wall clock semantics", () => {
   assert.equal(
     resolveRelativeTimestampFromBase(

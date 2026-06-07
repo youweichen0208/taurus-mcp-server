@@ -6,20 +6,23 @@ import {
   RuntimeOverrideProfileLoader,
   redactConfigForLog,
   TaurusDBEngine,
-  type CapabilitySnapshot,
   type Config,
   type RuntimeTargetProfileLoader,
 } from "taurusdb-core";
 import { registerTools } from "./tools/registry.js";
 import { logger } from "taurusdb-core";
 import { VERSION } from "./version.js";
+import {
+  LocalCredentialLoginService,
+  type CredentialLoginService,
+} from "./security/local-credential-login.js";
 
 export interface ServerDeps {
   config: Config;
   profileLoader: RuntimeTargetProfileLoader;
   engine: TaurusDBEngine;
+  credentialLogin: CredentialLoginService;
   pingResponse: string;
-  startupProbe?: CapabilitySnapshot;
 }
 
 export async function bootstrapDependencies(): Promise<ServerDeps> {
@@ -28,36 +31,13 @@ export async function bootstrapDependencies(): Promise<ServerDeps> {
     createSqlProfileLoader({ config }),
   );
   const engine = await TaurusDBEngine.create({ config, profileLoader });
-  const defaultDatasource = await engine.getDefaultDataSource();
-  let startupProbe: CapabilitySnapshot | undefined;
-
-  if (defaultDatasource) {
-    try {
-      const bootstrapContext = await engine.resolveContext(
-        {
-          datasource: defaultDatasource,
-          readonly: true,
-        },
-        "task_bootstrap_probe",
-      );
-      startupProbe = await engine.probeCapabilities(bootstrapContext);
-    } catch (error) {
-      logger.warn(
-        {
-          err: error,
-          defaultDatasource,
-        },
-        "Capability probe failed during bootstrap; TaurusDB-specific tools will stay disabled",
-      );
-    }
-  }
 
   return {
     config,
     profileLoader,
     engine,
+    credentialLogin: new LocalCredentialLoginService(),
     pingResponse: "pong",
-    startupProbe,
   };
 }
 
@@ -67,7 +47,28 @@ export function createServer(deps: ServerDeps): McpServer {
     version: VERSION,
   });
 
-  registerTools(server, deps, deps.config, deps.startupProbe);
+  let cleanupPromise: Promise<void> | undefined;
+  const cleanup = (): Promise<void> => {
+    cleanupPromise ??= Promise.all([
+      deps.credentialLogin.close(),
+      deps.engine.close(),
+    ]).then(() => undefined);
+    return cleanupPromise;
+  };
+
+  server.server.onclose = () => {
+    void cleanup().catch((error: unknown) => {
+      logger.error({ err: error }, "Failed to close MCP session dependencies");
+    });
+  };
+
+  const closeServer = server.close.bind(server);
+  server.close = async () => {
+    await closeServer();
+    await cleanup();
+  };
+
+  registerTools(server, deps, deps.config);
   return server;
 }
 
@@ -87,7 +88,6 @@ export async function startMcpServer(): Promise<void> {
     {
       profileCount: datasources.length,
       defaultDatasource: defaultDatasource ?? null,
-      taurusdbProbe: deps.startupProbe?.kernelInfo?.isTaurusDB ?? null,
     },
     "SQL profiles resolved"
   );

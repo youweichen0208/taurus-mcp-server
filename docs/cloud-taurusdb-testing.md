@@ -165,7 +165,7 @@ export TAURUSDB_CLOUD_SECURITY_TOKEN='<session-token>'
 
 1. `list_cloud_taurus_instances`
 2. `select_cloud_taurus_instance`
-3. `set_sql_credentials`
+3. `begin_sql_login`，然后在返回的 `127.0.0.1` 页面中输入数据库账号密码
 4. `list_databases`
 5. `set_default_database`
 6. `get_session_binding`
@@ -183,17 +183,7 @@ export TAURUSDB_CLOUD_SECURITY_TOKEN='<session-token>'
 - 如果 `AK/SK` 缺失、错误、过期或权限不足，通常会返回明确的鉴权或 project lookup 错误。
 - 云侧 evidence 默认启用；如果只想单独关闭某一类云源，优先使用 `TAURUSDB_CLOUD_ENABLE_DAS=false` 或 `TAURUSDB_CLOUD_ENABLE_CES=false` 这类更细粒度开关。
 
-如果你需要在不重启 server 的情况下临时切换 region 或凭证，再使用下面这组会话级 Tool：
-
-1. `set_cloud_region`
-2. `set_cloud_access_keys`
-3. `list_cloud_taurus_instances`
-4. `select_cloud_taurus_instance`
-5. `set_sql_credentials`
-6. `set_default_database`
-7. `get_session_binding`
-
-这组 Tool 会在当前 MCP 会话里更新 region、AK/SK、默认 `project_id`、默认 `instance_id` 和默认 `node_id`。切换 region 或 AK/SK 后，server 会重建 cloud-aware engine，后续 diagnostics 会自动沿用新的会话上下文。
+如果需要切换 region，可以调用 `set_cloud_region`。AK/SK 属于敏感凭据，不提供 MCP 对话内明文设置工具；切换 AK/SK 时必须更新启动进程配置并重启 MCP Server。
 
 ---
 
@@ -235,7 +225,7 @@ npm run cloud:validate
 先配置 datasource 模板或准备好会话级账号，然后在 MCP 客户端里按顺序调用：
 
 1. `select_cloud_taurus_instance`
-2. `set_sql_credentials`
+2. `begin_sql_login`，然后在本地安全登录页中完成认证
 3. `list_databases`
 4. `set_default_database`
 5. `get_session_binding`
@@ -337,10 +327,10 @@ node /path/to/taurus-mcp-server/packages/mcp/dist/index.js
 2. `list_taurus_features`
 3. `list_cloud_taurus_instances`，确认当前云账号和 project 下的实例 `name/id/default_node_id`
 4. `select_cloud_taurus_instance`，把当前会话默认 `instance_id/node_id` 固定下来
-5. 如果需要临时切换 region 或凭证，再调用 `set_cloud_region` / `set_cloud_access_keys`
-6. `explain_sql_enhanced`，仅在 capability probe 暴露该 Tool 时验证
-7. `flashback_query`，仅在 capability probe 暴露该 Tool 时验证
-8. `list_recycle_bin`，仅在 capability probe 暴露该 Tool 时验证
+5. 如果需要临时切换 region，调用 `set_cloud_region`；切换 AK/SK 必须更新进程配置并重启
+6. `explain_sql_enhanced`，不支持时应返回 `UNSUPPORTED_FEATURE`
+7. `flashback_query`，不支持时应返回 `UNSUPPORTED_FEATURE`
+8. `list_recycle_bin`，不支持时应返回 `UNSUPPORTED_FEATURE`
 9. `restore_recycle_bin_table`，只在 disposable test table 上验证，且必须经过 confirmation token
 
 `restore_recycle_bin_table` 的最小确认流是：
@@ -377,7 +367,7 @@ node /path/to/taurus-mcp-server/packages/mcp/dist/index.js
 | datasource 不存在 | `TAURUSDB_SQL_DATASOURCE`、`TAURUSDB_DEFAULT_DATASOURCE`、`TAURUSDB_SQL_PROFILES` |
 | 连接失败 | VPC、白名单、安全组、host、port、TLS、账号密码 |
 | `list_tables` 失败 | 默认 database 缺失或账号无目标库权限 |
-| Taurus 专属 Tool 不暴露 | capability probe 判定 feature unavailable，或当前实例不是 TaurusDB 内核 |
+| Taurus 专属 Tool 返回 `UNSUPPORTED_FEATURE` | capability probe 判定 feature unavailable，或当前实例不是 TaurusDB 内核 |
 | confirmation token 无效 | 第二次 SQL 文本、datasource、database 与第一次不一致，或 token 已使用 |
 | diagnostics 没有云侧 evidence | DAS / CES 未启用，token / endpoint / dimension 错误，或时间窗口无数据 |
 | `diagnose_replication_lag` 返回 `not_applicable` | 单机实例、无只读节点、复制状态命令不可用，属于可接受降级 |

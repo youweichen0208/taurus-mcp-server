@@ -14,6 +14,14 @@ const REDACT_PATHS = [
   "secret",
   "token",
   "*.token",
+  "accessKeyId",
+  "*.accessKeyId",
+  "secretAccessKey",
+  "*.secretAccessKey",
+  "securityToken",
+  "*.securityToken",
+  "authToken",
+  "*.authToken",
 ];
 
 function createDefaultDestination(): DestinationStream {

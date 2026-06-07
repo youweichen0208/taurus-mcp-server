@@ -33,8 +33,8 @@ import {
   getSessionBindingTool,
   selectCloudTaurusInstanceTool,
   setDefaultDatabaseTool,
-  setSqlCredentialsTool,
 } from "../dist/tools/taurus/cloud-context.js";
+import { beginSqlLoginTool } from "../dist/tools/taurus/sql-login.js";
 import {
   listRecycleBinTool,
   restoreRecycleBinTableTool,
@@ -83,6 +83,14 @@ function createDeps(engineOverrides = {}) {
           ...target,
         });
       },
+      clearRuntimeUser(name) {
+        const current = runtimeTargets.get(name);
+        if (!current) {
+          return;
+        }
+        const { user, ...next } = current;
+        runtimeTargets.set(name, next);
+      },
       clearRuntimeTarget(name) {
         runtimeTargets.delete(name);
       },
@@ -94,6 +102,15 @@ function createDeps(engineOverrides = {}) {
       },
     },
     pingResponse: "pong",
+    credentialLogin: {
+      async issueSqlLogin() {
+        return {
+          loginUrl: "http://127.0.0.1:12345/sql-login/token",
+          expiresAt: "2026-06-07T01:00:00.000Z",
+        };
+      },
+      async close() {},
+    },
     engine: {
       listDataSources: async () => [],
       getDefaultDataSource: async () => undefined,
@@ -749,6 +766,88 @@ test("execute_readonly_sql executes when confirmation token validates", async ()
   assert.equal(result.data.row_count, 1);
 });
 
+test("query tools execute the normalized SQL inspected by guardrail", async () => {
+  const executed = [];
+  const normalizedSql = "SELECT 1";
+  const deps = createDeps({
+    inspectSql: async () => ({
+      action: "allow",
+      riskLevel: "low",
+      reasonCodes: [],
+      riskHints: [],
+      normalizedSql,
+      sqlHash: "sql_hash_normalized",
+      requiresExplain: false,
+      requiresConfirmation: false,
+      runtimeLimits: {
+        readonly: true,
+        timeoutMs: 30_000,
+        maxRows: 100,
+        maxColumns: 50,
+        maxFieldChars: 256,
+      },
+    }),
+    executeReadonly: async (sql) => {
+      executed.push(["readonly", sql]);
+      return {
+        queryId: "qry_normalized",
+        columns: [{ name: "value" }],
+        rows: [[1]],
+        rowCount: 1,
+        originalRowCount: 1,
+        truncated: false,
+        rowTruncated: false,
+        columnTruncated: false,
+        fieldTruncated: false,
+        redactedColumns: [],
+        droppedColumns: [],
+        truncatedColumns: [],
+        durationMs: 1,
+      };
+    },
+    explain: async (sql) => {
+      executed.push(["explain", sql]);
+      return {
+        queryId: "qry_explain_normalized",
+        plan: [],
+        riskSummary: {
+          fullTableScanLikely: false,
+          indexHitLikely: true,
+          estimatedRows: 1,
+          usesTempStructure: false,
+          usesFilesort: false,
+          riskHints: [],
+        },
+        recommendations: [],
+        durationMs: 1,
+      };
+    },
+  });
+
+  await executeReadonlySqlTool.handler({ sql: "SELECT 1 /*! executable comment */" }, deps, context);
+  await explainSqlTool.handler({ sql: "SELECT 1 /*! executable comment */" }, deps, context);
+
+  assert.deepEqual(executed, [
+    ["readonly", normalizedSql],
+    ["explain", normalizedSql],
+  ]);
+});
+
+test("execute_readonly_sql hides unexpected driver error details", async () => {
+  const deps = createDeps({
+    executeReadonly: async () => {
+      throw new Error("internal table secret_orders does not exist");
+    },
+  });
+
+  const result = await executeReadonlySqlTool.handler({ sql: "SELECT 1" }, deps, context);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, ErrorCode.CONNECTION_FAILED);
+  assert.equal(result.error.message, "execute_readonly_sql failed unexpectedly.");
+  assert.doesNotMatch(result.error.message, /secret_orders/);
+});
+
 test("explain_sql returns plan plus guardrail summary", async () => {
   const deps = createDeps({
     inspectSql: async () => ({
@@ -965,22 +1064,62 @@ test("set_default_database binds a session-scoped default database after instanc
   });
 });
 
-test("set_sql_credentials binds session-scoped SQL credentials", async () => {
-  const deps = createDeps();
+test("begin_sql_login returns a secure local URL without credential fields", async () => {
+  const deps = createDeps({
+    getDefaultDataSource: async () => "taurus_mcp",
+  });
 
-  const result = await setSqlCredentialsTool.handler(
-    {
-      datasource: "taurus_mcp",
-      username: "session_app",
-      password: "session_pwd",
-    },
+  const result = await beginSqlLoginTool.handler(
+    {},
     deps,
-    { taskId: "task_set_sql_credentials" },
+    { taskId: "task_begin_sql_login" },
   );
 
   assert.equal(result.ok, true);
-  assert.equal(result.data.datasource, "taurus_mcp");
-  assert.equal(result.data.username, "session_app");
+  assert.deepEqual(result.data, {
+    datasource: "taurus_mcp",
+    login_url: "http://127.0.0.1:12345/sql-login/token",
+    expires_at: "2026-06-07T01:00:00.000Z",
+  });
+  assert.equal(Object.hasOwn(result.data, "username"), false);
+  assert.equal(Object.hasOwn(result.data, "password"), false);
+});
+
+test("begin_sql_login binds submitted credentials and rebuilds the engine", async () => {
+  let pendingLogin;
+  let closed = false;
+  const deps = createDeps({
+    getDefaultDataSource: async () => "taurus_mcp",
+    close: async () => {
+      closed = true;
+    },
+  });
+  deps.credentialLogin = {
+    async issueSqlLogin(request) {
+      pendingLogin = request;
+      return {
+        loginUrl: "http://127.0.0.1:12345/sql-login/token",
+        expiresAt: "2026-06-07T01:00:00.000Z",
+      };
+    },
+    async close() {},
+  };
+
+  const result = await beginSqlLoginTool.handler(
+    {},
+    deps,
+    { taskId: "task_begin_sql_login_bind" },
+  );
+  assert.equal(result.ok, true);
+  assert.ok(pendingLogin);
+
+  await pendingLogin.bind({
+    datasource: "taurus_mcp",
+    username: "session_app",
+    password: "session_pwd",
+  });
+
+  assert.equal(closed, true);
   assert.deepEqual(deps.profileLoader.getRuntimeTarget("taurus_mcp"), {
     host: undefined,
     port: 3306,
@@ -1020,10 +1159,6 @@ test("clear_sql_credentials restores datasource profile credentials", async () =
     host: "1.2.3.4",
     port: 3306,
     database: "analytics",
-    user: {
-      username: "app",
-      password: { type: "plain", value: "pwd" },
-    },
     instanceId: "instance-1",
     nodeId: "node-1",
   });
@@ -1226,6 +1361,46 @@ test("execute_sql returns confirmation_invalid when token validation fails", asy
   assert.equal(result.ok, false);
   assert.equal(result.error.code, ErrorCode.CONFIRMATION_INVALID);
   assert.match(result.error.message, /token expired/);
+});
+
+test("execute_sql executes the normalized SQL inspected by guardrail", async () => {
+  let executedSql;
+  const deps = createDeps({
+    inspectSql: async () => ({
+      action: "allow",
+      riskLevel: "low",
+      reasonCodes: [],
+      riskHints: [],
+      normalizedSql: "UPDATE orders SET status = 'done' WHERE id = 1",
+      sqlHash: "sql_hash_normalized_mutation",
+      requiresExplain: false,
+      requiresConfirmation: false,
+      runtimeLimits: {
+        readonly: false,
+        timeoutMs: 30_000,
+        maxRows: 100,
+        maxColumns: 50,
+        maxFieldChars: 256,
+      },
+    }),
+    executeMutation: async (sql) => {
+      executedSql = sql;
+      return {
+        queryId: "qry_mutation_normalized",
+        affectedRows: 1,
+        durationMs: 1,
+      };
+    },
+  });
+
+  const result = await executeSqlTool.handler(
+    { sql: "UPDATE orders SET status = 'done' WHERE id = 1 /*! executable comment */" },
+    deps,
+    context,
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(executedSql, "UPDATE orders SET status = 'done' WHERE id = 1");
 });
 
 test("diagnose_slow_query validates that at least one SQL identifier is provided", async () => {

@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Config } from "../../config/index.js";
 import { parseEnvProfile } from "./env-source.js";
 import { parseProfilesFile } from "./file-source.js";
+import { withRedactedToString } from "./parsing.js";
 import type { DataSourceProfile, LoadedProfiles, ProfileLoader, SqlProfileLoaderOptions } from "./types.js";
 
 export function resolveDefaultProfilePath(config: Config): string {
@@ -78,6 +79,17 @@ export class SqlProfileLoader implements ProfileLoader {
       for (const [name, profile] of parsed.profiles.entries()) {
         mergedProfiles.set(name, profile);
       }
+    }
+
+    if (mergedProfiles.size === 0) {
+      mergedProfiles.set(
+        "taurus_mcp",
+        withRedactedToString({
+          name: "taurus_mcp",
+          engine: "mysql",
+          port: 3306,
+        }),
+      );
     }
 
     const defaultDatasource =

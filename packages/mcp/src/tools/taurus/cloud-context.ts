@@ -128,57 +128,6 @@ export const setCloudRegionTool: ToolDefinition = {
   },
 };
 
-export const setCloudAccessKeysTool: ToolDefinition = {
-  name: "set_cloud_access_keys",
-  description:
-    "Update the active Huawei Cloud AK/SK for the current MCP session and clear stale token or instance bindings.",
-  inputSchema: {
-    access_key_id: z.string().trim().min(1).describe("Huawei Cloud access key id."),
-    secret_access_key: z.string().trim().min(1).describe("Huawei Cloud secret access key."),
-    security_token: z.string().trim().min(1).optional().describe("Optional temporary security token when using temporary AK/SK."),
-  },
-  async handler(input, deps, context): Promise<ToolResponse> {
-    try {
-      const accessKeyId =
-        typeof input.access_key_id === "string" ? input.access_key_id.trim() : "";
-      const secretAccessKey =
-        typeof input.secret_access_key === "string" ? input.secret_access_key.trim() : "";
-      const securityToken =
-        typeof input.security_token === "string" ? input.security_token.trim() : undefined;
-      if (!accessKeyId || !secretAccessKey) {
-        throw new ToolInputError("access_key_id and secret_access_key are required.");
-      }
-
-      deps.config.cloud.accessKeyId = accessKeyId;
-      deps.config.cloud.secretAccessKey = secretAccessKey;
-      deps.config.cloud.securityToken = securityToken;
-      deps.config.cloud.authToken = undefined;
-      deps.config.slowSqlSource.taurusApi.authToken = undefined;
-      deps.config.slowSqlSource.das.authToken = undefined;
-      deps.config.metricsSource.ces.authToken = undefined;
-
-      clearCloudSelection(deps);
-      await reloadEngine(deps);
-
-      return formatSuccess(
-        {
-          access_key_id_suffix: accessKeyId.slice(-4),
-          uses_security_token: Boolean(securityToken),
-        },
-        {
-          summary: "Cloud access keys updated for the current session.",
-          metadata: metadata(context.taskId),
-        },
-      );
-    } catch (error) {
-      return formatToolError(error, {
-        action: "set_cloud_access_keys",
-        metadata: metadata(context.taskId),
-      });
-    }
-  },
-};
-
 export const setDefaultDatabaseTool: ToolDefinition = {
   name: "set_default_database",
   description:
@@ -261,84 +210,6 @@ export const setDefaultDatabaseTool: ToolDefinition = {
   },
 };
 
-export const setSqlCredentialsTool: ToolDefinition = {
-  name: "set_sql_credentials",
-  description:
-    "Set the SQL username and password for a datasource in the current MCP session without writing credentials to disk.",
-  inputSchema: {
-    username: z
-      .string()
-      .trim()
-      .min(1)
-      .describe("Database username to use for the selected datasource in this session."),
-    password: z
-      .string()
-      .trim()
-      .min(1)
-      .describe("Database password to use for the selected datasource in this session."),
-    datasource: z
-      .string()
-      .trim()
-      .min(1)
-      .optional()
-      .describe("Optional datasource template to bind. Defaults to the current default datasource."),
-  },
-  async handler(input, deps, context): Promise<ToolResponse> {
-    try {
-      const username = typeof input.username === "string" ? input.username.trim() : "";
-      const password = typeof input.password === "string" ? input.password.trim() : "";
-      if (!username || !password) {
-        throw new ToolInputError("username and password are required.");
-      }
-
-      const datasource = await resolveBindingDatasource(
-        deps,
-        typeof input.datasource === "string" ? input.datasource : undefined,
-      );
-      if (!datasource) {
-        throw new ToolInputError(
-          "No datasource selected. Configure a default datasource or pass datasource explicitly.",
-        );
-      }
-
-      const profile = await deps.profileLoader.get(datasource);
-      if (!profile) {
-        throw new ToolInputError(`Datasource "${datasource}" was not found.`);
-      }
-      const currentTarget = deps.profileLoader.getRuntimeTarget(datasource);
-      deps.profileLoader.setRuntimeTarget(datasource, {
-        host: currentTarget?.host ?? profile.host,
-        port: currentTarget?.port ?? profile.port,
-        database: currentTarget?.database ?? profile.database,
-        instanceId: currentTarget?.instanceId,
-        nodeId: currentTarget?.nodeId,
-        user: {
-          username,
-          password: { type: "plain", value: password },
-        },
-      });
-
-      await reloadEngine(deps);
-
-      return formatSuccess(
-        {
-          datasource,
-          username,
-        },
-        {
-          summary: `SQL credentials for ${datasource} updated in the current session.`,
-          metadata: metadata(context.taskId),
-        },
-      );
-    } catch (error) {
-      return formatToolError(error, {
-        action: "set_sql_credentials",
-        metadata: metadata(context.taskId),
-      });
-    }
-  },
-};
-
 export const clearSqlCredentialsTool: ToolDefinition = {
   name: "clear_sql_credentials",
   description:
@@ -367,15 +238,7 @@ export const clearSqlCredentialsTool: ToolDefinition = {
       if (!profile) {
         throw new ToolInputError(`Datasource "${datasource}" was not found.`);
       }
-      const currentTarget = deps.profileLoader.getRuntimeTarget(datasource);
-      deps.profileLoader.setRuntimeTarget(datasource, {
-        host: currentTarget?.host ?? profile.host,
-        port: currentTarget?.port ?? profile.port,
-        database: currentTarget?.database ?? profile.database,
-        instanceId: currentTarget?.instanceId,
-        nodeId: currentTarget?.nodeId,
-        user: profile.user,
-      });
+      deps.profileLoader.clearRuntimeUser(datasource);
 
       await reloadEngine(deps);
 
@@ -433,7 +296,7 @@ export const getSessionBindingTool: ToolDefinition = {
           host: profile.host,
           port: profile.port,
           database: profile.database,
-          username_masked: maskUsername(profile.user.username),
+          username_masked: maskUsername(profile.user?.username),
           runtime_override: {
             instance_id: target?.instanceId,
             node_id: target?.nodeId,

@@ -349,7 +349,7 @@ TaurusDB 特性怎么参与：
 
 可接受降级：
 
-- 非 TaurusDB 或低版本实例上，Taurus 专属 Tool 不暴露或返回 `UNSUPPORTED_FEATURE`。
+- 非 TaurusDB 或低版本实例上，Taurus 专属 Tool 保持可见，并返回 `UNSUPPORTED_FEATURE`。
 - 未配置 DAS / CES 时，diagnostics 仍可返回本地数据面证据，但云侧 evidence 缺失。
 - 没有复制链路时，`diagnose_replication_lag` 返回 `not_applicable`。
 - 没有近期慢 SQL / deadlock / metric points 时，结果返回 `inconclusive` 并说明限制。

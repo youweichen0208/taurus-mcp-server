@@ -28,7 +28,7 @@ export interface DataSourceProfile {
   host?: string;
   port: number;
   database?: string;
-  user: UserCredential;
+  user?: UserCredential;
   tls?: TlsOptions;
   poolSize?: number;
   toString(): string;
@@ -51,6 +51,7 @@ export interface RuntimeDataSourceTarget {
 
 export interface RuntimeTargetProfileLoader extends ProfileLoader {
   setRuntimeTarget(name: string, target: RuntimeDataSourceTarget): void;
+  clearRuntimeUser(name: string): void;
   clearRuntimeTarget(name: string): void;
   clearAllRuntimeTargets(): void;
   getRuntimeTarget(name: string): RuntimeDataSourceTarget | undefined;
