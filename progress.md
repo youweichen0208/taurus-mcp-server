@@ -189,7 +189,7 @@
   - `TAURUSDB_CLOUD_ENABLE_EVIDENCE`
 - 已新增会话级 cloud context Tool：
   - `set_cloud_region`
-  - `begin_sql_login`（安全本地一次性登录页绑定数据库账号；云端 AK/SK 改为仅通过环境变量配置，已移除 `set_cloud_access_keys`）
+  - 数据库凭据已统一为 DEW/KMS 密文引用，已移除本地一次性登录页和明文凭据 Tool
   - `list_cloud_taurus_instances`
   - `select_cloud_taurus_instance`
 - `list_cloud_taurus_instances` 可列出当前云账号下的实例 `name/id/host/port/default_node_id`

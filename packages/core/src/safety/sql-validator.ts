@@ -22,6 +22,8 @@ export interface ExplainRiskSummary {
 const READONLY_STATEMENTS = new Set(["select", "show", "explain", "describe"]);
 const MUTATION_STATEMENTS = new Set(["insert", "update", "delete"]);
 const STAR_COLUMN_PATTERN = /(^|\.)(\*|\(\.\*\))$/;
+const READONLY_SIDE_EFFECT_PATTERN =
+  /\b(?:INTO\s+(?:OUTFILE|DUMPFILE)|FOR\s+UPDATE|LOCK\s+IN\s+SHARE\s+MODE|GET_LOCK\s*\(|RELEASE_LOCK\s*\(|SLEEP\s*\(|BENCHMARK\s*\(|LOAD_FILE\s*\()/i;
 
 function allow(riskLevel: Extract<RiskLevel, "low" | "medium"> = "low"): ValidationResult {
   return {
@@ -119,6 +121,34 @@ export function validateToolScope(toolName: string, cls: SqlClassification): Val
   return allow("low");
 }
 
+export function validateDatabaseScope(
+  cls: SqlClassification,
+  database: string | undefined,
+): ValidationResult {
+  const schemas = cls.referencedSchemas ?? [];
+  if (schemas.length === 0) {
+    return allow("low");
+  }
+  if (!database) {
+    return block(
+      ["D001"],
+      ["SQL uses an explicit database but the session has no bound database."],
+    );
+  }
+
+  const expected = database.toLowerCase();
+  const outOfScope = schemas.filter((schema) => schema.toLowerCase() !== expected);
+  if (outOfScope.length > 0) {
+    return block(
+      ["D002"],
+      [
+        `SQL references database(s) outside the bound database "${database}": ${outOfScope.join(", ")}.`,
+      ],
+    );
+  }
+  return allow("low");
+}
+
 export function validateStaticRules(cls: SqlClassification): ValidationResult {
   const reasonCodes: string[] = [];
   const riskHints: string[] = [];
@@ -171,7 +201,14 @@ export function validateStaticRules(cls: SqlClassification): ValidationResult {
     }
   }
 
+  if (cls.statementType === "insert") {
+    escalateToConfirm("R006", "INSERT, REPLACE, and UPSERT statements require confirmation.");
+  }
+
   if (cls.statementType === "select") {
+    if (READONLY_SIDE_EFFECT_PATTERN.test(cls.normalizedSql)) {
+      escalateToBlock("R009", "SELECT statements with side effects or blocking functions are blocked.");
+    }
     if (!cls.hasLimit && !cls.hasAggregate) {
       escalateToMediumAllow("R007", "Detail SELECT without LIMIT has medium risk.");
     }

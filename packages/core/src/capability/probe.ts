@@ -152,7 +152,9 @@ export class CapabilityProbeImpl implements CapabilityProbe {
   }
 
   async probe(ctx: SessionContext): Promise<CapabilitySnapshot> {
-    const session = await this.connectionPool.acquire(ctx.datasource, "ro");
+    const session = await this.connectionPool.acquire(ctx.datasource, "ro", {
+      database: ctx.database,
+    });
     try {
       const variables = await collectVariables(session);
       const kernelInfo = await detectKernelInfo(session, variables);

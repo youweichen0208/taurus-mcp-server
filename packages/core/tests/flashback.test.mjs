@@ -44,6 +44,22 @@ test("buildFlashbackSql keeps database-local timestamp values in AS OF TIMESTAMP
   );
 });
 
+test("buildFlashbackSql supports database names containing hyphens", () => {
+  const sql = buildFlashbackSql(
+    {
+      database: "db-1",
+      table: "orders",
+      asOf: { timestamp: "2026-05-13 10:32:29" },
+    },
+    "ignored_default",
+  );
+
+  assert.equal(
+    sql,
+    "SELECT * FROM `db-1`.`orders` AS OF TIMESTAMP '2026-05-13 10:32:29'",
+  );
+});
+
 test("buildFlashbackSql rejects multi-statement where clauses", () => {
   assert.throws(
     () =>

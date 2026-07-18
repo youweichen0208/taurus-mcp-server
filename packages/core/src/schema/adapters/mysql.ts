@@ -329,7 +329,9 @@ export class MySqlSchemaAdapter implements SchemaAdapter {
   }
 
   private async queryObjects(ctx: SessionContext, sql: string): Promise<Row[]> {
-    const session = await this.connectionPool.acquire(ctx.datasource, "ro");
+    const session = await this.connectionPool.acquire(ctx.datasource, "ro", {
+      database: ctx.database,
+    });
     try {
       const result = await session.execute(sql, { timeoutMs: ctx.limits.timeoutMs });
       return rowsToObjects(result);

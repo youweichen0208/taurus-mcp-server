@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { TaurusDBEngine } from "../dist/engine.js";
-import { InMemoryConfirmationStore } from "../dist/safety/confirmation-store.js";
+import {
+  InMemoryConfirmationStore,
+  signApprovalRequest,
+} from "../dist/safety/confirmation-store.js";
+
+const APPROVAL_SECRET = "test-approval-secret-that-is-at-least-32-bytes";
 
 function makeConfig(overrides = {}) {
   return {
@@ -2076,6 +2081,7 @@ test("engine issues, validates, and handles confirmation tokens", async () => {
   const store = new InMemoryConfirmationStore({
     now: () => 1_700_000_000_000,
     cleanupIntervalMs: 0,
+    approvalSecret: APPROVAL_SECRET,
     randomBytesFn: () => Buffer.alloc(32, ++seed),
   });
   const context = makeContext();
@@ -2103,15 +2109,16 @@ test("engine issues, validates, and handles confirmation tokens", async () => {
     capabilityProbe: makeCapabilityProbe(),
   });
 
-  const token = await engine.issueConfirmation({
+  const request = await engine.issueConfirmation({
     sql: "UPDATE users SET status = 'done' WHERE id = 1",
     context: { ...context, limits: { ...context.limits, readonly: false } },
     riskLevel: "high",
   });
 
-  assert.match(token.token, /^ctok_/);
+  assert.match(request.request, /^creq_/);
+  const token = signApprovalRequest(request.request, "release-manager", APPROVAL_SECRET);
   const validation = await engine.validateConfirmation(
-    token.token,
+    token,
     "UPDATE users SET status = 'done' WHERE id = 1",
     { ...context, limits: { ...context.limits, readonly: false } },
   );
@@ -2148,8 +2155,8 @@ test("engine issues, validates, and handles confirmation tokens", async () => {
     },
     { ...context, limits: { ...context.limits, readonly: false } },
   );
-  assert.equal(issued.status, "token_issued");
-  assert.match(issued.token, /^ctok_/);
+  assert.equal(issued.status, "approval_required");
+  assert.match(issued.request, /^creq_/);
 });
 
 test("engine close delegates pool shutdown", async () => {

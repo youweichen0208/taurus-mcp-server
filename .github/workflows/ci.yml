@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "feat/**", "fix/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      matrix:
+        node: [20, 22]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm run pack:check
+
+  local-mysql:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root_test_password
+          MYSQL_DATABASE: taurus_mcp_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot_test_password"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Create least-privilege test users
+        run: |
+          mysql -h 127.0.0.1 -uroot -proot_test_password <<'SQL'
+          CREATE USER 'taurus_ro'@'%' IDENTIFIED BY 'readonly_test_password';
+          CREATE USER 'taurus_rw'@'%' IDENTIFIED BY 'mutation_test_password';
+          GRANT SELECT, SHOW VIEW, PROCESS, REPLICATION CLIENT ON *.* TO 'taurus_ro'@'%';
+          GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER ON taurus_mcp_test.* TO 'taurus_rw'@'%';
+          FLUSH PRIVILEGES;
+          SQL
+      - name: Run local MySQL MCP integration harness
+        env:
+          TAURUSDB_RUN_LOCAL_MYSQL_TESTS: "1"
+          TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN: mysql://root:root_test_password@127.0.0.1:3306/taurus_mcp_test
+          TAURUSDB_TEST_MYSQL_HOST: 127.0.0.1
+          TAURUSDB_TEST_MYSQL_PORT: "3306"
+          TAURUSDB_TEST_MYSQL_DATABASE: taurus_mcp_test
+          TAURUSDB_TEST_MYSQL_USER: taurus_ro
+          TAURUSDB_TEST_MYSQL_PASSWORD: readonly_test_password
+          TAURUSDB_TEST_MYSQL_MUTATION_USER: taurus_rw
+          TAURUSDB_TEST_MYSQL_MUTATION_PASSWORD: mutation_test_password
+        run: node --test packages/mcp/tests/local-mysql.test.mjs

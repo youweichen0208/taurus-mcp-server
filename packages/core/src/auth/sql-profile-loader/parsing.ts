@@ -1,6 +1,6 @@
 import type { CredentialRef, DataSourceProfile, DatabaseEngine, TlsOptions, UserCredential } from "./types.js";
 
-const CREDENTIAL_URI_PREFIXES = ["aws-sm:", "hw-kms:", "uri:"];
+const CREDENTIAL_URI_PREFIXES = ["aws-sm:", "hw-csms:", "hw-kms:", "hw-kms-file:", "uri:"];
 const SENSITIVE_KEY_PATTERN = /(password|secret|token|credential|apikey|api_key)/i;
 
 export function isObject(value: unknown): value is Record<string, unknown> {
@@ -217,12 +217,14 @@ export function parseProfileRecord(name: string, value: unknown, context: string
   }
 
   const database = asString(value.database);
+  const instanceId = asString(value.instanceId ?? value.instance_id);
+  const nodeId = asString(value.nodeId ?? value.node_id);
   const poolSize = asInteger(value.poolSize);
   if (poolSize !== undefined && poolSize <= 0) {
     throw new Error(`Invalid datasource profile ${name} in ${context}: poolSize must be positive.`);
   }
 
-  // Backward compatibility for older profile field names. New configs should use `user`.
+  // `user` is the read-only credential. Keep older read-only aliases for compatibility.
   const userRaw =
     value.user ??
     value.readonlyUser ??
@@ -233,6 +235,12 @@ export function parseProfileRecord(name: string, value: unknown, context: string
   }
   const user = parseUserCredential(userRaw, `${context}.${name}.user`);
 
+  const mutationUserRaw = value.mutationUser ?? value.writeUser ?? value.rwUser;
+  const mutationUser =
+    mutationUserRaw === undefined
+      ? undefined
+      : parseUserCredential(mutationUserRaw, `${context}.${name}.mutationUser`);
+
   const tls = parseTlsOptions(value.tls, `${context}.${name}.tls`);
 
   return withRedactedToString({
@@ -241,7 +249,10 @@ export function parseProfileRecord(name: string, value: unknown, context: string
     host,
     port,
     database,
+    instanceId,
+    nodeId,
     user,
+    mutationUser,
     tls,
     poolSize,
   });

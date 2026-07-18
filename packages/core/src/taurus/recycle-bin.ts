@@ -1,4 +1,5 @@
 import type { MutationOptions, MutationResult, QueryResult, ReadonlyOptions } from "../executor/sql-executor.js";
+import { quoteMysqlIdentifier } from "../utils/mysql-identifier.js";
 
 export interface RestoreRecycleBinTableInput {
   recycleTable: string;
@@ -9,15 +10,7 @@ export interface RestoreRecycleBinTableInput {
 
 export const RECYCLE_BIN_DATABASE = "__recyclebin__";
 
-const SIMPLE_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 const RECYCLE_TABLE_PATTERN = /^[A-Za-z0-9_$@.-]+$/;
-
-function quoteIdentifier(identifier: string, fieldName: string): string {
-  if (!SIMPLE_IDENTIFIER_PATTERN.test(identifier)) {
-    throw new Error(`Invalid ${fieldName}: "${identifier}".`);
-  }
-  return `\`${identifier}\``;
-}
 
 function quoteRecycleTableName(table: string): string {
   if (!RECYCLE_TABLE_PATTERN.test(table)) {
@@ -69,7 +62,7 @@ export function buildRestoreRecycleBinTableSql(input: RestoreRecycleBinTableInpu
         "insert_select restore requires destination_database and destination_table. Create the destination table with a compatible structure before calling this tool.",
       );
     }
-    return `INSERT INTO ${quoteIdentifier(input.destinationDatabase, "destination_database")}.${quoteIdentifier(
+    return `INSERT INTO ${quoteMysqlIdentifier(input.destinationDatabase, "destination_database")}.${quoteMysqlIdentifier(
       input.destinationTable,
       "destination_table",
     )} SELECT * FROM \`${RECYCLE_BIN_DATABASE}\`.${quoteRecycleTableName(input.recycleTable)}`;

@@ -4,7 +4,7 @@ Shared TaurusDB data-plane engine for:
 
 - schema discovery
 - readonly and mutation SQL execution
-- SQL guardrails and confirmation flow
+- SQL guardrails and external operator-signed approval flow
 - TaurusDB capability detection
 - diagnostics workflows
 
@@ -19,3 +19,5 @@ npm install taurusdb-core
 - Requires Node.js `>= 20`
 - This is the shared engine package
 - Most end users should install `taurusdb-mcp` instead
+- TLS verification, least-privilege credentials, bounded results, and JSONL
+  auditing are enabled as production safety controls

@@ -1,16 +1,23 @@
 {
   "name": "taurusdb-data-tools",
+  "version": "0.4.0",
   "private": true,
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
     "build": "npm run build --workspace taurusdb-core && npm run build --workspace taurusdb-mcp",
-    "check": "npm run check --workspace taurusdb-core && npm run check --workspace taurusdb-mcp",
+    "check": "npm run build --workspace taurusdb-core && npm run check --workspace taurusdb-core && npm run check --workspace taurusdb-mcp",
     "dev": "npm run dev --workspace taurusdb-mcp",
     "start": "npm run start --workspace taurusdb-mcp",
     "test": "npm run build && npm run test --workspace taurusdb-core && npm run test --workspace taurusdb-mcp",
-    "cloud:validate": "node scripts/cloud-taurusdb-validate.mjs"
+    "cloud:validate": "node scripts/cloud-taurusdb-validate.mjs",
+    "kms:encrypt": "npm run build --workspace taurusdb-core && node scripts/kms-encrypt-password.mjs",
+    "keychain:configure": "npm run build && node packages/mcp/dist/index.js credentials configure",
+    "credentials:configure": "npm run build && node packages/mcp/dist/index.js credentials configure",
+    "credentials:check": "npm run build && node packages/mcp/dist/index.js credentials check",
+    "pack:check": "npm pack --workspace taurusdb-core --dry-run && npm pack --workspace taurusdb-mcp --dry-run",
+    "release:check": "npm run check && npm test && npm audit --omit=dev --audit-level=high && npm run pack:check"
   },
   "engines": {
     "node": ">=20.0.0"

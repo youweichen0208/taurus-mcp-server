@@ -21,16 +21,30 @@ test("config uses documented defaults when env is empty", () => {
   assert.equal(config.cloud.accessKeyId, undefined);
   assert.equal(config.cloud.secretAccessKey, undefined);
   assert.equal(config.cloud.securityToken, undefined);
+  assert.equal(config.cloud.keychainService, undefined);
+  assert.equal(config.cloud.keychainAccount, "default");
   assert.equal(config.cloud.apiEndpoint, undefined);
   assert.equal(config.cloud.iamEndpoint, undefined);
+  assert.equal(config.cloud.kmsEndpoint, undefined);
+  assert.equal(config.cloud.csmsEndpoint, undefined);
   assert.equal(config.cloud.domainSuffix, "myhuaweicloud.com");
   assert.equal(config.cloud.language, "zh-cn");
   assert.equal(config.limits.maxRows, 200);
   assert.equal(config.limits.maxColumns, 50);
   assert.equal(config.limits.maxStatementMs, 15000);
   assert.equal(config.limits.maxFieldChars, 2048);
+  assert.equal(config.limits.maxResultBytes, 1048576);
+  assert.equal(config.limits.maxBlobBytes, 65536);
+  assert.equal(config.limits.maxConcurrentQueries, 8);
+  assert.equal(config.limits.maxQueuedQueries, 32);
+  assert.equal(config.limits.queueTimeoutMs, 5000);
   assert.equal(config.audit.includeRawSql, false);
   assert.equal(config.audit.logPath, "~/.taurusdb-mcp/audit.jsonl");
+  assert.equal(config.security.mutationsEnabled, false);
+  assert.equal(config.security.dynamicTargetsEnabled, false);
+  assert.equal(config.security.requireTls, true);
+  assert.equal(config.security.approvalSecretPath, undefined);
+  assert.equal(config.security.approvalTtlSeconds, 300);
   assert.equal(config.slowSqlSource.taurusApi.enabled, false);
   assert.equal(config.slowSqlSource.taurusApi.requestTimeoutMs, 5000);
   assert.equal(config.slowSqlSource.taurusApi.defaultLookbackMinutes, 60);
@@ -62,8 +76,18 @@ test("config maps env vars into typed fields", () => {
     TAURUSDB_MCP_MAX_COLUMNS: "12",
     TAURUSDB_MCP_MAX_STATEMENT_MS: "3000",
     TAURUSDB_MCP_MAX_FIELD_CHARS: "999",
+    TAURUSDB_MCP_MAX_RESULT_BYTES: "12345",
+    TAURUSDB_MCP_MAX_BLOB_BYTES: "2345",
+    TAURUSDB_MCP_MAX_CONCURRENT_QUERIES: "3",
+    TAURUSDB_MCP_MAX_QUEUED_QUERIES: "4",
+    TAURUSDB_MCP_QUEUE_TIMEOUT_MS: "250",
     TAURUSDB_MCP_AUDIT_LOG_PATH: "~/audit.jsonl",
     TAURUSDB_MCP_AUDIT_INCLUDE_RAW_SQL: "1",
+    TAURUSDB_ENABLE_MUTATIONS: "true",
+    TAURUSDB_ENABLE_DYNAMIC_TARGETS: "true",
+    TAURUSDB_REQUIRE_TLS: "false",
+    TAURUSDB_MUTATION_APPROVAL_SECRET_FILE: "~/approval-secret",
+    TAURUSDB_MUTATION_APPROVAL_TTL_SECONDS: "120",
     TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_ENABLED: "true",
     TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_ENDPOINT:
       "https://gaussdb.cn-north-4.myhuaweicloud.com",
@@ -116,12 +140,30 @@ test("config maps env vars into typed fields", () => {
     config.cloud.iamEndpoint,
     "https://iam.cn-north-4.myhuaweicloud.com",
   );
+  assert.equal(
+    config.cloud.kmsEndpoint,
+    "https://kms.cn-north-4.myhuaweicloud.com",
+  );
+  assert.equal(
+    config.cloud.csmsEndpoint,
+    "https://csms.cn-north-4.myhuaweicloud.com",
+  );
   assert.equal(config.limits.maxRows, 123);
   assert.equal(config.limits.maxColumns, 12);
   assert.equal(config.limits.maxStatementMs, 3000);
   assert.equal(config.limits.maxFieldChars, 999);
+  assert.equal(config.limits.maxResultBytes, 12345);
+  assert.equal(config.limits.maxBlobBytes, 2345);
+  assert.equal(config.limits.maxConcurrentQueries, 3);
+  assert.equal(config.limits.maxQueuedQueries, 4);
+  assert.equal(config.limits.queueTimeoutMs, 250);
   assert.equal(config.audit.logPath, `${os.homedir()}/audit.jsonl`);
   assert.equal(config.audit.includeRawSql, true);
+  assert.equal(config.security.mutationsEnabled, true);
+  assert.equal(config.security.dynamicTargetsEnabled, true);
+  assert.equal(config.security.requireTls, false);
+  assert.equal(config.security.approvalSecretPath, `${os.homedir()}/approval-secret`);
+  assert.equal(config.security.approvalTtlSeconds, 120);
   assert.equal(config.slowSqlSource.taurusApi.enabled, true);
   assert.equal(
     config.slowSqlSource.taurusApi.endpoint,
@@ -248,6 +290,23 @@ test("config supports AK/SK-only cloud discovery inputs", () => {
     config.cloud.iamEndpoint,
     "https://iam.cn-east-3.myhuaweicloud.com",
   );
+  assert.equal(
+    config.cloud.kmsEndpoint,
+    "https://kms.cn-east-3.myhuaweicloud.com",
+  );
+});
+
+test("config supports system credential store cloud credentials", () => {
+  const config = createConfigFromEnv({
+    TAURUSDB_CLOUD_REGION: "cn-east-3",
+    TAURUSDB_CLOUD_KEYCHAIN_SERVICE: "taurusdb-mcp/huaweicloud",
+    TAURUSDB_CLOUD_KEYCHAIN_ACCOUNT: "production",
+  });
+
+  assert.equal(config.cloud.accessKeyId, undefined);
+  assert.equal(config.cloud.secretAccessKey, undefined);
+  assert.equal(config.cloud.keychainService, "taurusdb-mcp/huaweicloud");
+  assert.equal(config.cloud.keychainAccount, "production");
 });
 
 test("config infers default datasource from minimal SQL template inputs", () => {
@@ -308,6 +367,11 @@ test("redactConfigForLog redacts sensitive keys recursively", () => {
     },
     limits: { maxRows: 1, maxColumns: 1, maxStatementMs: 1, maxFieldChars: 1 },
     audit: { logPath: "/tmp/audit.jsonl", includeRawSql: false },
+    security: {
+      mutationsEnabled: false,
+      dynamicTargetsEnabled: false,
+      approvalTtlSeconds: 300,
+    },
     slowSqlSource: {
       taurusApi: {
         enabled: true,

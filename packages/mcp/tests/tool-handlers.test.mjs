@@ -23,6 +23,7 @@ import {
   findTopSlowSqlTool,
   diagnoseConnectionSpikeTool,
   diagnoseLockContentionTool,
+  diagnoseReplicationLagTool,
   diagnoseSlowQueryTool,
   diagnoseStoragePressureTool,
 } from "../dist/tools/taurus/diagnostics.js";
@@ -366,7 +367,8 @@ function createDeps(engineOverrides = {}) {
         durationMs: 21,
       }),
       issueConfirmation: async () => ({
-        token: "ctok_restore_1",
+        request: "creq_restore_1",
+        requestId: "restore-1",
         issuedAt: 1,
         expiresAt: 301,
       }),
@@ -542,6 +544,18 @@ function createDeps(engineOverrides = {}) {
         recommendedActions: ["implement it"],
         limitations: ["pending"],
       }),
+      diagnoseReplicationLag: async () => ({
+        tool: "diagnose_replication_lag",
+        status: "not_applicable",
+        severity: "info",
+        summary: "no replica channel",
+        diagnosisWindow: { relative: "15m" },
+        rootCauseCandidates: [],
+        keyFindings: ["no channel"],
+        evidence: [],
+        recommendedActions: ["select a replica endpoint"],
+        limitations: ["point-in-time"],
+      }),
       diagnoseStoragePressure: async (input) => ({
         tool: "diagnose_storage_pressure",
         status: "inconclusive",
@@ -673,7 +687,7 @@ test("execute_readonly_sql returns blocked response when guardrail blocks SQL", 
   assert.equal(result.metadata.sql_hash, "sql_hash_blocked");
 });
 
-test("execute_readonly_sql returns confirmation_required when token is missing", async () => {
+test("execute_readonly_sql returns an external approval request when approval is missing", async () => {
   const deps = createDeps({
     inspectSql: async () => ({
       action: "confirm",
@@ -693,8 +707,9 @@ test("execute_readonly_sql returns confirmation_required when token is missing",
       },
     }),
     handleConfirmation: async () => ({
-      status: "token_issued",
-      token: "ctok_123",
+      status: "approval_required",
+      request: "creq_123",
+      requestId: "request-123",
       issuedAt: 1,
       expiresAt: 2,
     }),
@@ -703,11 +718,12 @@ test("execute_readonly_sql returns confirmation_required when token is missing",
   const result = await executeReadonlySqlTool.handler({ sql: "DELETE FROM orders WHERE id = 1" }, deps, context);
   assert.equal(result.ok, false);
   assert.equal(result.error.code, ErrorCode.CONFIRMATION_REQUIRED);
-  assert.equal(result.data.confirmation_token, "ctok_123");
+  assert.equal(result.data.approval_request, "creq_123");
+  assert.equal(result.data.request_id, "request-123");
   assert.equal(result.data.sql_hash, "sql_hash_confirm");
 });
 
-test("execute_readonly_sql executes when confirmation token validates", async () => {
+test("execute_readonly_sql executes when an external approval token validates", async () => {
   const calls = [];
   const deps = createDeps({
     inspectSql: async () => ({
@@ -755,7 +771,7 @@ test("execute_readonly_sql executes when confirmation token validates", async ()
   });
 
   const result = await executeReadonlySqlTool.handler(
-    { sql: "SELECT * FROM orders", confirmation_token: "ctok_ok" },
+    { sql: "SELECT * FROM orders", approval_token: "ctok_ok" },
     deps,
     context,
   );
@@ -828,7 +844,10 @@ test("query tools execute the normalized SQL inspected by guardrail", async () =
   await explainSqlTool.handler({ sql: "SELECT 1 /*! executable comment */" }, deps, context);
 
   assert.deepEqual(executed, [
-    ["readonly", normalizedSql],
+    [
+      "readonly",
+      normalizedSql,
+    ],
     ["explain", normalizedSql],
   ]);
 });
@@ -1239,7 +1258,7 @@ test("list_cloud_taurus_instances returns structured cloud instance list", async
   }
 });
 
-test("select_cloud_taurus_instance prefers public host when binding runtime datasource", async () => {
+test("select_cloud_taurus_instance prefers private host when binding runtime datasource", async () => {
   const deps = createDeps({
     getDefaultDataSource: async () => "taurus_mcp",
     close: async () => {},
@@ -1281,9 +1300,9 @@ test("select_cloud_taurus_instance prefers public host when binding runtime data
 
     assert.equal(result.ok, true);
     assert.equal(result.data.bound_datasource, "taurus_mcp");
-    assert.equal(result.data.bound_host, "1.2.3.4");
+    assert.equal(result.data.bound_host, "10.0.0.8");
     assert.deepEqual(deps.profileLoader.getRuntimeTarget("taurus_mcp"), {
-      host: "1.2.3.4",
+      host: "10.0.0.8",
       port: 3306,
       instanceId: "instance-1",
       nodeId: "node-1",
@@ -1307,13 +1326,13 @@ test("restore_recycle_bin_table requires confirmation before restore", async () 
 
   assert.equal(first.ok, false);
   assert.equal(first.error.code, ErrorCode.CONFIRMATION_REQUIRED);
-  assert.equal(first.data.confirmation_token, "ctok_restore_1");
+  assert.equal(first.data.approval_request, "creq_restore_1");
 
   const second = await restoreRecycleBinTableTool.handler(
     {
       recycle_table: "orders@123",
       method: "native_restore",
-      confirmation_token: "ctok_restore_1",
+      approval_token: "ctok_restore_1",
     },
     deps,
     context,
@@ -1353,7 +1372,7 @@ test("execute_sql returns confirmation_invalid when token validation fails", asy
   });
 
   const result = await executeSqlTool.handler(
-    { sql: "DELETE FROM orders WHERE id = 1", confirmation_token: "ctok_bad" },
+    { sql: "DELETE FROM orders WHERE id = 1", approval_token: "ctok_bad" },
     deps,
     context,
   );
@@ -1481,6 +1500,15 @@ test("diagnostic tool handlers return structured diagnostic payloads", async () 
   assert.equal(lockContention.ok, true);
   assert.equal(lockContention.data.tool, "diagnose_lock_contention");
   assert.equal(lockContention.data.suspicious_entities.tables[0].table, "orders");
+
+  const replicationLag = await diagnoseReplicationLagTool.handler(
+    { channel: "default" },
+    deps,
+    context,
+  );
+  assert.equal(replicationLag.ok, true);
+  assert.equal(replicationLag.data.tool, "diagnose_replication_lag");
+  assert.equal(replicationLag.data.status, "not_applicable");
 
   const storagePressure = await diagnoseStoragePressureTool.handler(
     { scope: "table", table: "orders" },

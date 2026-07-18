@@ -85,3 +85,43 @@ test("guardrail confirms update with WHERE and keeps requiresExplain off", async
   assert.equal(decision.requiresConfirmation, true);
   assert.ok(decision.reasonCodes.includes("R006"));
 });
+
+test("guardrail blocks SQL that references a different database", async () => {
+  const guardrail = createGuardrail();
+  const decision = await guardrail.inspect({
+    toolName: "execute_readonly_sql",
+    sql: "SELECT id FROM tenant_b.users LIMIT 1",
+    context: makeContext({ database: "tenant_a" }),
+  });
+  assert.equal(decision.action, "block");
+  assert.ok(decision.reasonCodes.includes("D002"));
+});
+
+test("guardrail conservatively masks aliases sourced from sensitive columns", async () => {
+  const guardrail = createGuardrail();
+  const decision = await guardrail.inspect({
+    toolName: "execute_readonly_sql",
+    sql: "SELECT email AS contact FROM users LIMIT 1",
+    context: makeContext(),
+  });
+  assert.equal(decision.action, "allow");
+  assert.equal(decision.runtimeLimits.maskAllColumns, true);
+});
+
+test("guardrail accepts a quoted hyphenated database only when it matches the bound target", async () => {
+  const guardrail = createGuardrail();
+  const allowed = await guardrail.inspect({
+    toolName: "execute_readonly_sql",
+    sql: "SELECT id FROM `db-1`.`orders` LIMIT 1",
+    context: makeContext({ database: "db-1" }),
+  });
+  assert.equal(allowed.action, "allow");
+
+  const blocked = await guardrail.inspect({
+    toolName: "execute_readonly_sql",
+    sql: "SELECT id FROM `db-2`.`orders` LIMIT 1",
+    context: makeContext({ database: "db-1" }),
+  });
+  assert.equal(blocked.action, "block");
+  assert.ok(blocked.reasonCodes.includes("D002"));
+});

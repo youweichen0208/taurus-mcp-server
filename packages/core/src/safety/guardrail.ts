@@ -2,8 +2,10 @@ import type { DatabaseEngine } from "../auth/sql-profile-loader.js";
 import type { SessionContext } from "../context/session-context.js";
 import { createSqlParser, type SqlParser } from "./parser/index.js";
 import { classifySql } from "./sql-classifier.js";
+import { hasSensitiveColumnReference } from "./redaction.js";
 import {
   validateStaticRules,
+  validateDatabaseScope,
   validateToolScope,
   type RiskLevel,
   type ValidationResult,
@@ -15,6 +17,9 @@ export interface GuardrailRuntimeLimits {
   maxRows: number;
   maxColumns: number;
   maxFieldChars: number;
+  maxResultBytes: number;
+  maxBlobBytes: number;
+  maskAllColumns: boolean;
 }
 
 export interface GuardrailDecision {
@@ -110,6 +115,9 @@ function buildBaseDecision(
       maxRows: input.context.limits.maxRows,
       maxColumns: input.context.limits.maxColumns,
       maxFieldChars: input.context.limits.maxFieldChars ?? 2048,
+      maxResultBytes: input.context.limits.maxResultBytes ?? 1048576,
+      maxBlobBytes: input.context.limits.maxBlobBytes ?? 65536,
+      maskAllColumns: false,
     },
   };
 }
@@ -120,6 +128,7 @@ function mergeDecision(
   sqlHash: string,
   validations: ValidationResult[],
   requiresExplain: boolean,
+  maskAllColumns = false,
 ): GuardrailDecision {
   let action: GuardrailDecision["action"] = "allow";
   let riskLevel: RiskLevel = "low";
@@ -133,7 +142,7 @@ function mergeDecision(
     riskHints.push(...validation.riskHints);
   }
 
-  return buildBaseDecision(
+  const decision = buildBaseDecision(
     input,
     normalizedSql,
     sqlHash,
@@ -143,6 +152,8 @@ function mergeDecision(
     riskHints,
     requiresExplain,
   );
+  decision.runtimeLimits.maskAllColumns = maskAllColumns;
+  return decision;
 }
 
 export class GuardrailImpl implements Guardrail {
@@ -173,15 +184,48 @@ export class GuardrailImpl implements Guardrail {
     const cls = classifySql(parseResult.ast, normalized, input.context.engine);
     const d1 = validateToolScope(input.toolName, cls);
     if (d1.action === "block") {
-      return mergeDecision(input, normalized.normalizedSql, normalized.sqlHash, [d1], false);
+      return mergeDecision(
+        input,
+        normalized.normalizedSql,
+        normalized.sqlHash,
+        [d1],
+        false,
+        hasSensitiveColumnReference(cls.referencedColumns),
+      );
+    }
+
+    const databaseScope = validateDatabaseScope(cls, input.context.database);
+    if (databaseScope.action === "block") {
+      return mergeDecision(
+        input,
+        normalized.normalizedSql,
+        normalized.sqlHash,
+        [d1, databaseScope],
+        false,
+        hasSensitiveColumnReference(cls.referencedColumns),
+      );
     }
 
     const d2 = validateStaticRules(cls);
     if (d2.action === "block") {
-      return mergeDecision(input, normalized.normalizedSql, normalized.sqlHash, [d1, d2], false);
+      return mergeDecision(
+        input,
+        normalized.normalizedSql,
+        normalized.sqlHash,
+        [d1, databaseScope, d2],
+        false,
+        hasSensitiveColumnReference(cls.referencedColumns),
+      );
     }
 
-    return mergeDecision(input, normalized.normalizedSql, normalized.sqlHash, [d1, d2], false);
+    return mergeDecision(
+      input,
+      normalized.normalizedSql,
+      normalized.sqlHash,
+      [d1, databaseScope, d2],
+      false,
+      hasSensitiveColumnReference(cls.referencedColumns),
+    );
   }
 }
 

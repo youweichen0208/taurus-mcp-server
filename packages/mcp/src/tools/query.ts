@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ErrorCode, formatBlocked, formatConfirmationRequired, formatError, formatSuccess, type ToolResponse } from "../utils/formatter.js";
 import { formatToolError } from "./error-handling.js";
-import type { ToolDefinition } from "./registry.js";
+import type { ToolDefinition, ToolInvokeContext } from "./registry.js";
 import {
   asOptionalString,
   asRequiredString,
@@ -39,31 +39,32 @@ async function ensureConfirmation(
   decision: GuardrailDecision,
   ctx: SessionContext,
   deps: Parameters<ToolDefinition["handler"]>[1],
-  taskId: string,
-  confirmationToken: string | undefined,
+  invokeContext: ToolInvokeContext,
+  approvalToken: string | undefined,
 ): Promise<ToolResponse | undefined> {
   if (!decision.requiresConfirmation) {
     return undefined;
   }
 
-  const responseMetadata = metadata(taskId, {
+  const responseMetadata = metadata(invokeContext.taskId, {
     sql_hash: decision.sqlHash,
     statement_type: statementTypeFromSql(decision.normalizedSql),
   });
 
-  if (confirmationToken) {
+  if (approvalToken) {
     const validation = await deps.engine.validateConfirmation(
-      confirmationToken,
+      approvalToken,
       decision.normalizedSql,
       ctx,
     );
     if (validation.valid) {
+      invokeContext.approvalActor = validation.actor;
       return undefined;
     }
     return formatError({
       code: ErrorCode.CONFIRMATION_INVALID,
-      message: validation.reason ?? "Confirmation token validation failed.",
-      summary: "The provided confirmation token is invalid for this SQL statement.",
+      message: validation.reason ?? "Approval token validation failed.",
+      summary: "The provided external approval is invalid for this SQL statement.",
       metadata: responseMetadata,
       details: {
         reason_codes: validation.reasonCodes,
@@ -73,9 +74,10 @@ async function ensureConfirmation(
   }
 
   const outcome = await deps.engine.handleConfirmation(decision, ctx);
-  if (outcome.status === "token_issued") {
+  if (outcome.status === "approval_required") {
     return formatConfirmationRequired({
-      confirmationToken: outcome.token,
+      approvalRequest: outcome.request,
+      requestId: outcome.requestId,
       metadata: responseMetadata,
       riskLevel: decision.riskLevel,
       sqlHash: decision.sqlHash,
@@ -91,7 +93,7 @@ export const executeReadonlySqlTool: ToolDefinition = {
   inputSchema: {
     ...contextInputShape,
     sql: requiredSqlSchema("Readonly SQL to execute."),
-    confirmation_token: optionalTokenSchema(),
+    approval_token: optionalTokenSchema(),
   },
   async handler(input, deps, context): Promise<ToolResponse> {
     const sql = asRequiredString(input.sql, "sql");
@@ -121,8 +123,8 @@ export const executeReadonlySqlTool: ToolDefinition = {
         decision,
         ctx,
         deps,
-        context.taskId,
-        asOptionalString(input.confirmation_token, "confirmation_token"),
+        context,
+        asOptionalString(input.approval_token, "approval_token"),
       );
       if (confirmationResponse) {
         return confirmationResponse;
@@ -133,6 +135,9 @@ export const executeReadonlySqlTool: ToolDefinition = {
         maxRows: decision.runtimeLimits.maxRows,
         maxColumns: decision.runtimeLimits.maxColumns,
         maxFieldChars: decision.runtimeLimits.maxFieldChars,
+        maxResultBytes: decision.runtimeLimits.maxResultBytes,
+        maxBlobBytes: decision.runtimeLimits.maxBlobBytes,
+        maskAllColumns: decision.runtimeLimits.maskAllColumns,
       });
 
       return formatSuccess(
@@ -220,7 +225,7 @@ export const executeSqlTool: ToolDefinition = {
   inputSchema: {
     ...contextInputShape,
     sql: requiredSqlSchema("Mutation SQL to execute."),
-    confirmation_token: optionalTokenSchema(),
+    approval_token: optionalTokenSchema(),
   },
   async handler(input, deps, context): Promise<ToolResponse> {
     const sql = asRequiredString(input.sql, "sql");
@@ -250,8 +255,8 @@ export const executeSqlTool: ToolDefinition = {
         decision,
         ctx,
         deps,
-        context.taskId,
-        asOptionalString(input.confirmation_token, "confirmation_token"),
+        context,
+        asOptionalString(input.approval_token, "approval_token"),
       );
       if (confirmationResponse) {
         return confirmationResponse;
@@ -292,5 +297,5 @@ function optionalTokenSchema() {
     .trim()
     .min(1)
     .optional()
-    .describe("Confirmation token returned by a previous guarded call when required.");
+    .describe("Externally signed approval token produced by `taurusdb-mcp approve`.");
 }

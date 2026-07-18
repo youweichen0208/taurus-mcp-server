@@ -101,3 +101,49 @@ test("result redactor hashes sensitive fields when strategy is hash", () => {
   assert.match(result.rows[0][0], /^\[HASH:[a-f0-9]{12}\]$/);
   assert.equal(result.rows[0][0], result.rows[1][0]);
 });
+
+test("result redactor caps binary fields and the serialized result byte budget", () => {
+  const redactor = createResultRedactor();
+  const result = redactor.redact(
+    {
+      columns: [{ name: "id" }, { name: "payload" }],
+      rows: [
+        [1, Buffer.alloc(100, 1)],
+        [2, "second row must exceed the result budget"],
+      ],
+      rowCount: 2,
+    },
+    {
+      maxRows: 10,
+      maxColumns: 10,
+      maxFieldChars: 100,
+      maxBlobBytes: 16,
+      maxResultBytes: 140,
+    },
+  );
+
+  assert.match(result.rows[0][1], /BINARY:100 bytes; omitted/);
+  assert.equal(result.fieldTruncated, true);
+  assert.equal(result.byteTruncated, true);
+  assert.equal(result.rowTruncated, true);
+  assert.equal(result.returnedBytes <= 140, true);
+});
+
+test("result redactor can conservatively mask all output aliases", () => {
+  const redactor = createResultRedactor();
+  const result = redactor.redact(
+    {
+      columns: [{ name: "contact" }],
+      rows: [["alice@example.com"]],
+      rowCount: 1,
+    },
+    {
+      maxRows: 10,
+      maxColumns: 10,
+      maxFieldChars: 100,
+      maskAllColumns: true,
+    },
+  );
+  assert.deepEqual(result.rows, [["***"]]);
+  assert.deepEqual(result.redactedColumns, ["contact"]);
+});

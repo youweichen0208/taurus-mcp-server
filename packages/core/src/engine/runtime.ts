@@ -2,7 +2,7 @@ import { UnsupportedFeatureError } from "../capability/types.js";
 import type { FeatureMatrix } from "../capability/types.js";
 import type { SessionContext } from "../context/session-context.js";
 import type { CancelResult, ExplainResult, MutationOptions, MutationResult, QueryResult, QueryStatus, ReadonlyOptions } from "../executor/sql-executor.js";
-import type { ConfirmationToken, ConfirmationValidationResult } from "../safety/confirmation-store.js";
+import type { ConfirmationRequest, ConfirmationValidationResult } from "../safety/confirmation-store.js";
 import { InMemoryConfirmationStore } from "../safety/confirmation-store.js";
 import type { GuardrailDecision } from "../safety/guardrail.js";
 import {
@@ -18,6 +18,7 @@ import {
 import { buildListRecycleBinSql, buildRestoreRecycleBinTableSql, recycleBinMutationOptions, recycleBinReadonlyOptions, type RestoreRecycleBinTableInput } from "../taurus/recycle-bin.js";
 import type { ConfirmationOutcome, EnhancedExplainResult, IssueConfirmationInput, TaurusDBEngine } from "../engine.js";
 import { normalizeSql, sqlHash } from "../utils/hash.js";
+import { quoteMysqlIdentifier } from "../utils/mysql-identifier.js";
 
 function resolveConfirmationSql(input: IssueConfirmationInput): {
   normalized: string;
@@ -56,15 +57,6 @@ function hasSqlPattern(sql: string, pattern: RegExp): boolean {
 }
 
 const NO_FLASHBACK_VIEW_PATTERN = /No view available for provided TIMESTAMP/i;
-const SIMPLE_IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_$]*$/;
-
-function quoteIdentifier(identifier: string): string {
-  if (!SIMPLE_IDENTIFIER_PATTERN.test(identifier)) {
-    throw new Error(`Invalid identifier: "${identifier}".`);
-  }
-  return `\`${identifier}\``;
-}
-
 function firstRowAsObject(result: QueryResult): Record<string, unknown> | undefined {
   if (result.rows.length === 0) {
     return undefined;
@@ -157,7 +149,10 @@ async function buildFlashbackNoViewError(
     try {
       const where = normalizeFlashbackWhereClause(input.where);
       const updatedAtResult = await engine.executor.executeReadonly(
-        `SELECT ${quoteIdentifier("updated_at")} FROM ${quoteIdentifier(database)}.${quoteIdentifier(input.table)} WHERE (${where}) LIMIT 1`,
+        `SELECT ${quoteMysqlIdentifier("updated_at")} FROM ${quoteMysqlIdentifier(
+          database,
+          "database",
+        )}.${quoteMysqlIdentifier(input.table, "table")} WHERE (${where}) LIMIT 1`,
         ctx,
         { maxRows: 1, maxColumns: 1, maxFieldChars: 128 },
       );
@@ -565,7 +560,6 @@ export async function restoreRecycleBinTable(
       ctx,
       {
         ...recycleBinMutationOptions(opts),
-        allowReadonlyFallbackForMutations: true,
       },
     );
   }
@@ -585,7 +579,7 @@ export async function cancelQuery(
 export async function issueConfirmation(
   engine: TaurusDBEngine,
   input: IssueConfirmationInput,
-  ): Promise<ConfirmationToken> {
+  ): Promise<ConfirmationRequest> {
     const resolved = resolveConfirmationSql(input);
     return engine.confirmationStore.issue({
       sqlHash: resolved.hash,
@@ -614,7 +608,7 @@ export async function handleConfirmation(
       return { status: "confirmed" };
     }
 
-    const token = await engine.confirmationStore.issue({
+    const approval = await engine.confirmationStore.issue({
       sqlHash: decision.sqlHash,
       normalizedSql: decision.normalizedSql,
       context: ctx,
@@ -622,10 +616,11 @@ export async function handleConfirmation(
     });
 
     return {
-      status: "token_issued",
-      token: token.token,
-      issuedAt: token.issuedAt,
-      expiresAt: token.expiresAt,
+      status: "approval_required",
+      request: approval.request,
+      requestId: approval.requestId,
+      issuedAt: approval.issuedAt,
+      expiresAt: approval.expiresAt,
     };
   }
 

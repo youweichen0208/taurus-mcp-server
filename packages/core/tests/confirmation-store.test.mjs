@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { InMemoryConfirmationStore } from "../dist/safety/confirmation-store.js";
+import {
+  InMemoryConfirmationStore,
+  signApprovalRequest,
+} from "../dist/safety/confirmation-store.js";
 import { normalizeSql, sqlHash } from "../dist/utils/hash.js";
+
+const APPROVAL_SECRET = "test-approval-secret-that-is-at-least-32-bytes";
 
 function makeContext(overrides = {}) {
   return {
@@ -31,17 +36,19 @@ function makeIssueInput(sql, ctx = makeContext()) {
   };
 }
 
-test("confirmation store issues token with expected shape", async () => {
+test("confirmation store issues an unsigned external approval request", async () => {
   let now = 1_700_000_000_000;
   const store = new InMemoryConfirmationStore({
     now: () => now,
     cleanupIntervalMs: 0,
+    approvalSecret: APPROVAL_SECRET,
     randomBytesFn: () => Buffer.alloc(32, 1),
   });
 
   const issued = await store.issue(makeIssueInput("UPDATE users SET status='x' WHERE id=1"));
 
-  assert.match(issued.token, /^ctok_[A-Za-z0-9_-]+$/);
+  assert.match(issued.request, /^creq_[A-Za-z0-9_-]+$/);
+  assert.equal(typeof issued.requestId, "string");
   assert.equal(issued.issuedAt, now);
   assert.equal(issued.expiresAt, now + 300_000);
 });
@@ -51,14 +58,17 @@ test("confirmation store validates token and enforces one-time usage", async () 
   const ctx = makeContext();
   const store = new InMemoryConfirmationStore({
     cleanupIntervalMs: 0,
+    approvalSecret: APPROVAL_SECRET,
   });
 
   const issued = await store.issue(makeIssueInput(sql, ctx));
-  const first = await store.validate(issued.token, sql, ctx);
+  const token = signApprovalRequest(issued.request, "operator@example.com", APPROVAL_SECRET);
+  const first = await store.validate(token, sql, ctx);
   assert.equal(first.valid, true);
+  assert.equal(first.actor, "operator@example.com");
   assert.equal(first.action, "allow");
 
-  const second = await store.validate(issued.token, sql, ctx);
+  const second = await store.validate(token, sql, ctx);
   assert.equal(second.valid, false);
   assert.equal(second.action, "block");
   assert.deepEqual(second.reasonCodes, ["CF005"]);
@@ -67,6 +77,7 @@ test("confirmation store validates token and enforces one-time usage", async () 
 test("confirmation store rejects unknown token", async () => {
   const store = new InMemoryConfirmationStore({
     cleanupIntervalMs: 0,
+    approvalSecret: APPROVAL_SECRET,
   });
 
   const result = await store.validate("ctok_missing", "SELECT 1", makeContext());
@@ -79,6 +90,7 @@ test("confirmation store rejects expired token", async () => {
   const store = new InMemoryConfirmationStore({
     now: () => now,
     cleanupIntervalMs: 0,
+    approvalSecret: APPROVAL_SECRET,
     randomBytesFn: () => Buffer.alloc(32, 2),
   });
 
@@ -86,10 +98,11 @@ test("confirmation store rejects expired token", async () => {
     ...makeIssueInput("DELETE FROM users WHERE id=1"),
     ttlSeconds: 1,
   });
+  const token = signApprovalRequest(issued.request, "operator", APPROVAL_SECRET);
 
   now += 1500;
   const result = await store.validate(
-    issued.token,
+    token,
     "DELETE FROM users WHERE id=1",
     makeContext(),
   );
@@ -100,11 +113,13 @@ test("confirmation store rejects expired token", async () => {
 test("confirmation store rejects sql hash mismatch", async () => {
   const store = new InMemoryConfirmationStore({
     cleanupIntervalMs: 0,
+    approvalSecret: APPROVAL_SECRET,
   });
 
   const issued = await store.issue(makeIssueInput("UPDATE users SET status='x' WHERE id=1"));
+  const token = signApprovalRequest(issued.request, "operator", APPROVAL_SECRET);
   const result = await store.validate(
-    issued.token,
+    token,
     "UPDATE users SET status='y' WHERE id=2",
     makeContext(),
   );
@@ -116,13 +131,15 @@ test("confirmation store rejects sql hash mismatch", async () => {
 test("confirmation store rejects datasource/database mismatch", async () => {
   const store = new InMemoryConfirmationStore({
     cleanupIntervalMs: 0,
+    approvalSecret: APPROVAL_SECRET,
   });
   const issued = await store.issue(
     makeIssueInput("DELETE FROM users WHERE id=1", makeContext({ datasource: "prod", database: "app" })),
   );
+  const token = signApprovalRequest(issued.request, "operator", APPROVAL_SECRET);
 
   const mismatchDatasource = await store.validate(
-    issued.token,
+    token,
     "DELETE FROM users WHERE id=1",
     makeContext({ datasource: "staging", database: "app" }),
   );
@@ -130,7 +147,7 @@ test("confirmation store rejects datasource/database mismatch", async () => {
   assert.deepEqual(mismatchDatasource.reasonCodes, ["CF004"]);
 
   const mismatchDatabase = await store.validate(
-    issued.token,
+    token,
     "DELETE FROM users WHERE id=1",
     makeContext({ datasource: "prod", database: "app2" }),
   );
@@ -138,18 +155,61 @@ test("confirmation store rejects datasource/database mismatch", async () => {
   assert.deepEqual(mismatchDatabase.reasonCodes, ["CF004"]);
 });
 
+test("confirmation store rejects a token after the cloud target changes", async () => {
+  const store = new InMemoryConfirmationStore({
+    cleanupIntervalMs: 0,
+    approvalSecret: APPROVAL_SECRET,
+  });
+  const originalContext = makeContext({
+    host: "10.0.0.8",
+    port: 3306,
+    projectId: "project-1",
+    instanceId: "instance-1",
+    nodeId: "node-1",
+  });
+  const issued = await store.issue(
+    makeIssueInput("DELETE FROM users WHERE id=1", originalContext),
+  );
+  const token = signApprovalRequest(issued.request, "operator", APPROVAL_SECRET);
+  const result = await store.validate(
+    token,
+    "DELETE FROM users WHERE id=1",
+    { ...originalContext, instanceId: "instance-2", host: "10.0.0.9" },
+  );
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.reasonCodes, ["CF004"]);
+});
+
 test("confirmation store revoke invalidates token", async () => {
   const store = new InMemoryConfirmationStore({
     cleanupIntervalMs: 0,
+    approvalSecret: APPROVAL_SECRET,
   });
   const issued = await store.issue(makeIssueInput("UPDATE users SET status='x' WHERE id=1"));
 
-  await store.revoke(issued.token);
+  const token = signApprovalRequest(issued.request, "operator", APPROVAL_SECRET);
+  await store.revoke(issued.requestId);
   const result = await store.validate(
-    issued.token,
+    token,
     "UPDATE users SET status='x' WHERE id=1",
     makeContext(),
   );
   assert.equal(result.valid, false);
   assert.deepEqual(result.reasonCodes, ["CF001"]);
+});
+
+test("confirmation store rejects tokens signed by a different approver secret", async () => {
+  const store = new InMemoryConfirmationStore({
+    cleanupIntervalMs: 0,
+    approvalSecret: APPROVAL_SECRET,
+  });
+  const issued = await store.issue(makeIssueInput("DELETE FROM users WHERE id=1"));
+  const token = signApprovalRequest(
+    issued.request,
+    "attacker",
+    "different-secret-that-is-also-at-least-32-bytes",
+  );
+  const result = await store.validate(token, "DELETE FROM users WHERE id=1", makeContext());
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.reasonCodes, ["CF007"]);
 });

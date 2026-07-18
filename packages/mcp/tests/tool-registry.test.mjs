@@ -42,33 +42,28 @@ test("tool registry registers default MCP tools through legacy tool API", async 
     calls.map((call) => call.name),
     [
       "ping",
+      "list_data_sources",
       "list_databases",
       "list_tables",
       "describe_table",
       "show_processlist",
       "execute_readonly_sql",
       "explain_sql",
-      "execute_sql",
       "get_kernel_info",
       "list_taurus_features",
-      "set_cloud_region",
       "get_session_binding",
-      "begin_sql_login",
-      "clear_sql_credentials",
-      "set_default_database",
       "list_cloud_taurus_instances",
-      "select_cloud_taurus_instance",
       "diagnose_service_latency",
       "diagnose_db_hotspot",
       "find_top_slow_sql",
       "diagnose_slow_query",
       "diagnose_connection_spike",
       "diagnose_lock_contention",
+      "diagnose_replication_lag",
       "diagnose_storage_pressure",
       "explain_sql_enhanced",
       "flashback_query",
       "list_recycle_bin",
-      "restore_recycle_bin_table",
     ],
   );
 
@@ -85,10 +80,29 @@ test("tool registry registers default MCP tools through legacy tool API", async 
   assert.match(result.structuredContent.metadata.task_id, /^task_/);
 });
 
-test("tool registry exposes execute_sql by default", () => {
+test("tool registry hides mutations and dynamic targets by default", () => {
   const recorder = createLegacyToolServerRecorder();
   registerTools(recorder.server, { pingResponse: "pong" }, createConfigFromEnv({}));
+  assert.equal(recorder.calls.some((call) => call.name === "execute_sql"), false);
+  assert.equal(recorder.calls.some((call) => call.name === "restore_recycle_bin_table"), false);
+  assert.equal(recorder.calls.some((call) => call.name === "set_cloud_region"), false);
+  assert.equal(recorder.calls.some((call) => call.name === "begin_sql_login"), false);
+});
+
+test("tool registry exposes privileged tools only with explicit server flags", () => {
+  const recorder = createLegacyToolServerRecorder();
+  registerTools(
+    recorder.server,
+    { pingResponse: "pong" },
+    createConfigFromEnv({
+      TAURUSDB_ENABLE_MUTATIONS: "true",
+      TAURUSDB_ENABLE_DYNAMIC_TARGETS: "true",
+    }),
+  );
   assert.equal(recorder.calls.some((call) => call.name === "execute_sql"), true);
+  assert.equal(recorder.calls.some((call) => call.name === "restore_recycle_bin_table"), true);
+  assert.equal(recorder.calls.some((call) => call.name === "set_cloud_region"), true);
+  assert.equal(recorder.calls.some((call) => call.name === "begin_sql_login"), true);
 });
 
 test("tool registry registers diagnostics tools by default", () => {
@@ -100,7 +114,7 @@ test("tool registry registers diagnostics tools by default", () => {
   );
 });
 
-test("tool registry registers cloud instance discovery tools even when cloud config is absent", () => {
+test("tool registry keeps cloud discovery readonly and gates instance selection", () => {
   const disabled = createLegacyToolServerRecorder();
   registerTools(disabled.server, { pingResponse: "pong" }, createConfigFromEnv({}));
   assert.equal(
@@ -109,7 +123,7 @@ test("tool registry registers cloud instance discovery tools even when cloud con
   );
   assert.equal(
     disabled.calls.some((call) => call.name === "select_cloud_taurus_instance"),
-    true,
+    false,
   );
 
   const enabled = createLegacyToolServerRecorder();
@@ -120,6 +134,7 @@ test("tool registry registers cloud instance discovery tools even when cloud con
       TAURUSDB_CLOUD_REGION: "cn-north-4",
       TAURUSDB_CLOUD_ACCESS_KEY_ID: "ak-1",
       TAURUSDB_CLOUD_SECRET_ACCESS_KEY: "sk-1",
+      TAURUSDB_ENABLE_DYNAMIC_TARGETS: "true",
     }),
   );
   assert.equal(
@@ -154,11 +169,74 @@ test("tool registry registers tools through registerTool API when available", as
   assert.equal(calls[0].name, "custom_tool");
   assert.equal(calls[0].config.description, "custom");
   assert.deepEqual(calls[0].config.inputSchema, {});
+  assert.equal(calls[0].config.annotations.readOnlyHint, true);
+  assert.ok(calls[0].config.outputSchema.ok);
 
   const result = await calls[0].handler({});
   assert.equal(result.isError, false);
   assert.equal(result.structuredContent.ok, true);
   assert.match(result.structuredContent.metadata.task_id, /^task_/);
+});
+
+test("tool registry writes actor and target context to the audit sink", async () => {
+  const { server, calls } = createModernToolServerRecorder();
+  const events = [];
+  const config = createConfigFromEnv({
+    TAURUSDB_DEFAULT_DATASOURCE: "prod",
+    TAURUSDB_CLOUD_PROJECT_ID: "project-1",
+    TAURUSDB_CLOUD_INSTANCE_ID: "instance-1",
+  });
+  registerTools(
+    server,
+    {
+      config,
+      profileLoader: {
+        async getDefault() { return "prod"; },
+        async get() {
+          return {
+            name: "prod",
+            engine: "mysql",
+            host: "10.0.0.8",
+            port: 3306,
+            database: "orders",
+            instanceId: "instance-1",
+          };
+        },
+        getRuntimeTarget() { return undefined; },
+      },
+      auditWriter: {
+        async write(event) { events.push(event); },
+        async close() {},
+      },
+    },
+    config,
+    [{
+      name: "execute_sql",
+      description: "mutation",
+      inputSchema: {},
+      async handler(_input, _deps, context) {
+        context.approvalActor = "operator@example.com";
+        return {
+          ok: true,
+          summary: "done",
+          data: {},
+          metadata: {
+            task_id: context.taskId,
+            sql_hash: "sha256:abc",
+          },
+        };
+      },
+    }],
+  );
+  const result = await calls[0].handler({});
+  assert.equal(result.isError, false);
+  assert.equal(calls[0].config.annotations.readOnlyHint, false);
+  assert.equal(calls[0].config.annotations.destructiveHint, true);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].actor, "operator@example.com");
+  assert.equal(events[0].host, "10.0.0.8");
+  assert.equal(events[0].instance_id, "instance-1");
+  assert.equal(events[0].sql_hash, "sha256:abc");
 });
 
 test("tool registry wraps unhandled errors", async () => {

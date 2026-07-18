@@ -17,6 +17,9 @@ export interface RedactionPolicy {
   maxRows: number;
   maxColumns: number;
   maxFieldChars: number;
+  maxResultBytes?: number;
+  maxBlobBytes?: number;
+  maskAllColumns?: boolean;
   sensitiveColumns?: Iterable<string>;
   sensitiveStrategy?: SensitiveStrategy;
 }
@@ -30,6 +33,8 @@ export interface RedactedQueryResult {
   rowTruncated: boolean;
   columnTruncated: boolean;
   fieldTruncated: boolean;
+  byteTruncated: boolean;
+  returnedBytes: number;
   redactedColumns: string[];
   droppedColumns: string[];
   truncatedColumns: string[];
@@ -42,6 +47,8 @@ export interface ResultRedactor {
 const DEFAULT_MAX_ROWS = 200;
 const DEFAULT_MAX_COLUMNS = 50;
 const DEFAULT_MAX_FIELD_CHARS = 2048;
+const DEFAULT_MAX_RESULT_BYTES = 1048576;
+const DEFAULT_MAX_BLOB_BYTES = 65536;
 const DEFAULT_SENSITIVE_STRATEGY: SensitiveStrategy = "mask";
 
 const SENSITIVE_COLUMN_PATTERNS = [
@@ -106,6 +113,15 @@ function isSensitiveColumn(name: string, explicitSensitive: Set<string>): boolea
   return SENSITIVE_COLUMN_PATTERNS.some((pattern) => pattern.test(base));
 }
 
+export function hasSensitiveColumnReference(columns: Iterable<string>): boolean {
+  for (const column of columns) {
+    if (isSensitiveColumn(column, new Set())) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function maskValue(columnName: string, value: unknown): unknown {
   if (value === null || value === undefined) {
     return value;
@@ -143,7 +159,20 @@ function hashValue(value: unknown): string {
 function truncateFieldValue(
   value: unknown,
   maxFieldChars: number,
+  maxBlobBytes: number,
 ): { value: unknown; truncated: boolean } {
+  if (Buffer.isBuffer(value)) {
+    if (value.byteLength > maxBlobBytes) {
+      return {
+        value: `[BINARY:${value.byteLength} bytes; omitted by max_blob_bytes]`,
+        truncated: true,
+      };
+    }
+    return {
+      value: `[BINARY:${value.byteLength} bytes;base64:${value.toString("base64")}]`,
+      truncated: false,
+    };
+  }
   if (typeof value !== "string") {
     return { value, truncated: false };
   }
@@ -161,6 +190,11 @@ class DefaultResultRedactor implements ResultRedactor {
     const maxRows = asPositiveInt(policy.maxRows, DEFAULT_MAX_ROWS);
     const maxColumns = asPositiveInt(policy.maxColumns, DEFAULT_MAX_COLUMNS);
     const maxFieldChars = asPositiveInt(policy.maxFieldChars, DEFAULT_MAX_FIELD_CHARS);
+    const maxResultBytes = asPositiveInt(
+      policy.maxResultBytes,
+      DEFAULT_MAX_RESULT_BYTES,
+    );
+    const maxBlobBytes = asPositiveInt(policy.maxBlobBytes, DEFAULT_MAX_BLOB_BYTES);
     const sensitiveStrategy = policy.sensitiveStrategy ?? DEFAULT_SENSITIVE_STRATEGY;
     const explicitSensitive = buildSensitiveSet(policy.sensitiveColumns);
 
@@ -168,7 +202,7 @@ class DefaultResultRedactor implements ResultRedactor {
     const sourceRows = Array.isArray(raw.rows) ? raw.rows : [];
     const originalRowCount = asNonNegativeInt(raw.rowCount, sourceRows.length);
 
-    const rowTruncated = sourceRows.length > maxRows || originalRowCount > maxRows;
+    let rowTruncated = sourceRows.length > maxRows || originalRowCount > maxRows;
     const columnTruncated = sourceColumns.length > maxColumns;
     const rowLimited = sourceRows.slice(0, maxRows);
     const columnLimited = sourceColumns.slice(0, maxColumns);
@@ -181,7 +215,9 @@ class DefaultResultRedactor implements ResultRedactor {
 
     for (let index = 0; index < columnLimited.length; index += 1) {
       const column = columnLimited[index];
-      const sensitive = isSensitiveColumn(column.name, explicitSensitive);
+      const sensitive =
+        policy.maskAllColumns === true ||
+        isSensitiveColumn(column.name, explicitSensitive);
 
       if (sensitive && sensitiveStrategy === "drop") {
         droppedColumns.push(column.name);
@@ -215,7 +251,7 @@ class DefaultResultRedactor implements ResultRedactor {
             value = maskValue(column.name, rawValue);
           }
         } else {
-          const truncated = truncateFieldValue(rawValue, maxFieldChars);
+          const truncated = truncateFieldValue(rawValue, maxFieldChars, maxBlobBytes);
           value = truncated.value;
           if (truncated.truncated) {
             truncatedColumns.add(column.name);
@@ -229,16 +265,35 @@ class DefaultResultRedactor implements ResultRedactor {
     });
 
     const fieldTruncated = truncatedColumns.size > 0;
+    let returnedBytes = Buffer.byteLength(
+      JSON.stringify({ columns: keepColumns, rows: [] }),
+      "utf8",
+    );
+    let byteTruncated = false;
+    const byteLimitedRows: unknown[][] = [];
+    for (const row of outputRows) {
+      const rowBytes = Buffer.byteLength(JSON.stringify(row), "utf8");
+      const delimiterBytes = byteLimitedRows.length > 0 ? 1 : 0;
+      if (returnedBytes + delimiterBytes + rowBytes > maxResultBytes) {
+        byteTruncated = true;
+        rowTruncated = true;
+        break;
+      }
+      byteLimitedRows.push(row);
+      returnedBytes += delimiterBytes + rowBytes;
+    }
 
     return {
       columns: keepColumns,
-      rows: outputRows,
+      rows: byteLimitedRows,
       rowCount: originalRowCount,
       originalRowCount,
-      truncated: rowTruncated || columnTruncated || fieldTruncated,
+      truncated: rowTruncated || columnTruncated || fieldTruncated || byteTruncated,
       rowTruncated,
       columnTruncated,
       fieldTruncated,
+      byteTruncated,
+      returnedBytes,
       redactedColumns: keepColumns
         .map((column) => column.name)
         .filter((name) => redactedColumns.has(name)),

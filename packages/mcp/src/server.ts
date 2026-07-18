@@ -2,11 +2,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   createSqlProfileLoader,
+  createJsonlAuditWriter,
   getConfig,
   RuntimeOverrideProfileLoader,
   redactConfigForLog,
   TaurusDBEngine,
   type Config,
+  type AuditWriter,
   type RuntimeTargetProfileLoader,
 } from "taurusdb-core";
 import { registerTools } from "./tools/registry.js";
@@ -16,12 +18,16 @@ import {
   LocalCredentialLoginService,
   type CredentialLoginService,
 } from "./security/local-credential-login.js";
+import { SessionCoordinator } from "./security/session-coordinator.js";
 
 export interface ServerDeps {
   config: Config;
   profileLoader: RuntimeTargetProfileLoader;
   engine: TaurusDBEngine;
   credentialLogin: CredentialLoginService;
+  auditWriter?: AuditWriter;
+  sessionCoordinator?: SessionCoordinator;
+  clientIdentityProvider?: () => { name: string; version: string } | undefined;
   pingResponse: string;
 }
 
@@ -31,12 +37,17 @@ export async function bootstrapDependencies(): Promise<ServerDeps> {
     createSqlProfileLoader({ config }),
   );
   const engine = await TaurusDBEngine.create({ config, profileLoader });
+  const auditWriter = await createJsonlAuditWriter({
+    logPath: config.audit.logPath,
+  });
 
   return {
     config,
     profileLoader,
     engine,
     credentialLogin: new LocalCredentialLoginService(),
+    auditWriter,
+    sessionCoordinator: new SessionCoordinator(),
     pingResponse: "pong",
   };
 }
@@ -46,12 +57,14 @@ export function createServer(deps: ServerDeps): McpServer {
     name: "huaweicloud-taurusdb",
     version: VERSION,
   });
+  deps.clientIdentityProvider = () => server.server.getClientVersion();
 
   let cleanupPromise: Promise<void> | undefined;
   const cleanup = (): Promise<void> => {
     cleanupPromise ??= Promise.all([
       deps.credentialLogin.close(),
       deps.engine.close(),
+      deps.auditWriter?.close() ?? Promise.resolve(),
     ]).then(() => undefined);
     return cleanupPromise;
   };

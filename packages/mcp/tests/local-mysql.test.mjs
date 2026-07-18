@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import mysql from "mysql2/promise";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { signApprovalRequest } from "taurusdb-core";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
@@ -17,6 +18,7 @@ const seedSqlPath = path.resolve(repoRoot, "testdata/mysql/local-mysql-seed.sql"
 const usersSqlPath = path.resolve(repoRoot, "testdata/mysql/local-mysql-users.sql");
 const runLocalMysqlTests = process.env.TAURUSDB_RUN_LOCAL_MYSQL_TESTS === "true";
 const localMysqlTest = runLocalMysqlTests ? test : test.skip;
+const approvalSecret = "local-mysql-approval-secret-that-is-at-least-32-bytes";
 
 function requiredEnv(name) {
   const value = process.env[name];
@@ -86,12 +88,15 @@ async function prepareDatabase() {
 async function createProfilesFile() {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "taurusdb-local-mysql-"));
   const profilesPath = path.join(tempDir, "profiles.json");
+  const approvalSecretPath = path.join(tempDir, "approval-secret");
 
   const host = requiredEnv("TAURUSDB_TEST_MYSQL_HOST");
   const port = parseInteger(process.env.TAURUSDB_TEST_MYSQL_PORT, 3306);
   const database = requiredEnv("TAURUSDB_TEST_MYSQL_DATABASE");
   const user = requiredEnv("TAURUSDB_TEST_MYSQL_USER");
   const password = requiredEnv("TAURUSDB_TEST_MYSQL_PASSWORD");
+  const mutationUser = requiredEnv("TAURUSDB_TEST_MYSQL_MUTATION_USER");
+  const mutationPassword = requiredEnv("TAURUSDB_TEST_MYSQL_MUTATION_PASSWORD");
 
   const profile = {
     defaultDatasource: "local_mysql_e2e",
@@ -105,13 +110,18 @@ async function createProfilesFile() {
           username: user,
           password: password,
         },
+        mutationUser: {
+          username: mutationUser,
+          password: mutationPassword,
+        },
         poolSize: 4,
       },
     },
   };
 
   await writeFile(profilesPath, `${JSON.stringify(profile, null, 2)}\n`, "utf8");
-  return profilesPath;
+  await writeFile(approvalSecretPath, `${approvalSecret}\n`, { encoding: "utf8", mode: 0o600 });
+  return { profilesPath, approvalSecretPath };
 }
 
 function mysqlConnectionConfig({ mutation = false } = {}) {
@@ -203,7 +213,7 @@ async function withClient(run, options = {}) {
   if (options.skipPrepareDatabase !== true) {
     await prepareDatabase();
   }
-  const profilesPath = await createProfilesFile();
+  const { profilesPath, approvalSecretPath } = await createProfilesFile();
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [serverEntrypoint],
@@ -213,6 +223,13 @@ async function withClient(run, options = {}) {
       TAURUSDB_SQL_PROFILES: profilesPath,
       TAURUSDB_DEFAULT_DATASOURCE: "local_mysql_e2e",
       TAURUSDB_MCP_LOG_LEVEL: "error",
+      TAURUSDB_MCP_AUDIT_LOG_PATH: path.join(
+        os.tmpdir(),
+        `taurusdb-mcp-local-audit-${process.pid}.jsonl`,
+      ),
+      TAURUSDB_ENABLE_MUTATIONS: "true",
+      TAURUSDB_REQUIRE_TLS: "false",
+      TAURUSDB_MUTATION_APPROVAL_SECRET_FILE: approvalSecretPath,
     },
   });
   const stderr = collectStderr(transport.stderr);
@@ -312,14 +329,15 @@ localMysqlTest("local mysql MCP covers mutation confirmation flow", async () => 
     });
     assert.equal(confirm.isError, true);
     assert.equal(confirm.structuredContent.error.code, "CONFIRMATION_REQUIRED");
-    const token = confirm.structuredContent.data.confirmation_token;
+    const request = confirm.structuredContent.data.approval_request;
+    const token = signApprovalRequest(request, "local-test-operator", approvalSecret);
     assert.match(token, /^ctok_/);
 
     const execute = await client.callTool({
       name: "execute_sql",
       arguments: {
         sql: "UPDATE orders SET status = 'cancelled' WHERE order_no = 'ORD-1002'",
-        confirmation_token: token,
+        approval_token: token,
       },
     });
     assert.equal(execute.isError, false);
@@ -330,7 +348,7 @@ localMysqlTest("local mysql MCP covers mutation confirmation flow", async () => 
       name: "execute_sql",
       arguments: {
         sql: "UPDATE orders SET status = 'cancelled' WHERE order_no = 'ORD-1002'",
-        confirmation_token: token,
+        approval_token: token,
       },
     });
     assert.equal(reuse.isError, true);
@@ -357,7 +375,20 @@ localMysqlTest("local mysql MCP exposes diagnostics tools by default", async () 
     assert.equal(toolNames.includes("find_top_slow_sql"), true);
     assert.equal(toolNames.includes("diagnose_connection_spike"), true);
     assert.equal(toolNames.includes("diagnose_lock_contention"), true);
+    assert.equal(toolNames.includes("diagnose_replication_lag"), true);
     assert.equal(toolNames.includes("diagnose_slow_query"), true);
+  });
+});
+
+localMysqlTest("local mysql MCP reports replication diagnosis as not applicable on a primary", async () => {
+  await withClient(async ({ client }) => {
+    const result = await client.callTool({
+      name: "diagnose_replication_lag",
+      arguments: {},
+    });
+    assert.equal(result.isError, false);
+    assert.equal(result.structuredContent.data.tool, "diagnose_replication_lag");
+    assert.equal(result.structuredContent.data.status, "not_applicable");
   });
 });
 

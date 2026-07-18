@@ -5,6 +5,7 @@ export type DiagnosticToolName =
   | "diagnose_slow_query"
   | "diagnose_connection_spike"
   | "diagnose_lock_contention"
+  | "diagnose_replication_lag"
   | "diagnose_storage_pressure";
 
 export type DiagnosticStatus = "ok" | "inconclusive" | "not_applicable";
@@ -62,6 +63,11 @@ export interface DiagnoseLockContentionInput extends DiagnosticBaseInput {
 export interface DiagnoseStoragePressureInput extends DiagnosticBaseInput {
   scope?: "instance" | "database" | "table";
   table?: string;
+}
+
+export interface DiagnoseReplicationLagInput extends DiagnosticBaseInput {
+  replicaId?: string;
+  channel?: string;
 }
 
 export interface DiagnosticRootCauseCandidate {
@@ -243,29 +249,29 @@ export function createPlaceholderDiagnosticResult(
     },
     rootCauseCandidates: [
       {
-        code: `${tool}_pending`,
+        code: `${tool}_insufficient_evidence`,
         title: options.candidateTitle,
         confidence: "low",
         rationale: options.candidateRationale,
       },
     ],
     keyFindings: options.keyFindings ?? [
-      "The diagnostic contract is available, but evidence collectors have not been wired yet.",
-      "No live control-plane or data-plane evidence was collected in this run.",
+      "No conclusive live control-plane or data-plane evidence matched this diagnosis.",
+      "The result is intentionally inconclusive rather than inferring a root cause without evidence.",
     ],
     suspiciousEntities: options.suspiciousEntities,
     evidence: options.evidence ?? [
       {
-        source: "diagnostics_scaffold",
-        title: "Diagnostic scaffold active",
-        summary: "Typed inputs, outputs, and engine entrypoints are in place, but collectors and analyzers are pending.",
+        source: "diagnostic_limitations",
+        title: "No conclusive evidence",
+        summary: "The configured collectors returned no evidence sufficient for a root-cause conclusion.",
       },
     ],
     recommendedActions: options.recommendedActions ?? [
       "Implement the required collectors before relying on this tool for production diagnosis.",
     ],
     limitations: options.limitations ?? [
-      "This diagnostic currently returns a scaffolded result instead of live evidence-backed analysis.",
+      "The configured datasource, permissions, time window, or cloud metric sources did not provide sufficient evidence.",
     ],
   };
 }
