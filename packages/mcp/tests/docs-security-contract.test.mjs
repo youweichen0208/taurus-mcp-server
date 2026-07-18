@@ -24,6 +24,7 @@ test("canonical documentation does not advertise obsolete mutation security", as
     "`execute_sql` 默认暴露",
     "`restore_recycle_bin_table` 默认暴露",
     "执行恢复时复用 datasource 配置中的数据库账号",
+    "启动时同时校验独立 mutation user 和 approval secret",
   ];
 
   for (const { name, text } of documents) {

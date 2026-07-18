@@ -732,7 +732,7 @@ MCP 启动流程当前应保持如下简单链路：
 2. 打开持久审计 writer；审计初始化失败时拒绝启动
 3. 常驻注册通用、capability、diagnostics 和 TaurusDB 只读 Tool
 4. 仅在 `TAURUSDB_ENABLE_DYNAMIC_TARGETS=true` 时注册动态目标 Tool
-5. 仅在 `TAURUSDB_ENABLE_MUTATIONS=true` 时注册 mutation Tool；启动时同时校验独立 mutation user 和 approval secret
+5. 仅在 `TAURUSDB_ENABLE_MUTATIONS=true` 时注册 mutation Tool；启动时强制校验 approval secret，执行时对所选 datasource 的独立 mutation user fail-closed
 6. TaurusDB 特性在调用时 probe，并返回结构化降级结果，保持只读工具面稳定
 
 当前 diagnostics Tool 已改为默认注册，并直接纳入默认工具面。
