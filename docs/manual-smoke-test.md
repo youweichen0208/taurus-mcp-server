@@ -17,7 +17,7 @@
 - 用 Docker Compose 启一个标准本地 MySQL 测试库
 - 给 MCP 配好本地环境变量
 - 启动本地 MCP server
-- 手工验证 discovery / readonly / explain / mutation confirmation / diagnostics 主链路
+- 手工验证 discovery / readonly / explain / mutation external approval / diagnostics 主链路
 - 其中 diagnostics 已经有第一版默认暴露，手工 smoke 不要只看通用 SQL 主链路
 - TaurusDB recycle bin 属于云端能力，本地 MySQL smoke 不会暴露这两个 Tool
 
@@ -192,7 +192,7 @@ node packages/mcp/dist/index.js
 - discovery
 - readonly
 - explain
-- mutation confirmation
+- mutation external approval
 - query status
 - cancel
 
@@ -646,7 +646,7 @@ SQL：
 
 重点看：
 
-- `list_recycle_bin` 返回的是只读结果，不应要求 confirmation
+- `list_recycle_bin` 返回的是只读结果，不应要求 external approval
 - `restore_recycle_bin_table` 第一次应返回 `CONFIRMATION_REQUIRED`
 - 第二次必须使用相同的 `recycle_table`、`method` 和目标参数
 - `insert_select` 模式需要先建好兼容结构的目标表

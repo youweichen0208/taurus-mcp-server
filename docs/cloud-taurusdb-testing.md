@@ -23,7 +23,7 @@
 数据库账号建议权限：
 
 - 用于日常分析的账号至少具备目标库 `SELECT`，`SHOW PROCESSLIST`，`SHOW REPLICA STATUS` 或 `SHOW SLAVE STATUS`，`SHOW ENGINE INNODB STATUS`，以及 `performance_schema` 相关只读权限。
-- 如果要验证 `execute_sql`，配置的数据库账号还需要具备受控写权限。MCP 不再区分 `readonly user` / `mutation user` 配置字段，是否能真正写入由数据库权限决定。
+- 日常 datasource 的 `user` 必须是只读账号。若要验证 `execute_sql` 或回收站恢复，必须另外配置专用 `mutationUser`（环境变量为 `TAURUSDB_SQL_MUTATION_USER` / `TAURUSDB_SQL_MUTATION_PASSWORD`），不得复用或回退到只读账号。
 
 ---
 
@@ -43,11 +43,13 @@ export TAURUSDB_DEFAULT_DATASOURCE=taurus_mcp
 
 注意：
 
-- `restore_recycle_bin_table` 默认暴露。
+- `execute_sql` 和 `restore_recycle_bin_table` 默认不注册；仅在
+  `TAURUSDB_ENABLE_MUTATIONS=true`、存在独立写账号和 mode-`0600` 的
+  approval secret 时启用。
 - 该 Tool 的第一次调用不会直接执行恢复，而是先返回
   `approval_request`，需要独立 operator 在 MCP 客户端之外签名。
 
-如果你的云端连接需要 TLS，建议用 profile 文件，而不是把所有配置塞进环境变量：
+生产云端连接必须使用服务端证书校验通过的 TLS。若需要指定 CA 或 SNI，使用 profile 文件：
 
 ```json
 {
@@ -78,6 +80,18 @@ export TAURUSDB_DEFAULT_DATASOURCE=taurus_mcp
 export TAURUSDB_SQL_PROFILES=/path/to/profiles.json
 export TAURUSDB_DEFAULT_DATASOURCE=taurus_mcp
 ```
+
+只有在 disposable database 验证 mutation 时，才额外设置：
+
+```bash
+export TAURUSDB_ENABLE_MUTATIONS=true
+export TAURUSDB_SQL_MUTATION_USER='<dedicated-mutation-user>'
+export TAURUSDB_SQL_MUTATION_PASSWORD='<secret-reference>'
+export TAURUSDB_MUTATION_APPROVAL_SECRET_FILE='/run/secrets/taurusdb-approval'
+```
+
+approval secret 必须至少 32 bytes，并在 POSIX 系统上保持 `0600`。不要把
+secret 或生成的 `approval_token` 写入测试报告。
 
 ---
 
@@ -383,9 +397,9 @@ node /path/to/taurus-mcp-server/packages/mcp/dist/index.js
 - `npm run build` 通过。
 - `npm run cloud:validate` 的数据面检查全部通过。
 - MCP client 能列出通用 Tool 和 diagnostics Tool。
-- 通用主链路 discovery / readonly / explain / confirmation 全部通过。
+- 通用主链路 discovery / readonly / explain / external approval 全部通过。
 - `get_kernel_info` / `list_taurus_features` 可用，并且 feature gate 行为清晰。
 - `explain_sql_enhanced` / `flashback_query` 在支持实例上可用，在不支持实例上不误暴露或明确降级。
-- `list_recycle_bin` 在支持实例上可用；`restore_recycle_bin_table` 只对测试对象验证 confirmation 流和恢复结果。
+- `list_recycle_bin` 在支持实例上可用；`restore_recycle_bin_table` 只对测试对象验证 external approval 流和恢复结果。
 - 至少一条 diagnostics 能返回真实数据面 evidence。
 - 如果配置了 CES / DAS，至少一条 diagnostics 能看到云侧 evidence，或者返回明确配置/权限/无数据原因。

@@ -19,7 +19,7 @@
 | 能力发现 | `get_kernel_info` / `list_taurus_features` | 判断当前实例是不是 TaurusDB、支持哪些内核能力 | 只读 |
 | Enhanced Explain | `explain_sql_enhanced` | 分析 NDP / PQ / offset pushdown 是否可用、是否被 SQL 形态阻断 | 只读 |
 | Flashback Query | `flashback_query` | 查询历史时刻数据，辅助误改排查和恢复前对账 | 只读 |
-| Recycle Bin | `list_recycle_bin` / `restore_recycle_bin_table` | 排查误删表、恢复回收站表 | list 只读；restore 需要 confirmation |
+| Recycle Bin | `list_recycle_bin` / `restore_recycle_bin_table` | 排查误删表、恢复回收站表 | list 只读；restore 默认隐藏并需要 external approval |
 | Diagnostics | `diagnose_*` / `find_top_slow_sql` / `show_processlist` | 面向运维问题的证据采集和根因排序 | 只读为主 |
 
 回收站恢复策略：
@@ -27,7 +27,7 @@
 - `list_recycle_bin` 用于确认可恢复对象。
 - `restore_recycle_bin_table` 的 `native_restore` 调用 TaurusDB 原生回收站恢复能力。
 - `restore_recycle_bin_table` 的 `insert_select` 适合需要保留 Binlog / DRS 链路可见性的恢复，但要求先建好兼容结构的目标表。
-- `restore_recycle_bin_table` 默认暴露；如果当前实例不支持回收站或相关系统参数未开启，调用时会返回结构化 unsupported-feature 错误；执行恢复时复用 datasource 配置中的数据库账号。
+- `restore_recycle_bin_table` 默认隐藏；仅在 `TAURUSDB_ENABLE_MUTATIONS=true`、配置独立 mutation user 和 approval secret 后注册。如果实例不支持回收站或相关系统参数未开启，调用时会返回结构化 unsupported-feature 错误；执行恢复只使用专用 mutation user，不会回退到 datasource 的只读账号。
 - 不提供 purge 类 Tool，因为 purge 是不可恢复删除，不适合作为 MCP 默认能力。
 
 ---

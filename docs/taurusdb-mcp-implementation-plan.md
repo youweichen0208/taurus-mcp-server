@@ -1,5 +1,10 @@
 # 华为云 TaurusDB 数据面 MCP Server — 实施计划
 
+> **状态说明（0.4.0）**：本文保留实施过程和设计背景；当前发布边界以
+> [`release-readiness.md`](./release-readiness.md)、根 README 和实际 Tool
+> registry 为准。0.4.0 已采用只读/写账号隔离、mutation Tool 默认隐藏和
+> external signed approval，旧的单进程 token confirmation 描述不再适用。
+>
 > 本文档聚焦 `taurusdb-mcp` 的当前实现方向与第一阶段范围。
 >
 > 配套阅读：
@@ -24,12 +29,13 @@
 
 - `packages/core` 已承载共享数据面能力
 - `packages/mcp` 已承载 MCP 协议层与稳定 Tool 注册
-- 当前仓库不提供独立 CLI，MCP 包是唯一前端入口
+- 当前仓库不提供独立 CLI package；MCP 包同时提供 `init`、`approve` 和
+  `credentials` 运维子命令
 
 MCP 当前已经具备：
 
 - 通用 MySQL Tool 集合
-- 最小 Guardrail + token confirmation
+- least-privilege Guardrail + external signed approval
 - TaurusDB 运行时 capability probe
 - 稳定 Tool 注册（专属 Tool 默认注册，调用时按能力降级）
 - TaurusDB 首阶段 Tool：
@@ -60,7 +66,7 @@ MCP 当前已经具备：
    `list_*`、`describe_table`、`show_processlist`、`execute_readonly_sql`、`execute_sql`、`explain_sql`
 
 2. 最小安全模型
-   AST 分类、tool scope 校验、静态阻断规则、token confirmation、结果裁剪/脱敏
+   AST 分类、tool scope 校验、静态阻断规则、external approval、结果裁剪/脱敏
 
 3. TaurusDB 差异化能力
    capability discovery、enhanced explain、flashback query、recycle bin
@@ -722,14 +728,12 @@ packages/mcp/src/
 
 MCP 启动流程当前应保持如下简单链路：
 
-1. 读取配置并创建 `TaurusDBEngine`
-2. 读取默认数据源
-3. 若默认数据源存在，对其做一次 capability probe
-4. 通用 Tool 常驻注册
-5. capability Tool 常驻注册
-6. 若 probe 结果表明具备对应特性，再注册：
-   - `explain_sql_enhanced`
-   - `flashback_query`
+1. 读取配置、数据源 profile，并创建 `TaurusDBEngine`
+2. 打开持久审计 writer；审计初始化失败时拒绝启动
+3. 常驻注册通用、capability、diagnostics 和 TaurusDB 只读 Tool
+4. 仅在 `TAURUSDB_ENABLE_DYNAMIC_TARGETS=true` 时注册动态目标 Tool
+5. 仅在 `TAURUSDB_ENABLE_MUTATIONS=true` 时注册 mutation Tool；启动时同时校验独立 mutation user 和 approval secret
+6. TaurusDB 特性在调用时 probe，并返回结构化降级结果，保持只读工具面稳定
 
 当前 diagnostics Tool 已改为默认注册，并直接纳入默认工具面。
 
@@ -745,7 +749,7 @@ MCP 启动流程当前应保持如下简单链路：
 ### M1
 
 - 稳定通用 Tool
-- 稳定 token confirmation 流
+- 稳定 external signed approval 流
 - 稳定 stdio / envelope / error mapping
 
 ### M2
@@ -767,7 +771,7 @@ MCP 启动流程当前应保持如下简单链路：
 - MCP Tool 全部通过 `TaurusDBEngine` 调用，不再绕过 `core`
 - 运行时 capability probe 与稳定 Tool 注册可用（专属 Tool 默认注册，调用时按能力降级）
 - TaurusDB 首阶段 Tool 行为稳定，包括 capability、enhanced explain、flashback query 和 recycle bin
-- token confirmation 链路稳定
+- external approval 的签名、目标绑定、一次性消费和审计 actor 链路稳定
 - 文档不再把 history / doctor 写成已交付能力
 
 ## 9. 后续阶段
