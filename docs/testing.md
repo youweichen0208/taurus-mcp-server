@@ -33,7 +33,9 @@
 
 - `packages/core`：共享数据面能力与 `TaurusDBEngine`
 - `packages/mcp`：MCP `stdio` server、tool registry、tool handler、`init`
-- 当前仓库不提供独立 CLI，本轮测试主体只有 `core` 和 `mcp`
+- 当前仓库不提供第三个独立 CLI package；`taurusdb-mcp` 自身包含
+  `init`、`approve` 和 `credentials` 运维子命令，测试主体仍是 `core` 和
+  `mcp` 两个 workspace
 
 当前 MCP 首阶段应纳入测试范围的能力：
 
@@ -45,7 +47,7 @@
 - `show_processlist`
 - `execute_readonly_sql`
 - `explain_sql`
-- `execute_sql`
+- `execute_sql`（默认隐藏，仅 mutation 测试配置启用）
 - `init`
 - TaurusDB 首阶段专属能力：
   - `get_kernel_info`
@@ -53,7 +55,7 @@
   - `explain_sql_enhanced`
   - `flashback_query`
   - `list_recycle_bin`
-  - `restore_recycle_bin_table`
+  - `restore_recycle_bin_table`（默认隐藏，仅 mutation 测试配置启用）
 
 当前已经实现并默认暴露的 diagnostics 能力：
 
@@ -74,12 +76,15 @@
 
 补充说明：
 
-- `list_recycle_bin` 和 `restore_recycle_bin_table` 默认进入工具面；如果当前实例不支持或系统参数未开启，调用时会返回结构化 unsupported-feature 错误
-- `restore_recycle_bin_table` 第一次调用必须走 external approval；执行恢复时复用 datasource 配置中的数据库账号
+- `list_recycle_bin` 默认进入工具面；`restore_recycle_bin_table` 与
+  `execute_sql` 只有在 `TAURUSDB_ENABLE_MUTATIONS=true` 时注册
+- 两个 mutation Tool 必须使用独立 mutation user；不得复用或回退到只读账号
+- mutation 第一次调用必须返回 `approval_request`，由 MCP 进程外的独立
+  operator 签发一次性 `approval_token`
 
 结论：
 
-- 当前测试重点是 **MCP 协议适配 + 数据面主链路 + minimal guardrail + token confirmation + TaurusDB 首阶段差异化能力**
+- 当前测试重点是 **MCP 协议适配 + 数据面主链路 + least privilege guardrail + external approval + TaurusDB 差异化能力**
 - diagnostics 当前默认暴露；本地阶段重点验收 explain / digest / processlist / lock waits / table storage 这类数据面证据链；CES / Cloud Eye 指标源已有第一版配置与 collector，仍需在云端 TaurusDB 联调阶段验证真实指标返回、维度名、权限与时间窗口；`diagnose_lock_contention` 已补 MDL + latest deadlock collector 第一版，DAS / Top SQL / 全量 SQL 与 OS 级存储指标仍放到后续云侧补齐
 
 ---
@@ -92,7 +97,7 @@
 2. 数据面主链路正确：schema 探查、只读执行、Explain、写 SQL 与确认流都能工作。
 3. 安全边界正确：只读/写入分流、guardrail 阻断/确认逻辑、external approval 一次性校验都符合预期。
 4. 返回结构可消费：response envelope、metadata、error code、日志边界对 MCP 客户端是稳定的。
-5. TaurusDB 差异化能力的门控正确：能力探测决定专属 Tool 是否暴露，Taurus 专属功能在兼容环境下可工作。
+5. TaurusDB 差异化能力的门控正确：只读专属 Tool 保持稳定工具面并在调用时执行能力探测；mutation Tool 仅在显式启用时暴露。
 
 ---
 
@@ -169,8 +174,8 @@
 需要观察：
 
 - `tools/list` 是否返回预期工具集合
-- `execute_sql` 是否默认暴露，并由 guardrail / confirmation / 数据库权限共同约束
-- TaurusDB 专属 Tool 是否默认暴露，并在实例不支持时返回清晰的 capability/parameter hint
+- `execute_sql` 是否默认隐藏，并且仅在显式启用、独立 mutation user 与 external approval 都满足时可执行
+- TaurusDB 只读专属 Tool 是否默认暴露，并在实例不支持时返回清晰的 capability/parameter hint；恢复 Tool 是否保持默认隐藏
 - diagnostics Tool 当前是否默认暴露
 
 ### 5.2 Response Envelope
@@ -245,7 +250,7 @@
 | 环境             | 目的                   | 是否必测 | 主要覆盖                                                              |
 | ---------------- | ---------------------- | -------- | --------------------------------------------------------------------- |
 | 无数据库本地环境 | 跑默认自动化基线       | 是       | 构建、单测、协议层、handler、registry、init                           |
-| 本地 MySQL       | 跑主功能集成测试       | 是       | schema、readonly、explain、mutation、confirmation、`show_processlist` |
+| 本地 MySQL       | 跑主功能集成测试       | 是       | schema、readonly、explain、mutation、external approval、`show_processlist` |
 | 云端 TaurusDB    | 跑兼容性与专属能力验证 | 是       | capability probe、专属 Tool、真实网络/权限/TLS                        |
 
 不建议只测云端。
@@ -274,7 +279,7 @@
 - schema introspector
 - sql parser / classifier / validator
 - guardrail
-- confirmation store
+- external approval store
 - sql executor
 - query tracker
 - redaction
@@ -286,7 +291,7 @@
 
 当前 opt-in 自动化覆盖：
 
-- 本地 MySQL 下的 discovery / readonly / explain / mutation confirmation 主链路
+- 本地 MySQL 下的 discovery / readonly / explain / mutation external approval 主链路
 - diagnostics tools 默认暴露
 - `find_top_slow_sql` / `diagnose_db_hotspot` / `diagnose_service_latency`
 - `diagnose_slow_query` explain + digest 证据链
@@ -410,13 +415,13 @@ npm run test --workspace taurusdb-mcp
 - `show_processlist`
 - `execute_readonly_sql`
 - `explain_sql`
-- `execute_sql` + confirmation flow
+- `execute_sql` + external approval flow（仅 mutation 测试配置）
 
 通过标准：
 
 - 本地 MySQL e2e 全绿
-- 单账号模型和确认流符合预期
-- `execute_sql` 默认暴露
+- 只读账号与 mutation 账号严格分离，external approval 流符合预期
+- `execute_sql` 默认隐藏，显式开启后才注册
 - external approval 主链路稳定
 
 #### 阶段二：本地手工 smoke
@@ -701,7 +706,7 @@ npm run cloud:validate
 
 这一轮目标：
 
-- 先证明 profile / datasource / schema / guardrail / executor / confirmation 主链路正常
+- 先证明 profile / datasource / schema / guardrail / executor / external approval 主链路正常
 - 如果这一轮没过，不要继续测 Taurus 专属 Tool
 
 建议逐条执行：
@@ -1641,7 +1646,7 @@ mysql -uroot -p < testdata/mysql/local-mysql-users.sql
 
 目标：
 
-- 跑通 discovery / readonly / explain / mutation confirmation 主链路
+- 跑通 discovery / readonly / explain / mutation external approval 主链路
 - 验证数据库副作用、裁剪、脱敏、timeout 和错误映射
 
 ### 10.3 第三步：本地手工走一遍 MCP 调用
@@ -1654,7 +1659,7 @@ mysql -uroot -p < testdata/mysql/local-mysql-users.sql
 - `describe_table`
 - `execute_readonly_sql`
 - `explain_sql`
-- `execute_sql` + confirmation
+- `execute_sql` + external approval
 - `find_top_slow_sql`
 - `diagnose_slow_query`
 - `diagnose_service_latency`
@@ -1754,7 +1759,7 @@ mysql -uroot -p < testdata/mysql/local-mysql-users.sql
 - 本地 MySQL 主链路全通
 - discovery 5 个 Tool 可用
 - readonly / explain 主链路稳定
-- mutation 默认关闭，开启后 confirmation 主链路稳定
+- mutation 默认关闭，开启后 external approval 主链路稳定
 - stderr/stdout 边界正确
 - 错误码和 response envelope 稳定
 

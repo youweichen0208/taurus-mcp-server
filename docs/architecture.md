@@ -19,15 +19,16 @@
 → 结构化结果
 ```
 
-除了通用的 MySQL 数据面能力以外，首版还会专门暴露一组 **TaurusDB 专属 Tool**，用来让 AI 和用户感知到 TaurusDB 相对社区 MySQL 的差异化内核能力（闪回查询、NDP/PQ 执行计划增强、能力发现）。这些 Tool 现在默认出现在 `tools/list` 中；如果当前实例不支持、系统参数未开启或能力条件不满足，会在调用时返回结构化 unsupported-feature 错误和必要的参数提示。当前已经落地第一版 **诊断线**，把管控面指标、TaurusDB 内核状态和 SQL 现场联合起来做故障分析，并继续补齐云侧证据和长历史源。详见 [4.1.2 TaurusDB 专属 Tool](#412--taurusdb-专属-tool当前首阶段) 与 [7.4 当前已落地的诊断增量](#74-当前已落地的诊断增量)。
+除了通用的 MySQL 数据面能力以外，首版还会专门暴露一组 **TaurusDB 专属 Tool**，用来让 AI 和用户感知到 TaurusDB 相对社区 MySQL 的差异化内核能力（闪回查询、回收站、NDP/PQ 执行计划增强、能力发现）。只读 Tool 默认出现在 `tools/list` 中；有副作用的恢复 Tool 默认隐藏，只有显式开启 mutation 能力后才注册。实例不支持、系统参数未开启或能力条件不满足时，调用会返回结构化 unsupported-feature 错误和必要的参数提示。当前已经落地第一版 **诊断线**，把管控面指标、TaurusDB 内核状态和 SQL 现场联合起来做故障分析，并继续补齐云侧证据和长历史源。详见 [4.1.2 TaurusDB 专属 Tool](#412--taurusdb-专属-tool当前首阶段) 与 [7.4 当前已落地的诊断增量](#74-当前已落地的诊断增量)。
 
 ### 1.1.1 当前仓库状态与目标形态
 
 当前仓库已经完成了第一轮 workspace 拆分，现状是：
 
 - `packages/core` 已承载共享的数据面能力与 `TaurusDBEngine`
-- `packages/mcp` 已承载 MCP 启动、Tool 装配和 `init` 命令
-- 当前仓库不再提供独立 CLI
+- `packages/mcp` 已承载 MCP 启动、Tool 装配和 `init` / `approve` /
+  `credentials` 运维命令
+- 当前仓库不再提供独立 CLI package
 
 这意味着后续工作不再是“从单包抽第一刀”，而是继续**稳固 core 与 mcp 的边界**。目标形态是当前这套 monorepo：
 
@@ -62,8 +63,8 @@
 | 首要认证     | 数据库连接凭证或数据源 profile                                     |
 | 可选认证     | AK/SK 仅用于辅助发现实例、地址等管控面上下文                       |
 | 执行路径     | 直接建立数据库会话，由 TaurusDB 数据面执行 SQL                     |
-| 安全边界     | SQL AST 分类、结果限制、超时限制、确认流、审计日志                 |
-| 差异化层     | 基于内核版本的能力发现 + TaurusDB 专属 Tool 默认暴露、调用时校验   |
+| 安全边界     | SQL AST 分类、读写账号隔离、结果/超时限制、外部审批、持久审计      |
+| 差异化层     | 能力发现 + 只读专属 Tool 稳定暴露 + mutation Tool 显式启用         |
 | 推荐部署位点 | 与 TaurusDB 同 VPC、同可达网络的跳板机 / Sidecar / 本地安全环境    |
 
 ### 1.3 管控面与数据面的边界
@@ -90,7 +91,7 @@
 | TaurusDB 比 MySQL 更快  | NDP/PQ 执行计划增强                                   | "这条 SQL 慢，TaurusDB 层面怎么优化？" |
 | TaurusDB 能做历史只读   | 闪回查询                                              | "帮我查 10 分钟前订单表里的状态"       |
 
-像 CTS / 全量 SQL / SQL 审计 / Binlog 驱动的**历史追溯与事后恢复闭环**，仍然是后续值得做的方向，但**不再作为当前 core/mcp/cli 第一阶段的必做范围**。当前阶段先把主执行链路、最小 Guardrail、能力发现和 TaurusDB 差异化 Tool 做稳。
+像 CTS / 全量 SQL / Binlog 驱动的长期历史追溯仍然是后续方向。当前版本已经交付持久 MCP 操作审计，以及受控的回收站查询/恢复；恢复默认隐藏，必须使用独立 mutation user 和进程外签发的一次性 approval token。
 
 当前已经补一条新的叙事：
 
@@ -998,27 +999,23 @@ Guardrail 要把决策落成执行参数：
 
 #### 4.1.2 🆕 TaurusDB 专属 Tool（当前首阶段）
 
-> 以下 Tool 默认暴露在 `tools/list` 中；如果当前实例不是 TaurusDB、能力未开启或系统参数不满足，调用时返回结构化 unsupported-feature 错误。
+> 以下只读 Tool 默认暴露在 `tools/list` 中；如果当前实例不是 TaurusDB、能力未开启或系统参数不满足，调用时返回结构化 unsupported-feature 错误。恢复 Tool 默认隐藏。
 > 连接到自建 MySQL / RDS for MySQL 时，这些 Tool 仍然可见，但会在调用时返回清晰的降级结果，MCP 维持一致的工具面。
 
-当前首阶段围绕三条主线，只保留 4 个专属 Tool：
+当前首阶段提供 6 个专属 Tool，其中 5 个只读 Tool 默认暴露，1 个恢复 Tool 需显式开启：
 
 | Tool                   | 能力组   | 默认暴露 | 风险等级 | 前置依赖                                                   |
 | ---------------------- | -------- | -------- | -------- | ---------------------------------------------------------- |
 | `get_kernel_info`      | 能力发现 | 是       | `low`    | 无                                                         |
 | `list_taurus_features` | 能力发现 | 是       | `low`    | 无                                                         |
-| `explain_sql_enhanced` | 性能洞察 | 是       | `low`    | `parallel_query` 或 `ndp_pushdown` 可用时注册              |
-| `flashback_query`      | 闪回     | 是       | `low`    | 内核 ≥ `2.0.69.250900` 且 `innodb_rds_backquery_enable=ON` |
+| `explain_sql_enhanced` | 性能洞察 | 是       | `low`    | 调用时检查 `parallel_query` / `ndp_pushdown`               |
+| `flashback_query`      | 闪回     | 是       | `low`    | 调用时检查内核版本与 `innodb_rds_backquery_enable`         |
+| `list_recycle_bin`     | 回收站   | 是       | `low`    | 调用时检查回收站能力                                       |
+| `restore_recycle_bin_table` | 回收站恢复 | 否  | `high`   | mutation flag、独立写账号、external approval               |
 
-当前不纳入首阶段实现：
+当前不提供 purge、任意 DDL 控制面或 Binlog 驱动的历史回溯 Tool。
 
-- `list_recycle_bin`
-- `restore_from_recycle_bin`
-- 任何 CTS / 全量 SQL / Binlog 驱动的历史回溯 Tool
-
-这些能力仍然在架构上保留演进空间，但文档不再把它们写成已交付能力。
-
-##### 当前首阶段的三个叙事
+##### 当前首阶段的四个叙事
 
 1. “这个实例到底是不是 TaurusDB，支持哪些内核特性？”
    对应 `get_kernel_info` + `list_taurus_features`
@@ -1028,6 +1025,9 @@ Guardrail 要把决策落成执行参数：
 
 3. “我想看某张表在某个时间点之前的数据快照。”
    对应 `flashback_query`
+
+4. “误删表后，先确认回收站对象，再经过独立审批恢复。”
+   对应 `list_recycle_bin` + `restore_recycle_bin_table`
 
 ##### 字段设计概要
 
@@ -1340,19 +1340,20 @@ const server = new McpServer({
 }
 ```
 
-**需确认响应**
+**需外部审批响应**
 
 ```json
 {
   "ok": false,
-  "summary": "This SQL will modify data and requires explicit confirmation.",
+  "summary": "This SQL will modify data and requires external human approval.",
   "error": {
     "code": "CONFIRMATION_REQUIRED",
-    "message": "Re-run the same SQL with approval_token to continue.",
+    "message": "An external operator must sign approval_request with taurusdb-mcp approve before retrying with approval_token.",
     "retryable": true
   },
   "data": {
-    "approval_token": "ctok_eyJhbGciOi...",
+    "approval_request": "creq_eyJhbGciOi...",
+    "request_id": "req_01...",
     "risk_level": "medium",
     "sql_hash": "c194..."
   },
@@ -1484,7 +1485,7 @@ const server = new McpServer({
 | 默认超时             | 每次查询都有最大执行时长                                               |
 | 结果上限             | 返回行数、列数、文本长度都有限制                                       |
 | 审计必达             | 至少记录 `task_id`、`sql_hash` 和决策结果                              |
-| 专属能力门控         | TaurusDB 专属写操作(回收站恢复)同样受 confirmation、guardrail 和数据库权限约束 |
+| 专属能力门控         | TaurusDB 专属写操作（回收站恢复）同样受 external approval、guardrail 和独立 mutation user 约束 |
 
 ### 6.2 数据库权限建议
 
