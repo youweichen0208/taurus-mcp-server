@@ -1,3 +1,4 @@
+import { lstat, readFile } from "node:fs/promises";
 import {
   createSqlProfileLoader,
   type DataSourceProfile,
@@ -8,6 +9,8 @@ import {
   createSecretResolver,
   type SecretResolver,
 } from "./auth/secret-resolver.js";
+import { createHuaweiKmsSecretResolver } from "./cloud/kms.js";
+import { createHuaweiCsmsSecretResolver } from "./cloud/csms.js";
 import {
   createCapabilityProbe,
   type CapabilityProbe,
@@ -43,7 +46,7 @@ import {
 import {
   createConfirmationStore,
   type ConfirmationStore,
-  type ConfirmationToken,
+  type ConfirmationRequest,
   type ConfirmationValidationResult,
 } from "./safety/confirmation-store.js";
 import {
@@ -77,9 +80,11 @@ import {
   type DiagnoseLockContentionInput,
   type DiagnoseSlowQueryInput,
   type DiagnoseStoragePressureInput,
+  type DiagnoseReplicationLagInput,
   type DiagnosticResult,
   type ServiceLatencyResult,
 } from "./diagnostics/types.js";
+import { diagnoseReplicationLag } from "./diagnostics/replication-lag.js";
 import {
   createSlowSqlSource,
   type SlowSqlSource,
@@ -155,6 +160,23 @@ export type {
   TaurusDBEngineDeps,
 } from "./engine/types.js";
 
+async function readMutationApprovalSecret(filePath: string): Promise<string> {
+  const info = await lstat(filePath);
+  if (!info.isFile() || info.isSymbolicLink()) {
+    throw new Error("Mutation approval secret must be a regular, non-symlink file.");
+  }
+  if (process.platform !== "win32" && (info.mode & 0o077) !== 0) {
+    throw new Error(
+      "Mutation approval secret file must not be accessible by group or other users.",
+    );
+  }
+  const secret = (await readFile(filePath, "utf8")).trim();
+  if (Buffer.byteLength(secret, "utf8") < 32) {
+    throw new Error("Mutation approval secret must contain at least 32 bytes.");
+  }
+  return secret;
+}
+
 function toDataSourceInfo(
   profile: DataSourceProfile,
   defaultDatasource: string | undefined,
@@ -205,7 +227,15 @@ export class TaurusDBEngine {
     const config = options.config ?? getConfig();
     const profileLoader =
       options.profileLoader ?? createSqlProfileLoader({ config });
-    const secretResolver = options.secretResolver ?? createSecretResolver();
+    const secretResolver =
+      options.secretResolver ??
+      createSecretResolver({
+        uriResolvers: {
+          "hw-csms": createHuaweiCsmsSecretResolver({ config }),
+          "hw-kms": createHuaweiKmsSecretResolver({ config }),
+          "hw-kms-file": createHuaweiKmsSecretResolver({ config }),
+        },
+      });
     const datasourceResolver =
       options.datasourceResolver ??
       createDatasourceResolver({
@@ -233,10 +263,26 @@ export class TaurusDBEngine {
       options.executor ??
       createSqlExecutor({
         connectionPool,
+        maxConcurrentQueries: config.limits.maxConcurrentQueries,
+        maxQueuedQueries: config.limits.maxQueuedQueries,
+        queueTimeoutMs: config.limits.queueTimeoutMs,
       });
     const guardrail = options.guardrail ?? createGuardrail();
+    let approvalSecret: string | undefined;
+    if (config.security.approvalSecretPath) {
+      approvalSecret = await readMutationApprovalSecret(config.security.approvalSecretPath);
+    }
+    if (config.security.mutationsEnabled && !approvalSecret && !options.confirmationStore) {
+      throw new Error(
+        "Mutations require TAURUSDB_MUTATION_APPROVAL_SECRET_FILE with at least 32 bytes.",
+      );
+    }
     const confirmationStore =
-      options.confirmationStore ?? createConfirmationStore();
+      options.confirmationStore ??
+      createConfirmationStore({
+        approvalSecret,
+        ttlSeconds: config.security.approvalTtlSeconds,
+      });
     const capabilityProbe =
       options.capabilityProbe ??
       createCapabilityProbe({
@@ -330,6 +376,13 @@ export class TaurusDBEngine {
     ctx: SessionContext,
   ): Promise<QueryResult> {
     return showLockWaits(this, input, ctx);
+  }
+
+  async diagnoseReplicationLag(
+    input: DiagnoseReplicationLagInput,
+    ctx: SessionContext,
+  ): Promise<DiagnosticResult> {
+    return diagnoseReplicationLag(this.executor, input, ctx);
   }
 
   async findMetadataLockWaits(
@@ -509,7 +562,7 @@ export class TaurusDBEngine {
 
   async issueConfirmation(
     input: IssueConfirmationInput,
-  ): Promise<ConfirmationToken> {
+  ): Promise<ConfirmationRequest> {
     return issueConfirmation(this, input);
   }
 

@@ -89,6 +89,8 @@ export function toPublicQueryResult(result: QueryResult) {
     row_truncated: result.rowTruncated,
     column_truncated: result.columnTruncated,
     field_truncated: result.fieldTruncated,
+    byte_truncated: result.byteTruncated,
+    returned_bytes: result.returnedBytes,
     redacted_columns: result.redactedColumns,
     dropped_columns: result.droppedColumns,
     truncated_columns: result.truncatedColumns,
@@ -116,6 +118,8 @@ export function toPublicGuardrailDecision(decision: GuardrailDecision) {
       max_rows: decision.runtimeLimits.maxRows,
       max_columns: decision.runtimeLimits.maxColumns,
       max_field_chars: decision.runtimeLimits.maxFieldChars,
+      max_result_bytes: decision.runtimeLimits.maxResultBytes,
+      max_blob_bytes: decision.runtimeLimits.maxBlobBytes,
     },
   };
 }

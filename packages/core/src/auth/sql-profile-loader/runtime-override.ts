@@ -13,6 +13,8 @@ export function applyRuntimeTarget(
     host: target.host ?? profile.host,
     port: target.port ?? profile.port,
     database: target.database ?? profile.database,
+    instanceId: target.instanceId ?? profile.instanceId,
+    nodeId: target.nodeId ?? profile.nodeId,
     user: target.user ?? profile.user,
   });
 }
@@ -27,14 +29,20 @@ export class RuntimeOverrideProfileLoader implements RuntimeTargetProfileLoader 
 
   setRuntimeTarget(name: string, target: RuntimeDataSourceTarget): void {
     const current = this.runtimeTargets.get(name);
+    const targetChanged =
+      (target.host !== undefined && target.host !== current?.host) ||
+      (target.instanceId !== undefined && target.instanceId !== current?.instanceId);
+    const user = target.user ?? (targetChanged ? undefined : current?.user);
     const next: RuntimeDataSourceTarget = {
       host: target.host ?? current?.host,
       port: target.port ?? current?.port,
       database: target.database ?? current?.database,
-      user: target.user ?? current?.user,
       instanceId: target.instanceId ?? current?.instanceId,
       nodeId: target.nodeId ?? current?.nodeId,
     };
+    if (user) {
+      next.user = user;
+    }
     this.runtimeTargets.set(name, next);
   }
 
@@ -56,7 +64,8 @@ export class RuntimeOverrideProfileLoader implements RuntimeTargetProfileLoader 
   }
 
   getRuntimeTarget(name: string): RuntimeDataSourceTarget | undefined {
-    return this.runtimeTargets.get(name);
+    const target = this.runtimeTargets.get(name);
+    return target ? { ...target } : undefined;
   }
 
   async load(): Promise<Map<string, DataSourceProfile>> {

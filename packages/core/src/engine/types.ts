@@ -34,8 +34,9 @@ export type IssueConfirmationInput = {
 export type ConfirmationOutcome =
   | { status: "confirmed" }
   | {
-      status: "token_issued";
-      token: string;
+      status: "approval_required";
+      request: string;
+      requestId: string;
       issuedAt: number;
       expiresAt: number;
     };

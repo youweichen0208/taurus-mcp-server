@@ -9,6 +9,14 @@ export type {
 } from "./engine.js";
 
 export {
+  createJsonlAuditWriter,
+  JsonlAuditWriter,
+  type AuditDecision,
+  type AuditEvent,
+  type AuditWriter,
+  type JsonlAuditWriterOptions,
+} from "./audit/jsonl-writer.js";
+export {
   createConfigFromEnv,
   getConfig,
   redactConfigForLog,
@@ -37,6 +45,8 @@ export type {
 } from "./context/session-context.js";
 
 export { ConnectionPoolError } from "./executor/connection-pool.js";
+export { QueryConcurrencyError } from "./executor/concurrency-limiter.js";
+export { buildServerBoundedReadonlySql } from "./executor/bounded-sql.js";
 export type {
   CancelResult,
   ExplainResult,
@@ -62,10 +72,12 @@ export type {
 export {
   createConfirmationStore,
   InMemoryConfirmationStore,
+  parseApprovalRequest,
+  signApprovalRequest,
 } from "./safety/confirmation-store.js";
 export type {
   ConfirmationStore,
-  ConfirmationToken,
+  ConfirmationRequest,
   ConfirmationValidationResult,
   IssueInput,
 } from "./safety/confirmation-store.js";
@@ -123,7 +135,27 @@ export {
   inferHuaweiCloudRegionFromEndpoint,
   resolveHuaweiCloudProjectId,
 } from "./cloud/auth.js";
-export type { HuaweiCloudAuthOptions } from "./cloud/auth.js";
+export type {
+  HuaweiCloudAuthOptions,
+  HuaweiCloudCredentialProvider,
+  HuaweiCloudCredentials,
+} from "./cloud/auth.js";
+export {
+  createLinuxSecretServiceCredentialProvider,
+  createMacOsKeychainCredentialProvider,
+  createSystemCredentialProvider,
+  createWindowsCredentialManagerProvider,
+} from "./cloud/keychain.js";
+export type {
+  LinuxSecretServiceCredentialProviderOptions,
+  MacOsKeychainCredentialProviderOptions,
+  SystemCredentialProviderOptions,
+  WindowsCredentialManagerProviderOptions,
+} from "./cloud/keychain.js";
+export { createHuaweiKmsSecretResolver } from "./cloud/kms.js";
+export type { HuaweiKmsSecretResolverOptions } from "./cloud/kms.js";
+export { createHuaweiCsmsSecretResolver } from "./cloud/csms.js";
+export type { HuaweiCsmsSecretResolverOptions } from "./cloud/csms.js";
 export {
   FlashbackNoViewError,
   formatTimestamp as formatFlashbackTimestamp,
@@ -176,6 +208,7 @@ export type {
   DiagnosisWindow,
   DiagnoseConnectionSpikeInput,
   DiagnoseLockContentionInput,
+  DiagnoseReplicationLagInput,
   DiagnoseSlowQueryInput,
   DiagnoseStoragePressureInput,
   PlaceholderDiagnosticOptions,

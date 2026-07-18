@@ -87,6 +87,72 @@ test("profile loader uses env profile when file is absent", async () => {
   assert.equal(await loader.getDefault(), "taurus_mcp");
 });
 
+test("profile loader keeps read-only and mutation credentials separate", async () => {
+  const loader = new SqlProfileLoader({
+    config: makeConfig({ profilesPath: "/path/that/does/not/exist.json" }),
+    env: {
+      TAURUSDB_SQL_HOST: "localhost",
+      TAURUSDB_SQL_USER: "reader",
+      TAURUSDB_SQL_PASSWORD: "env:MYSQL_RO_PASSWORD",
+      TAURUSDB_SQL_MUTATION_USER: "writer",
+      TAURUSDB_SQL_MUTATION_PASSWORD: "env:MYSQL_RW_PASSWORD",
+    },
+  });
+  const profile = await loader.get("taurus_mcp");
+  assert.equal(profile.user.username, "reader");
+  assert.equal(profile.mutationUser.username, "writer");
+  assert.equal(profile.mutationUser.password.key, "MYSQL_RW_PASSWORD");
+});
+
+test("profile loader rejects partial mutation credentials", async () => {
+  const loader = new SqlProfileLoader({
+    config: makeConfig({ profilesPath: "/path/that/does/not/exist.json" }),
+    env: {
+      TAURUSDB_SQL_HOST: "localhost",
+      TAURUSDB_SQL_USER: "reader",
+      TAURUSDB_SQL_PASSWORD: "reader-password",
+      TAURUSDB_SQL_MUTATION_USER: "writer",
+    },
+  });
+  await assert.rejects(() => loader.load(), /Mutation credentials require both/);
+});
+
+test("profile loader preserves Huawei KMS password references as URI credentials", async () => {
+  const loader = new SqlProfileLoader({
+    config: makeConfig({ profilesPath: "/path/that/does/not/exist.json" }),
+    env: {
+      TAURUSDB_SQL_HOST: "localhost",
+      TAURUSDB_SQL_USER: "root",
+      TAURUSDB_SQL_PASSWORD: "hw-kms-file:~/.taurusdb-mcp/password.ciphertext",
+    },
+  });
+
+  const profile = await loader.get("taurus_mcp");
+  assert.ok(profile);
+  assert.deepEqual(profile.user.password, {
+    type: "uri",
+    uri: "hw-kms-file:~/.taurusdb-mcp/password.ciphertext",
+  });
+});
+
+test("profile loader preserves Huawei CSMS password references as URI credentials", async () => {
+  const loader = new SqlProfileLoader({
+    config: makeConfig({ profilesPath: "/path/that/does/not/exist.json" }),
+    env: {
+      TAURUSDB_SQL_HOST: "localhost",
+      TAURUSDB_SQL_USER: "root",
+      TAURUSDB_SQL_PASSWORD: "hw-csms:production-taurusdb-password",
+    },
+  });
+
+  const profile = await loader.get("taurus_mcp");
+  assert.ok(profile);
+  assert.deepEqual(profile.user.password, {
+    type: "uri",
+    uri: "hw-csms:production-taurusdb-password",
+  });
+});
+
 test("profile loader creates an implicit session datasource when SQL config is absent", async () => {
   const loader = new SqlProfileLoader({
     config: makeConfig({ profilesPath: "/path/that/does/not/exist.json" }),
@@ -196,7 +262,7 @@ test("profile loader accepts legacy readonlyUser aliases in profiles.json", asyn
   assert.equal(profile.user.password.key, "LEGACY_APP_PASSWORD");
 });
 
-test("runtime override profile loader applies host, port, database, and user bindings", async () => {
+test("runtime override profile loader applies host, port, and database bindings", async () => {
   const base = new SqlProfileLoader({
     config: makeConfig({ profilesPath: "/path/that/does/not/exist.json" }),
     env: {
@@ -212,10 +278,6 @@ test("runtime override profile loader applies host, port, database, and user bin
     host: "10.0.0.8",
     port: 3307,
     database: "analytics",
-    user: {
-      username: "runtime_app",
-      password: { type: "plain", value: "runtime_pwd" },
-    },
     instanceId: "instance-1",
   });
 
@@ -224,46 +286,32 @@ test("runtime override profile loader applies host, port, database, and user bin
   assert.equal(profile.host, "10.0.0.8");
   assert.equal(profile.port, 3307);
   assert.equal(profile.database, "analytics");
-  assert.equal(profile.user.username, "runtime_app");
+  assert.equal(profile.user.username, "ro");
   assert.deepEqual(loader.getRuntimeTarget("taurus_mcp"), {
     host: "10.0.0.8",
     port: 3307,
     database: "analytics",
-    user: {
-      username: "runtime_app",
-      password: { type: "plain", value: "runtime_pwd" },
-    },
     instanceId: "instance-1",
     nodeId: undefined,
   });
 });
 
-test("runtime override profile loader clears only the session SQL credential binding", async () => {
+test("runtime target changes clear previously bound runtime credentials", async () => {
   const base = new SqlProfileLoader({
     config: makeConfig({ profilesPath: "/path/that/does/not/exist.json" }),
-    env: {},
-  });
-  const loader = new RuntimeOverrideProfileLoader(base);
-
-  loader.setRuntimeTarget("taurus_mcp", {
-    host: "10.0.0.8",
-    instanceId: "instance-1",
-    user: {
-      username: "runtime_app",
-      password: { type: "plain", value: "runtime_pwd" },
+    env: {
+      TAURUSDB_SQL_HOST: "base-host",
+      TAURUSDB_SQL_USER: "base-reader",
+      TAURUSDB_SQL_PASSWORD: "base-password",
     },
   });
-  loader.clearRuntimeUser("taurus_mcp");
-
-  const profile = await loader.get("taurus_mcp");
-  assert.ok(profile);
-  assert.equal(profile.host, "10.0.0.8");
-  assert.equal(profile.user, undefined);
-  assert.deepEqual(loader.getRuntimeTarget("taurus_mcp"), {
-    host: "10.0.0.8",
-    port: undefined,
-    database: undefined,
-    instanceId: "instance-1",
-    nodeId: undefined,
+  const loader = new RuntimeOverrideProfileLoader(base);
+  loader.setRuntimeTarget("taurus_mcp", {
+    host: "host-a",
+    instanceId: "instance-a",
+    user: { username: "runtime-reader", password: { type: "plain", value: "secret" } },
   });
+  loader.setRuntimeTarget("taurus_mcp", { host: "host-b", instanceId: "instance-b" });
+  assert.equal(loader.getRuntimeTarget("taurus_mcp").user, undefined);
+  assert.equal((await loader.get("taurus_mcp")).user.username, "base-reader");
 });

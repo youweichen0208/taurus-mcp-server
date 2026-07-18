@@ -25,6 +25,8 @@ export const ErrorCode = {
   QUERY_CANCELLED: "QUERY_CANCELLED",
   CONNECTION_FAILED: "CONNECTION_FAILED",
   RESULT_TOO_LARGE: "RESULT_TOO_LARGE",
+  AUDIT_FAILED: "AUDIT_FAILED",
+  SERVER_BUSY: "SERVER_BUSY",
   UNSUPPORTED_FEATURE: "UNSUPPORTED_FEATURE",
 } as const;
 
@@ -75,7 +77,8 @@ export type FormatBlockedOptions = {
 };
 
 export type FormatConfirmationRequiredOptions = {
-  confirmationToken: string;
+  approvalRequest: string;
+  requestId: string;
   metadata: ResponseMetadata;
   summary?: string;
   message?: string;
@@ -121,18 +124,22 @@ export function formatBlocked(options: FormatBlockedOptions): ToolResponse {
 export function formatConfirmationRequired(
   options: FormatConfirmationRequiredOptions,
 ): ToolResponse<{
-  confirmation_token: string;
+  approval_request: string;
+  request_id: string;
   risk_level?: string;
   sql_hash?: string;
 }> {
   return formatError({
     code: ErrorCode.CONFIRMATION_REQUIRED,
-    message: options.message ?? "Re-run the same SQL with confirmation_token to continue.",
-    summary: options.summary ?? "This SQL will modify data and requires explicit confirmation.",
+    message:
+      options.message ??
+      "An external operator must sign approval_request with `taurusdb-mcp approve` before retrying with approval_token.",
+    summary: options.summary ?? "This SQL will modify data and requires external human approval.",
     retryable: true,
     metadata: options.metadata,
     data: {
-      confirmation_token: options.confirmationToken,
+      approval_request: options.approvalRequest,
+      request_id: options.requestId,
       risk_level: options.riskLevel,
       sql_hash: options.sqlHash,
     },

@@ -1,6 +1,6 @@
 import type { Config } from "../config/index.js";
 import type { SessionContext } from "../context/session-context.js";
-import { fetchHuaweiCloud } from "../cloud/auth.js";
+import { fetchHuaweiCloud, getHuaweiCloudAuthFromConfig, type HuaweiCloudCredentialProvider } from "../cloud/auth.js";
 import type { DiagnosisWindow } from "./types.js";
 
 export type MetricAlias =
@@ -60,6 +60,7 @@ type CesMetricsSourceOptions = {
   accessKeyId?: string;
   secretAccessKey?: string;
   securityToken?: string;
+  credentialProvider?: HuaweiCloudCredentialProvider;
   namespace: string;
   instanceDimension: string;
   nodeDimension: string;
@@ -230,6 +231,7 @@ export class CesMetricsSource implements MetricsSource {
   private readonly accessKeyId?: string;
   private readonly secretAccessKey?: string;
   private readonly securityToken?: string;
+  private readonly credentialProvider?: HuaweiCloudCredentialProvider;
   private readonly namespace: string;
   private readonly instanceDimension: string;
   private readonly nodeDimension: string;
@@ -248,6 +250,7 @@ export class CesMetricsSource implements MetricsSource {
     this.accessKeyId = options.accessKeyId;
     this.secretAccessKey = options.secretAccessKey;
     this.securityToken = options.securityToken;
+    this.credentialProvider = options.credentialProvider;
     this.namespace = options.namespace;
     this.instanceDimension = options.instanceDimension;
     this.nodeDimension = options.nodeDimension;
@@ -338,6 +341,7 @@ export class CesMetricsSource implements MetricsSource {
           accessKeyId: this.accessKeyId,
           secretAccessKey: this.secretAccessKey,
           securityToken: this.securityToken,
+          credentialProvider: this.credentialProvider,
         },
         fetchImpl: (input, init) =>
           this.fetchImpl(input, {
@@ -370,7 +374,8 @@ export function createMetricsSource(config: Config): MetricsSource | undefined {
     !ces.projectId ||
     !ces.instanceId ||
     (!ces.authToken &&
-      !(config.cloud?.accessKeyId && config.cloud?.secretAccessKey))
+      !(config.cloud?.accessKeyId && config.cloud?.secretAccessKey) &&
+      !config.cloud?.keychainService)
   ) {
     return undefined;
   }
@@ -384,6 +389,7 @@ export function createMetricsSource(config: Config): MetricsSource | undefined {
     accessKeyId: config.cloud?.accessKeyId,
     secretAccessKey: config.cloud?.secretAccessKey,
     securityToken: config.cloud?.securityToken,
+    credentialProvider: getHuaweiCloudAuthFromConfig(config).credentialProvider,
     namespace: ces.namespace,
     instanceDimension: ces.instanceDimension,
     nodeDimension: ces.nodeDimension,

@@ -6,6 +6,11 @@ const LimitsSchema = z
     maxColumns: z.number().int().positive().default(50),
     maxStatementMs: z.number().int().positive().default(15000),
     maxFieldChars: z.number().int().positive().default(2048),
+    maxResultBytes: z.number().int().positive().default(1048576),
+    maxBlobBytes: z.number().int().positive().default(65536),
+    maxConcurrentQueries: z.number().int().positive().default(8),
+    maxQueuedQueries: z.number().int().nonnegative().default(32),
+    queueTimeoutMs: z.number().int().positive().default(5000),
   })
   .default({});
 
@@ -13,6 +18,16 @@ const AuditSchema = z
   .object({
     logPath: z.string().min(1).default("~/.taurusdb-mcp/audit.jsonl"),
     includeRawSql: z.boolean().default(false),
+  })
+  .default({});
+
+const SecuritySchema = z
+  .object({
+    mutationsEnabled: z.boolean().default(false),
+    dynamicTargetsEnabled: z.boolean().default(false),
+    requireTls: z.boolean().default(true),
+    approvalSecretPath: z.string().min(1).optional(),
+    approvalTtlSeconds: z.number().int().positive().max(3600).default(300),
   })
   .default({});
 
@@ -27,8 +42,12 @@ const CloudSchema = z
     accessKeyId: z.string().min(1).optional(),
     secretAccessKey: z.string().min(1).optional(),
     securityToken: z.string().min(1).optional(),
+    keychainService: z.string().min(1).optional(),
+    keychainAccount: z.string().min(1).default("default"),
     apiEndpoint: z.string().min(1).optional(),
     iamEndpoint: z.string().min(1).optional(),
+    kmsEndpoint: z.string().min(1).optional(),
+    csmsEndpoint: z.string().min(1).optional(),
     domainSuffix: z.string().min(1).default("myhuaweicloud.com"),
     language: z.enum(["en-us", "zh-cn"]).default("zh-cn"),
   })
@@ -92,6 +111,7 @@ export const ConfigSchema = z.object({
   cloud: CloudSchema,
   limits: LimitsSchema,
   audit: AuditSchema,
+  security: SecuritySchema,
   slowSqlSource: z
     .object({
       taurusApi: TaurusApiSlowSqlSourceSchema,

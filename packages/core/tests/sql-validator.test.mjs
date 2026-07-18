@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   validateStaticRules,
+  validateDatabaseScope,
   validateToolScope,
 } from "../dist/safety/sql-validator.js";
 
@@ -14,6 +15,7 @@ function baseClassification(overrides = {}) {
     sqlHash: "abc123def4567890",
     isMultiStatement: false,
     referencedTables: ["users"],
+    referencedSchemas: [],
     referencedColumns: ["id"],
     hasWhere: false,
     hasLimit: true,
@@ -73,6 +75,45 @@ test("validateStaticRules confirms update with where", () => {
   assert.equal(result.action, "confirm");
   assert.equal(result.riskLevel, "high");
   assert.ok(result.reasonCodes.includes("R006"));
+});
+
+test("validateStaticRules confirms insert, replace, and upsert classifications", () => {
+  const result = validateStaticRules(baseClassification({
+    statementType: "insert",
+    normalizedSql: "INSERT INTO users (id) VALUES (1)",
+  }));
+  assert.equal(result.action, "confirm");
+  assert.ok(result.reasonCodes.includes("R006"));
+});
+
+test("validateStaticRules blocks readonly SQL with side effects", () => {
+  for (const sql of [
+    "SELECT GET_LOCK('release', 10)",
+    "SELECT SLEEP(10)",
+    "SELECT * FROM users INTO OUTFILE '/tmp/users'",
+    "SELECT * FROM users FOR UPDATE",
+  ]) {
+    const result = validateStaticRules(baseClassification({ normalizedSql: sql }));
+    assert.equal(result.action, "block", sql);
+    assert.ok(result.reasonCodes.includes("R009"), sql);
+  }
+});
+
+test("validateDatabaseScope blocks explicit cross-database references", () => {
+  const result = validateDatabaseScope(
+    baseClassification({ referencedSchemas: ["tenant_b"] }),
+    "tenant_a",
+  );
+  assert.equal(result.action, "block");
+  assert.ok(result.reasonCodes.includes("D002"));
+});
+
+test("validateDatabaseScope allows the bound database", () => {
+  const result = validateDatabaseScope(
+    baseClassification({ referencedSchemas: ["tenant_a"] }),
+    "tenant_a",
+  );
+  assert.equal(result.action, "allow");
 });
 
 test("validateStaticRules returns medium risk for detail select without limit and select star", () => {

@@ -2,7 +2,7 @@ import { UnsupportedFeatureError } from "../capability/types.js";
 import type { FeatureMatrix } from "../capability/types.js";
 import type { SessionContext } from "../context/session-context.js";
 import type { CancelResult, ExplainResult, MutationOptions, MutationResult, QueryResult, QueryStatus, ReadonlyOptions } from "../executor/sql-executor.js";
-import type { ConfirmationToken, ConfirmationValidationResult } from "../safety/confirmation-store.js";
+import type { ConfirmationRequest, ConfirmationValidationResult } from "../safety/confirmation-store.js";
 import { InMemoryConfirmationStore } from "../safety/confirmation-store.js";
 import type { GuardrailDecision } from "../safety/guardrail.js";
 import {
@@ -560,7 +560,6 @@ export async function restoreRecycleBinTable(
       ctx,
       {
         ...recycleBinMutationOptions(opts),
-        allowReadonlyFallbackForMutations: true,
       },
     );
   }
@@ -580,7 +579,7 @@ export async function cancelQuery(
 export async function issueConfirmation(
   engine: TaurusDBEngine,
   input: IssueConfirmationInput,
-  ): Promise<ConfirmationToken> {
+  ): Promise<ConfirmationRequest> {
     const resolved = resolveConfirmationSql(input);
     return engine.confirmationStore.issue({
       sqlHash: resolved.hash,
@@ -609,7 +608,7 @@ export async function handleConfirmation(
       return { status: "confirmed" };
     }
 
-    const token = await engine.confirmationStore.issue({
+    const approval = await engine.confirmationStore.issue({
       sqlHash: decision.sqlHash,
       normalizedSql: decision.normalizedSql,
       context: ctx,
@@ -617,10 +616,11 @@ export async function handleConfirmation(
     });
 
     return {
-      status: "token_issued",
-      token: token.token,
-      issuedAt: token.issuedAt,
-      expiresAt: token.expiresAt,
+      status: "approval_required",
+      request: approval.request,
+      requestId: approval.requestId,
+      issuedAt: approval.issuedAt,
+      expiresAt: approval.expiresAt,
     };
   }
 

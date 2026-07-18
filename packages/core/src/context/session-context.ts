@@ -6,6 +6,8 @@ export interface RuntimeLimits {
   maxRows: number;
   maxColumns: number;
   maxFieldChars: number;
+  maxResultBytes?: number;
+  maxBlobBytes?: number;
 }
 
 export interface SessionContext {
@@ -14,6 +16,11 @@ export interface SessionContext {
   engine: DatabaseEngine;
   database?: string;
   schema?: string;
+  host?: string;
+  port?: number;
+  projectId?: string;
+  instanceId?: string;
+  nodeId?: string;
   limits: RuntimeLimits;
 }
 

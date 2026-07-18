@@ -1,6 +1,8 @@
 import {
   createCloudTaurusInstanceClient,
   TaurusDBEngine,
+  type Config,
+  type RuntimeDataSourceTarget,
 } from "taurusdb-core";
 import { z } from "zod";
 import { formatSuccess, type ToolResponse } from "../../utils/formatter.js";
@@ -12,30 +14,68 @@ function buildHuaweiCloudEndpoint(service: string, region: string, domainSuffix:
   return `https://${service}.${region}.${domainSuffix}`;
 }
 
-function clearCloudSelection(deps: ToolDeps): void {
-  deps.config.cloud.projectId = undefined;
-  deps.config.cloud.instanceId = undefined;
-  deps.config.cloud.nodeId = undefined;
-  deps.config.slowSqlSource.taurusApi.projectId = undefined;
-  deps.config.slowSqlSource.taurusApi.instanceId = undefined;
-  deps.config.slowSqlSource.taurusApi.nodeId = undefined;
-  deps.config.slowSqlSource.das.projectId = undefined;
-  deps.config.slowSqlSource.das.instanceId = undefined;
-  deps.config.metricsSource.ces.projectId = undefined;
-  deps.config.metricsSource.ces.instanceId = undefined;
-  deps.config.metricsSource.ces.nodeId = undefined;
+function clearCloudSelection(config: Config, deps: ToolDeps): void {
+  config.cloud.projectId = undefined;
+  config.cloud.instanceId = undefined;
+  config.cloud.nodeId = undefined;
+  config.slowSqlSource.taurusApi.projectId = undefined;
+  config.slowSqlSource.taurusApi.instanceId = undefined;
+  config.slowSqlSource.taurusApi.nodeId = undefined;
+  config.slowSqlSource.das.projectId = undefined;
+  config.slowSqlSource.das.instanceId = undefined;
+  config.metricsSource.ces.projectId = undefined;
+  config.metricsSource.ces.instanceId = undefined;
+  config.metricsSource.ces.nodeId = undefined;
   deps.profileLoader.clearAllRuntimeTargets();
 }
 
-async function reloadEngine(deps: ToolDeps): Promise<void> {
+async function snapshotRuntimeTargets(
+  deps: ToolDeps,
+): Promise<Map<string, RuntimeDataSourceTarget>> {
+  const profiles = await deps.profileLoader.load();
+  return new Map(
+    [...profiles.keys()].flatMap((name) => {
+      const target = deps.profileLoader.getRuntimeTarget(name);
+      return target ? [[name, target] as const] : [];
+    }),
+  );
+}
+
+function restoreRuntimeTargets(
+  deps: ToolDeps,
+  targets: Map<string, RuntimeDataSourceTarget>,
+): void {
+  deps.profileLoader.clearAllRuntimeTargets();
+  for (const [name, target] of targets) {
+    deps.profileLoader.setRuntimeTarget(name, target);
+  }
+}
+
+async function reloadEngine(deps: ToolDeps, nextConfig: Config): Promise<void> {
   const nextEngine = await TaurusDBEngine.create({
-    config: deps.config,
+    config: nextConfig,
     profileLoader: deps.profileLoader,
   });
   const previousEngine = deps.engine;
+  deps.config = nextConfig;
   deps.engine = nextEngine;
   if (previousEngine?.close) {
     await previousEngine.close();
+  }
+}
+
+async function updateSessionState(
+  deps: ToolDeps,
+  mutate: (nextConfig: Config) => Promise<void> | void,
+): Promise<void> {
+  const nextConfig = structuredClone(deps.config);
+  const previousTargets = await snapshotRuntimeTargets(deps);
+  try {
+    await mutate(nextConfig);
+    await reloadEngine(deps, nextConfig);
+  } catch (error) {
+    restoreRuntimeTargets(deps, previousTargets);
+    throw error;
   }
 }
 
@@ -55,7 +95,7 @@ function selectInstanceAddress(input: {
   privateIps: string[];
   hostnames: string[];
 }): string | undefined {
-  return input.publicIps[0] ?? input.privateIps[0] ?? input.hostnames[0];
+  return input.privateIps[0] ?? input.hostnames[0] ?? input.publicIps[0];
 }
 
 function normalizePort(port: string | number | undefined): number | undefined {
@@ -92,27 +132,36 @@ export const setCloudRegionTool: ToolDefinition = {
         throw new ToolInputError("region is required.");
       }
 
-      const domainSuffix = deps.config.cloud.domainSuffix ?? "myhuaweicloud.com";
-      deps.config.cloud.region = region;
-      deps.config.cloud.apiEndpoint = buildHuaweiCloudEndpoint("gaussdb", region, domainSuffix);
-      deps.config.cloud.iamEndpoint = buildHuaweiCloudEndpoint("iam", region, domainSuffix);
-
-      deps.config.slowSqlSource.taurusApi.endpoint = buildHuaweiCloudEndpoint(
-        "gaussdb",
-        region,
-        domainSuffix,
-      );
-      deps.config.slowSqlSource.das.endpoint = buildHuaweiCloudEndpoint("das", region, domainSuffix);
-      deps.config.metricsSource.ces.endpoint = buildHuaweiCloudEndpoint("ces", region, domainSuffix);
-
-      clearCloudSelection(deps);
-      await reloadEngine(deps);
+      await updateSessionState(deps, (nextConfig) => {
+        const domainSuffix = nextConfig.cloud.domainSuffix ?? "myhuaweicloud.com";
+        nextConfig.cloud.region = region;
+        nextConfig.cloud.apiEndpoint = buildHuaweiCloudEndpoint("gaussdb", region, domainSuffix);
+        nextConfig.cloud.iamEndpoint = buildHuaweiCloudEndpoint("iam", region, domainSuffix);
+        nextConfig.cloud.kmsEndpoint = buildHuaweiCloudEndpoint("kms", region, domainSuffix);
+        nextConfig.slowSqlSource.taurusApi.endpoint = buildHuaweiCloudEndpoint(
+          "gaussdb",
+          region,
+          domainSuffix,
+        );
+        nextConfig.slowSqlSource.das.endpoint = buildHuaweiCloudEndpoint(
+          "das",
+          region,
+          domainSuffix,
+        );
+        nextConfig.metricsSource.ces.endpoint = buildHuaweiCloudEndpoint(
+          "ces",
+          region,
+          domainSuffix,
+        );
+        clearCloudSelection(nextConfig, deps);
+      });
 
       return formatSuccess(
         {
           region,
           api_endpoint: deps.config.cloud.apiEndpoint,
           iam_endpoint: deps.config.cloud.iamEndpoint,
+          kms_endpoint: deps.config.cloud.kmsEndpoint,
         },
         {
           summary: `Cloud region switched to ${region}.`,
@@ -181,15 +230,15 @@ export const setDefaultDatabaseTool: ToolDefinition = {
         throw new ToolInputError(`Datasource "${datasource}" was not found.`);
       }
       const currentTarget = deps.profileLoader.getRuntimeTarget(datasource);
-      deps.profileLoader.setRuntimeTarget(datasource, {
-        host: currentTarget?.host ?? profile.host,
-        port: currentTarget?.port ?? profile.port,
-        instanceId: currentTarget?.instanceId,
-        nodeId: currentTarget?.nodeId,
-        database,
+      await updateSessionState(deps, () => {
+        deps.profileLoader.setRuntimeTarget(datasource, {
+          host: currentTarget?.host ?? profile.host,
+          port: currentTarget?.port ?? profile.port,
+          instanceId: currentTarget?.instanceId,
+          nodeId: currentTarget?.nodeId,
+          database,
+        });
       });
-
-      await reloadEngine(deps);
 
       return formatSuccess(
         {
@@ -238,9 +287,9 @@ export const clearSqlCredentialsTool: ToolDefinition = {
       if (!profile) {
         throw new ToolInputError(`Datasource "${datasource}" was not found.`);
       }
-      deps.profileLoader.clearRuntimeUser(datasource);
-
-      await reloadEngine(deps);
+      await updateSessionState(deps, () => {
+        deps.profileLoader.clearRuntimeUser(datasource);
+      });
 
       return formatSuccess(
         {
@@ -358,34 +407,33 @@ export const selectCloudTaurusInstanceTool: ToolDefinition = {
         throw new ToolInputError(`No TaurusDB cloud instance matched id ${instanceId}.`);
       }
 
-      deps.config.cloud.projectId = projectId;
-      deps.config.cloud.instanceId = matched.id;
-      deps.config.cloud.nodeId = matched.primaryNodeId;
-      deps.config.slowSqlSource.taurusApi.projectId = projectId;
-      deps.config.slowSqlSource.taurusApi.instanceId = matched.id;
-      deps.config.slowSqlSource.taurusApi.nodeId = matched.primaryNodeId;
-      deps.config.slowSqlSource.das.projectId = projectId;
-      deps.config.slowSqlSource.das.instanceId = matched.id;
-      deps.config.metricsSource.ces.projectId = projectId;
-      deps.config.metricsSource.ces.instanceId = matched.id;
-      deps.config.metricsSource.ces.nodeId = matched.primaryNodeId;
-
       const boundDatasource = await resolveBindingDatasource(
         deps,
         typeof input.datasource === "string" ? input.datasource : undefined,
       );
       const selectedHost = selectInstanceAddress(matched);
       const selectedPort = normalizePort(matched.port);
-      if (boundDatasource && selectedHost) {
-        deps.profileLoader.setRuntimeTarget(boundDatasource, {
-          host: selectedHost,
-          port: selectedPort,
-          instanceId: matched.id,
-          nodeId: matched.primaryNodeId,
-        });
-      }
-
-      await reloadEngine(deps);
+      await updateSessionState(deps, (nextConfig) => {
+        nextConfig.cloud.projectId = projectId;
+        nextConfig.cloud.instanceId = matched.id;
+        nextConfig.cloud.nodeId = matched.primaryNodeId;
+        nextConfig.slowSqlSource.taurusApi.projectId = projectId;
+        nextConfig.slowSqlSource.taurusApi.instanceId = matched.id;
+        nextConfig.slowSqlSource.taurusApi.nodeId = matched.primaryNodeId;
+        nextConfig.slowSqlSource.das.projectId = projectId;
+        nextConfig.slowSqlSource.das.instanceId = matched.id;
+        nextConfig.metricsSource.ces.projectId = projectId;
+        nextConfig.metricsSource.ces.instanceId = matched.id;
+        nextConfig.metricsSource.ces.nodeId = matched.primaryNodeId;
+        if (boundDatasource && selectedHost) {
+          deps.profileLoader.setRuntimeTarget(boundDatasource, {
+            host: selectedHost,
+            port: selectedPort,
+            instanceId: matched.id,
+            nodeId: matched.primaryNodeId,
+          });
+        }
+      });
 
       return formatSuccess(
         {

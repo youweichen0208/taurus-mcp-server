@@ -75,7 +75,7 @@
 补充说明：
 
 - `list_recycle_bin` 和 `restore_recycle_bin_table` 默认进入工具面；如果当前实例不支持或系统参数未开启，调用时会返回结构化 unsupported-feature 错误
-- `restore_recycle_bin_table` 第一次调用必须走 confirmation token；执行恢复时复用 datasource 配置中的数据库账号
+- `restore_recycle_bin_table` 第一次调用必须走 external approval；执行恢复时复用 datasource 配置中的数据库账号
 
 结论：
 
@@ -90,7 +90,7 @@
 
 1. MCP Server 作为 `stdio` 工具服务可正常启动、注册工具并稳定响应。
 2. 数据面主链路正确：schema 探查、只读执行、Explain、写 SQL 与确认流都能工作。
-3. 安全边界正确：只读/写入分流、guardrail 阻断/确认逻辑、confirmation token 一次性校验都符合预期。
+3. 安全边界正确：只读/写入分流、guardrail 阻断/确认逻辑、external approval 一次性校验都符合预期。
 4. 返回结构可消费：response envelope、metadata、error code、日志边界对 MCP 客户端是稳定的。
 5. TaurusDB 差异化能力的门控正确：能力探测决定专属 Tool 是否暴露，Taurus 专属功能在兼容环境下可工作。
 
@@ -131,7 +131,7 @@
 - datasource/profile/context 解析
 - schema introspection
 - readonly / explain / mutation 主链路
-- confirmation token
+- external approval
 - `show_processlist`
 - stdout/stderr 边界
 
@@ -417,7 +417,7 @@ npm run test --workspace taurusdb-mcp
 - 本地 MySQL e2e 全绿
 - 单账号模型和确认流符合预期
 - `execute_sql` 默认暴露
-- confirmation token 主链路稳定
+- external approval 主链路稳定
 
 #### 阶段二：本地手工 smoke
 
@@ -466,8 +466,9 @@ node packages/mcp/dist/index.js
 3. `describe_table`，目标表为 `orders`
 4. `execute_readonly_sql`，执行一个简单 `SELECT`
 5. `explain_sql`，执行一个带过滤条件的查询
-6. `execute_sql`，先不带 `confirmation_token`
-7. 使用返回的 `confirmation_token` 重试 `execute_sql`
+6. `execute_sql`，先不带 `approval_token`
+7. 由 operator 签名返回的 `approval_request`，再使用生成的
+   `approval_token` 重试 `execute_sql`
 
 建议手工输入或发给 MCP client 的测试请求如下：
 
@@ -509,13 +510,14 @@ node packages/mcp/dist/index.js
 6. `execute_sql`
    SQL：
    `UPDATE orders SET status = 'paid' WHERE id = 1`
-   首次不带 `confirmation_token`
+   首次不带 `approval_token`
    预期：
    返回 `CONFIRMATION_REQUIRED`
 
 7. 再次执行 `execute_sql`
    SQL 保持完全一致
-   携带上一步返回的 `confirmation_token`
+   携带 operator 对上一步 `approval_request` 签发的
+   `approval_token`
    预期：
    返回 mutation 成功
    `affected_rows` 合理
@@ -695,7 +697,7 @@ npm run cloud:validate
 4. `describe_table`
 5. `execute_readonly_sql`
 6. `explain_sql`
-7. `execute_sql` + confirmation token
+7. `execute_sql` + external approval
 
 这一轮目标：
 
@@ -818,7 +820,16 @@ npm run cloud:validate
 预期：
 
 - 返回 `CONFIRMATION_REQUIRED`
-- 返回 `data.confirmation_token`
+- 返回 `data.approval_request`
+
+在 MCP 客户端之外签名：
+
+```bash
+npx taurusdb-mcp approve \
+  --request '<data.approval_request>' \
+  --actor '<operator-identity>' \
+  --secret-file /path/to/approval-secret
+```
 
 8. `execute_sql` 第二次，带确认 token
 
@@ -827,7 +838,7 @@ npm run cloud:validate
   "datasource": "your_taurus_datasource",
   "database": "your_database",
   "sql": "UPDATE your_table SET updated_at = NOW() WHERE id = 1",
-  "confirmation_token": "paste_token_here"
+  "approval_token": "paste_token_here"
 }
 ```
 
@@ -1143,7 +1154,7 @@ npm run cloud:validate
 这一轮重点观察：
 
 - `evidence[].source` 是否出现 `ces_metrics`
-- `diagnose_replication_lag` 是否合并复制状态与 lag 指标
+- `diagnose_replication_lag` 是否正确解析复制状态、延迟和 worker 状态
 - `diagnose_storage_pressure` 是否出现 IOPS / throughput / storage latency / tmp spill 相关证据
 - `recommended_next_tools` / `next_tool_inputs` 是否可直接复用
 
@@ -1411,7 +1422,7 @@ Follow-up: <next tool / config / evidence to check>
 2. `diagnose_slow_query` 第一版
 3. `diagnose_connection_spike` 第一版 + CES 连接指标第一版
 4. `diagnose_lock_contention` 第一版
-5. `diagnose_replication_lag` 复制状态 + CES lag 第一版
+5. `diagnose_replication_lag` 只读复制状态快照
 6. `diagnose_storage_pressure` 本地 SQL/table evidence + CES 存储指标第一版
 7. CES / Cloud Eye metrics source 第一版
 
@@ -1515,7 +1526,7 @@ Follow-up: <next tool / config / evidence to check>
 | E-01 | 默认配置下查看 tool list          | 无 `execute_sql`             | tool 暴露面正确                                |
 | E-02 | 开启 mutation 后查看 tool list    | 有 `execute_sql`             | 开关生效                                       |
 | E-03 | `execute_sql` 传只读 SQL          | 被阻断                       | tool scope 正确                                |
-| E-04 | `UPDATE ... WHERE ...` 不带 token | 返回 `CONFIRMATION_REQUIRED` | `error.code` 与 `data.confirmation_token` 正确 |
+| E-04 | `UPDATE ... WHERE ...` 不带 token | 返回 `CONFIRMATION_REQUIRED` | `error.code` 与 `data.approval_request` 正确 |
 | E-05 | 携带错误 token 重试               | 返回 `CONFIRMATION_INVALID`  | token 校验严格                                 |
 | E-06 | 携带正确 token 重试               | 执行成功                     | `affected_rows` 与数据库实际一致               |
 | E-07 | 重复使用同一 token                | 校验失败                     | token 一次性使用                               |
@@ -1718,7 +1729,7 @@ mysql -uroot -p < testdata/mysql/local-mysql-users.sql
 
 优先怀疑：
 
-- confirmation token 不匹配
+- external approval 不匹配
 - guardrail 静态规则阻断
 - 数据库写权限不足
 

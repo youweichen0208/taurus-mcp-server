@@ -35,27 +35,44 @@ export const beginSqlLoginTool: ToolDefinition = {
       const issued = await deps.credentialLogin.issueSqlLogin({
         datasource,
         bind: async ({ username, password }) => {
-          const currentTarget = deps.profileLoader.getRuntimeTarget(datasource);
-          deps.profileLoader.setRuntimeTarget(datasource, {
-            host: currentTarget?.host ?? profile.host,
-            port: currentTarget?.port ?? profile.port,
-            database: currentTarget?.database ?? profile.database,
-            instanceId: currentTarget?.instanceId,
-            nodeId: currentTarget?.nodeId,
-            user: {
-              username,
-              password: { type: "plain", value: password },
-            },
-          });
+          const bindCredentials = async () => {
+            const currentTarget = deps.profileLoader.getRuntimeTarget(datasource);
+            deps.profileLoader.setRuntimeTarget(datasource, {
+              host: currentTarget?.host ?? profile.host,
+              port: currentTarget?.port ?? profile.port,
+              database: currentTarget?.database ?? profile.database,
+              instanceId: currentTarget?.instanceId,
+              nodeId: currentTarget?.nodeId,
+              user: {
+                username,
+                password: { type: "plain", value: password },
+              },
+            });
 
-          const nextEngine = await TaurusDBEngine.create({
-            config: deps.config,
-            profileLoader: deps.profileLoader,
-          });
-          const previousEngine = deps.engine;
-          deps.engine = nextEngine;
-          if (previousEngine?.close) {
-            await previousEngine.close();
+            let nextEngine: TaurusDBEngine;
+            try {
+              nextEngine = await TaurusDBEngine.create({
+                config: deps.config,
+                profileLoader: deps.profileLoader,
+              });
+            } catch (error) {
+              if (currentTarget) {
+                deps.profileLoader.setRuntimeTarget(datasource, currentTarget);
+              } else {
+                deps.profileLoader.clearRuntimeTarget(datasource);
+              }
+              throw error;
+            }
+            const previousEngine = deps.engine;
+            deps.engine = nextEngine;
+            if (previousEngine?.close) {
+              await previousEngine.close();
+            }
+          };
+          if (deps.sessionCoordinator) {
+            await deps.sessionCoordinator.runExclusive(bindCredentials);
+          } else {
+            await bindCredentials();
           }
         },
       });

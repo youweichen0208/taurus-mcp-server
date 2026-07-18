@@ -103,7 +103,7 @@ diagnostics 产品线已经落地第一版，并按两层组织：
 | `diagnose_slow_query` | 根因分析层 | `local-verifiable` | 本地 MySQL 可验证 explain、慢 SQL、索引失配、临时表/排序等主要逻辑 |
 | `diagnose_connection_spike` | 根因分析层 | `local-partial` | 本地可验证 `processlist`、线程/连接状态；已接 CES 连接指标第一版，云实例异常模式需上云 |
 | `diagnose_lock_contention` | 根因分析层 | `local-verifiable` | 本地多会话即可复现锁等待、长事务、DDL 阻塞、死锁链路 |
-| `diagnose_replication_lag` | 根因分析层 | `cloud-required` | 已接复制状态命令与 CES lag / long transaction / write pressure 指标第一版；需要托管复制链路或只读节点完整验证 |
+| `diagnose_replication_lag` | 根因分析层 | `cloud-required` | 已接只读复制状态快照；CES lag、long transaction 和 write pressure 指标仍待真实云验证；需要托管复制链路或只读节点完整验证 |
 | `diagnose_storage_pressure` | 根因分析层 | `local-partial` | 本地已基于 digest counters + table metadata 验证临时表落盘、filesort、扫描型 SQL；已接 CES 存储延迟 / IOPS / 吞吐指标第一版，仍需云端验证 |
 
 建议把验证策略分成两段：

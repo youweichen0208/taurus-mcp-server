@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
   buildRestoreRecycleBinTableSql,
+  normalizeSql,
+  sqlHash,
   type RestoreRecycleBinTableInput,
 } from "taurusdb-core";
 import {
@@ -97,12 +99,12 @@ export const restoreRecycleBinTableTool: ToolDefinition = {
       .min(1)
       .optional()
       .describe("Destination table. Required for insert_select; optional with native_restore when renaming on restore."),
-    confirmation_token: z
+    approval_token: z
       .string()
       .trim()
       .min(1)
       .optional()
-      .describe("Confirmation token returned by the first guarded restore call."),
+      .describe("Externally signed approval token produced by `taurusdb-mcp approve`."),
   },
   async handler(input, deps, context): Promise<ToolResponse> {
     const restoreInput: RestoreRecycleBinTableInput = {
@@ -117,16 +119,17 @@ export const restoreRecycleBinTableTool: ToolDefinition = {
       const sql = buildRestoreRecycleBinTableSql(restoreInput);
       const responseMetadata = metadata(context.taskId, {
         statement_type: restoreInput.method === "insert_select" ? "insert" : "unknown",
+        sql_hash: sqlHash(normalizeSql(sql)),
       });
-      const confirmationToken = asOptionalString(input.confirmation_token, "confirmation_token");
+      const approvalToken = asOptionalString(input.approval_token, "approval_token");
 
-      if (confirmationToken) {
-        const validation = await deps.engine.validateConfirmation(confirmationToken, sql, ctx);
+      if (approvalToken) {
+        const validation = await deps.engine.validateConfirmation(approvalToken, sql, ctx);
         if (!validation.valid) {
           return formatError({
             code: ErrorCode.CONFIRMATION_INVALID,
-            message: validation.reason ?? "Confirmation token validation failed.",
-            summary: "The provided confirmation token is invalid for this recycle bin restore.",
+            message: validation.reason ?? "Approval token validation failed.",
+            summary: "The provided external approval is invalid for this recycle bin restore.",
             metadata: responseMetadata,
             details: {
               reason_codes: validation.reasonCodes,
@@ -134,19 +137,21 @@ export const restoreRecycleBinTableTool: ToolDefinition = {
             },
           });
         }
+        context.approvalActor = validation.actor;
       } else {
-        const token = await deps.engine.issueConfirmation({
+        const approval = await deps.engine.issueConfirmation({
           sql,
           context: ctx,
           riskLevel: "high",
         });
         return formatConfirmationRequired({
-          confirmationToken: token.token,
+          approvalRequest: approval.request,
+          requestId: approval.requestId,
           metadata: responseMetadata,
           riskLevel: "high",
           summary: "Recycle bin restore requires explicit confirmation.",
           message:
-            "Re-run restore_recycle_bin_table with the same input and confirmation_token to continue.",
+            "An external operator must sign approval_request before retrying with approval_token.",
         });
       }
 
@@ -164,6 +169,7 @@ export const restoreRecycleBinTableTool: ToolDefinition = {
           summary: summarizeMutation(result.affectedRows),
           metadata: metadata(context.taskId, {
             statement_type: restoreInput.method === "insert_select" ? "insert" : "unknown",
+            sql_hash: sqlHash(normalizeSql(sql)),
             duration_ms: result.durationMs,
           }),
         },

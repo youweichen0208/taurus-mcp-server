@@ -1,5 +1,6 @@
 import { createHash, createHmac } from "node:crypto";
 import type { Config } from "../config/index.js";
+import { createSystemCredentialProvider } from "./keychain.js";
 
 export interface HuaweiCloudAuthOptions {
   region?: string;
@@ -11,7 +12,17 @@ export interface HuaweiCloudAuthOptions {
   domainSuffix?: string;
   iamEndpoint?: string;
   language?: "en-us" | "zh-cn";
+  allowedEndpointHosts?: string[];
+  credentialProvider?: HuaweiCloudCredentialProvider;
 }
+
+export interface HuaweiCloudCredentials {
+  accessKeyId: string;
+  secretAccessKey: string;
+  securityToken?: string;
+}
+
+export type HuaweiCloudCredentialProvider = () => Promise<HuaweiCloudCredentials>;
 
 export interface FetchHuaweiCloudOptions {
   url: string;
@@ -24,6 +35,32 @@ export interface FetchHuaweiCloudOptions {
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function validateHuaweiCloudUrl(url: URL, auth: HuaweiCloudAuthOptions): void {
+  if (url.protocol !== "https:") {
+    throw new Error("Huawei Cloud API endpoints must use HTTPS.");
+  }
+  if (url.username || url.password) {
+    throw new Error("Huawei Cloud API endpoints must not contain credentials.");
+  }
+
+  const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
+  const suffix = (readString(auth.domainSuffix) ?? "myhuaweicloud.com")
+    .toLowerCase()
+    .replace(/^\.+|\.+$/g, "");
+  const explicitHosts = new Set(
+    (auth.allowedEndpointHosts ?? []).map((host) =>
+      host.toLowerCase().replace(/\.$/, ""),
+    ),
+  );
+  if (
+    hostname !== suffix &&
+    !hostname.endsWith(`.${suffix}`) &&
+    !explicitHosts.has(hostname)
+  ) {
+    throw new Error(`Huawei Cloud API endpoint host is not allowed: ${hostname}.`);
+  }
 }
 
 function sha256Hex(value: string): string {
@@ -149,6 +186,7 @@ export async function fetchHuaweiCloud(
   const fetchImpl = options.fetchImpl ?? fetch;
   const method = options.method ?? "GET";
   const url = new URL(options.url);
+  validateHuaweiCloudUrl(url, options.auth);
   const body = options.body ?? "";
   const authToken = readString(options.auth.authToken);
   const headers = new Headers(options.headers);
@@ -162,13 +200,29 @@ export async function fetchHuaweiCloud(
     });
   }
 
-  const { accessKeyId, secretAccessKey } = requireAksk(options.auth);
+  const providerCredentials =
+    (!readString(options.auth.accessKeyId) ||
+      !readString(options.auth.secretAccessKey)) &&
+    options.auth.credentialProvider
+      ? await options.auth.credentialProvider()
+      : undefined;
+  const resolvedAuth = {
+    ...options.auth,
+    accessKeyId:
+      readString(options.auth.accessKeyId) ?? providerCredentials?.accessKeyId,
+    secretAccessKey:
+      readString(options.auth.secretAccessKey) ??
+      providerCredentials?.secretAccessKey,
+    securityToken:
+      readString(options.auth.securityToken) ?? providerCredentials?.securityToken,
+  };
+  const { accessKeyId, secretAccessKey } = requireAksk(resolvedAuth);
   const sdkDate = formatSdkDate(new Date());
   const headerMap = buildHeaderMap(
     headers,
     url,
     sdkDate,
-    readString(options.auth.securityToken),
+    readString(resolvedAuth.securityToken),
   );
   headerMap.set(
     "authorization",
@@ -262,6 +316,12 @@ export async function resolveHuaweiCloudProjectId(
 }
 
 export function getHuaweiCloudAuthFromConfig(config: Config): HuaweiCloudAuthOptions {
+  const credentialProvider = config.cloud?.keychainService
+    ? createSystemCredentialProvider({
+        service: config.cloud.keychainService,
+        account: config.cloud.keychainAccount,
+      })
+    : undefined;
   return {
     region: config.cloud?.region,
     projectId: config.cloud?.projectId,
@@ -272,11 +332,32 @@ export function getHuaweiCloudAuthFromConfig(config: Config): HuaweiCloudAuthOpt
     domainSuffix: config.cloud?.domainSuffix,
     iamEndpoint: config.cloud?.iamEndpoint,
     language: config.cloud?.language,
+    allowedEndpointHosts: [
+      config.cloud?.apiEndpoint,
+      config.cloud?.iamEndpoint,
+      config.cloud?.kmsEndpoint,
+      config.cloud?.csmsEndpoint,
+      config.slowSqlSource?.taurusApi?.endpoint,
+      config.slowSqlSource?.das?.endpoint,
+      config.metricsSource?.ces?.endpoint,
+    ]
+      .filter((value): value is string => Boolean(value))
+      .flatMap((value) => {
+        try {
+          return [new URL(value).hostname];
+        } catch {
+          return [];
+        }
+      }),
+    credentialProvider,
   };
 }
 
 export function hasHuaweiCloudCredentialAuth(config: Config): boolean {
-  return canAuthenticateHuaweiCloudRequests(getHuaweiCloudAuthFromConfig(config));
+  return Boolean(
+    config.cloud?.keychainService ||
+      canAuthenticateHuaweiCloudRequests(getHuaweiCloudAuthFromConfig(config)),
+  );
 }
 
 export function inferHuaweiCloudRegionFromEndpoint(endpoint: string | undefined): string | undefined {

@@ -17,13 +17,13 @@
 
 - 一台能访问 TaurusDB 内网地址的机器，推荐和实例同 VPC，或在跳板机 / ECS / Sidecar 上运行 MCP。
 - Node.js `>=20`，并已在仓库根目录执行 `npm install`。
-- TaurusDB 数据库连接信息：host、port、可选默认 database、数据库账号密码。
+- TaurusDB 数据库连接信息：host、port、可选默认 database、数据库账号，以及 DEW/KMS 加密后的密码密文。
 - 如果要测 diagnostics 云侧证据，推荐至少准备华为云 `region + AK/SK`；底层 DAS / CES endpoint、project_id、instance_id、node_id、IAM token 现在都可以作为 override 或联调兜底，而不是默认必填。
 
 数据库账号建议权限：
 
 - 用于日常分析的账号至少具备目标库 `SELECT`，`SHOW PROCESSLIST`，`SHOW REPLICA STATUS` 或 `SHOW SLAVE STATUS`，`SHOW ENGINE INNODB STATUS`，以及 `performance_schema` 相关只读权限。
-- 如果要验证 `execute_sql`，同一个账号或会话内切换的另一个账号还需要具备受控写权限。MCP 不再区分 `readonly user` / `mutation user` 配置字段，是否能真正写入由数据库权限决定。
+- 如果要验证 `execute_sql`，配置的数据库账号还需要具备受控写权限。MCP 不再区分 `readonly user` / `mutation user` 配置字段，是否能真正写入由数据库权限决定。
 
 ---
 
@@ -37,14 +37,15 @@ export TAURUSDB_SQL_DATASOURCE=taurus_mcp
 export TAURUSDB_SQL_HOST='<taurusdb-private-host>'
 export TAURUSDB_SQL_PORT=3306
 export TAURUSDB_SQL_USER='<database-user>'
-export TAURUSDB_SQL_PASSWORD='<database-password>'
+export TAURUSDB_SQL_PASSWORD='hw-kms-file:~/.taurusdb-mcp/password.ciphertext'
 export TAURUSDB_DEFAULT_DATASOURCE=taurus_mcp
 ```
 
 注意：
 
 - `restore_recycle_bin_table` 默认暴露。
-- 该 Tool 的第一次调用不会直接执行恢复，而是先返回 `confirmation_token`。
+- 该 Tool 的第一次调用不会直接执行恢复，而是先返回
+  `approval_request`，需要独立 operator 在 MCP 客户端之外签名。
 
 如果你的云端连接需要 TLS，建议用 profile 文件，而不是把所有配置塞进环境变量：
 
@@ -58,7 +59,7 @@ export TAURUSDB_DEFAULT_DATASOURCE=taurus_mcp
       "port": 3306,
       "user": {
         "username": "<database-user>",
-        "password": "env:TAURUSDB_SQL_PASSWORD"
+        "password": "hw-kms-file:~/.taurusdb-mcp/password.ciphertext"
       },
       "tls": {
         "enabled": true,
@@ -82,7 +83,7 @@ export TAURUSDB_DEFAULT_DATASOURCE=taurus_mcp
 
 ## 3. 配置云侧 Evidence Source
 
-这些配置不是启动 MCP 的必需项，但会影响 `find_top_slow_sql`、`diagnose_slow_query`、`diagnose_service_latency`、`diagnose_connection_spike`、`diagnose_replication_lag`、`diagnose_storage_pressure` 的云侧证据质量。
+这些配置不是启动 MCP 的必需项，但会影响 `find_top_slow_sql`、`diagnose_slow_query`、`diagnose_service_latency`、`diagnose_connection_spike`、`diagnose_storage_pressure` 的云侧证据质量。
 
 优先使用高层 cloud resolver 配置，而不是直接手填 DAS / CES 全量字段。当前默认主路径已经收敛到 `region + AK/SK`：
 
@@ -165,10 +166,9 @@ export TAURUSDB_CLOUD_SECURITY_TOKEN='<session-token>'
 
 1. `list_cloud_taurus_instances`
 2. `select_cloud_taurus_instance`
-3. `begin_sql_login`，然后在返回的 `127.0.0.1` 页面中输入数据库账号密码
-4. `list_databases`
-5. `set_default_database`
-6. `get_session_binding`
+3. `list_databases`
+4. `set_default_database`
+5. `get_session_binding`
 
 `list_cloud_taurus_instances` 成功时，说明当前 MCP 会话已经拿着环境变量中的凭证成功访问华为云控制面。重点观察：
 
@@ -222,14 +222,13 @@ npm run cloud:validate
 
 第二步：再验证数据面。
 
-先配置 datasource 模板或准备好会话级账号，然后在 MCP 客户端里按顺序调用：
+先配置包含数据库密码引用的 datasource 模板，然后在 MCP 客户端里按顺序调用。正式环境建议使用 DEW/KMS 密文引用：
 
 1. `select_cloud_taurus_instance`
-2. `begin_sql_login`，然后在本地安全登录页中完成认证
-3. `list_databases`
-4. `set_default_database`
-5. `get_session_binding`
-6. `execute_readonly_sql`，执行 `SELECT 1 AS ok`
+2. `list_databases`
+3. `set_default_database`
+4. `get_session_binding`
+5. `execute_readonly_sql`，执行 `SELECT 1 AS ok`
 
 通过标准：
 
@@ -306,7 +305,7 @@ node /path/to/taurus-mcp-server/packages/mcp/dist/index.js
 
 - 日志写 stderr，stdout 只保留 MCP JSON-RPC。
 - 客户端进程必须能继承上面配置好的环境变量，或在客户端 MCP 配置里显式写入 env。
-- 云端首轮不要直接让模型执行写 SQL；先用 Inspector 或明确 tool call 验证 confirmation token。
+- 云端首轮不要直接让模型执行写 SQL；先用 Inspector 或明确 tool call 验证 external approval。
 
 ---
 
@@ -319,7 +318,8 @@ node /path/to/taurus-mcp-server/packages/mcp/dist/index.js
 3. `describe_table`
 4. `execute_readonly_sql`
 5. `explain_sql`
-6. `execute_sql` 首次返回 `CONFIRMATION_REQUIRED`，第二次带 `confirmation_token` 执行
+6. `execute_sql` 首次返回 `CONFIRMATION_REQUIRED`；operator 签名
+   `approval_request` 后，第二次带生成的 `approval_token` 执行
 
 第二轮：Taurus 专属能力。
 
@@ -331,13 +331,15 @@ node /path/to/taurus-mcp-server/packages/mcp/dist/index.js
 6. `explain_sql_enhanced`，不支持时应返回 `UNSUPPORTED_FEATURE`
 7. `flashback_query`，不支持时应返回 `UNSUPPORTED_FEATURE`
 8. `list_recycle_bin`，不支持时应返回 `UNSUPPORTED_FEATURE`
-9. `restore_recycle_bin_table`，只在 disposable test table 上验证，且必须经过 confirmation token
+9. `restore_recycle_bin_table`，只在 disposable test table 上验证，且必须经过 external approval
 
 `restore_recycle_bin_table` 的最小确认流是：
 
-1. 第一次调用不带 `confirmation_token`
-2. 记录返回的 `confirmation_token`
-3. 使用完全相同的 `recycle_table`、`method`、`destination_database`、`destination_table` 重试
+1. 第一次调用不带 `approval_token`
+2. 记录返回的 `approval_request`
+3. 由 operator 使用 `taurusdb-mcp approve` 签名
+4. 使用生成的 `approval_token` 和完全相同的
+   `recycle_table`、`method`、`destination_database`、`destination_table` 重试
 
 第三轮：diagnostics。
 
@@ -368,7 +370,7 @@ node /path/to/taurus-mcp-server/packages/mcp/dist/index.js
 | 连接失败 | VPC、白名单、安全组、host、port、TLS、账号密码 |
 | `list_tables` 失败 | 默认 database 缺失或账号无目标库权限 |
 | Taurus 专属 Tool 返回 `UNSUPPORTED_FEATURE` | capability probe 判定 feature unavailable，或当前实例不是 TaurusDB 内核 |
-| confirmation token 无效 | 第二次 SQL 文本、datasource、database 与第一次不一致，或 token 已使用 |
+| external approval 无效 | 第二次 SQL 文本、datasource、database 与第一次不一致，或 token 已使用 |
 | diagnostics 没有云侧 evidence | DAS / CES 未启用，token / endpoint / dimension 错误，或时间窗口无数据 |
 | `diagnose_replication_lag` 返回 `not_applicable` | 单机实例、无只读节点、复制状态命令不可用，属于可接受降级 |
 

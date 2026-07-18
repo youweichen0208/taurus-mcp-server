@@ -11,6 +11,9 @@ export interface ReadonlyOptions {
   maxRows?: number;
   maxColumns?: number;
   maxFieldChars?: number;
+  maxResultBytes?: number;
+  maxBlobBytes?: number;
+  maskAllColumns?: boolean;
   timeoutMs?: number;
   sensitiveColumns?: Iterable<string>;
   sensitiveStrategy?: SensitiveStrategy;
@@ -18,7 +21,6 @@ export interface ReadonlyOptions {
 
 export interface MutationOptions {
   timeoutMs?: number;
-  allowReadonlyFallbackForMutations?: boolean;
 }
 
 export interface QueryResult {
@@ -31,6 +33,8 @@ export interface QueryResult {
   rowTruncated: boolean;
   columnTruncated: boolean;
   fieldTruncated: boolean;
+  byteTruncated: boolean;
+  returnedBytes: number;
   redactedColumns: string[];
   droppedColumns: string[];
   truncatedColumns: string[];

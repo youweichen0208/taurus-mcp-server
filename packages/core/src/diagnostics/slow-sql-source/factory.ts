@@ -1,4 +1,5 @@
 import type { Config } from "../../config/index.js";
+import { getHuaweiCloudAuthFromConfig } from "../../cloud/auth.js";
 import type { DiagnoseSlowQueryInput, FindTopSlowSqlInput } from "../types.js";
 import type { SessionContext } from "../../context/session-context.js";
 import { DasSlowSqlSource } from "./das-source.js";
@@ -50,6 +51,7 @@ class CompositeSlowSqlSource implements SlowSqlSource {
 }
 
 export function createSlowSqlSource(config: Config): SlowSqlSource | undefined {
+  const credentialProvider = getHuaweiCloudAuthFromConfig(config).credentialProvider;
   const sources: SlowSqlSource[] = [];
   const taurusApi = config.slowSqlSource?.taurusApi;
   if (
@@ -59,7 +61,8 @@ export function createSlowSqlSource(config: Config): SlowSqlSource | undefined {
     taurusApi.instanceId &&
     taurusApi.nodeId &&
     (taurusApi.authToken ||
-      (config.cloud?.accessKeyId && config.cloud?.secretAccessKey))
+      (config.cloud?.accessKeyId && config.cloud?.secretAccessKey) ||
+      config.cloud?.keychainService)
   ) {
     sources.push(
       new TaurusApiSlowSqlSource({
@@ -71,6 +74,7 @@ export function createSlowSqlSource(config: Config): SlowSqlSource | undefined {
         accessKeyId: config.cloud?.accessKeyId,
         secretAccessKey: config.cloud?.secretAccessKey,
         securityToken: config.cloud?.securityToken,
+        credentialProvider,
         language: taurusApi.language,
         requestTimeoutMs: taurusApi.requestTimeoutMs,
         defaultLookbackMinutes: taurusApi.defaultLookbackMinutes,
@@ -85,7 +89,9 @@ export function createSlowSqlSource(config: Config): SlowSqlSource | undefined {
     das.endpoint &&
     das.projectId &&
     das.instanceId &&
-    (das.authToken || (config.cloud?.accessKeyId && config.cloud?.secretAccessKey))
+    (das.authToken ||
+      (config.cloud?.accessKeyId && config.cloud?.secretAccessKey) ||
+      config.cloud?.keychainService)
   ) {
     sources.push(
       new DasSlowSqlSource({
@@ -96,6 +102,7 @@ export function createSlowSqlSource(config: Config): SlowSqlSource | undefined {
         accessKeyId: config.cloud?.accessKeyId,
         secretAccessKey: config.cloud?.secretAccessKey,
         securityToken: config.cloud?.securityToken,
+        credentialProvider,
         datastoreType: das.datastoreType,
         requestTimeoutMs: das.requestTimeoutMs,
         defaultLookbackMinutes: das.defaultLookbackMinutes,

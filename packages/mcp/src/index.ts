@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { runInit } from "./commands/init.js";
+import { runCredentials } from "./commands/credentials.js";
+import { runApprove } from "./commands/approve.js";
 import { startMcpServer } from "./server.js";
 import { VERSION } from "./version.js";
 
@@ -10,6 +12,16 @@ async function main(): Promise<void> {
 
   if (firstArg === "init") {
     process.exitCode = await runInit(args.slice(1));
+    return;
+  }
+
+  if (firstArg === "credentials") {
+    process.exitCode = await runCredentials(args.slice(1));
+    return;
+  }
+
+  if (firstArg === "approve") {
+    process.exitCode = await runApprove(args.slice(1));
     return;
   }
 

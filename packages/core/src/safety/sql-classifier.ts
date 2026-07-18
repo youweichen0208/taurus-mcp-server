@@ -10,6 +10,7 @@ export interface SqlClassification {
   sqlHash: string;
   isMultiStatement: boolean;
   referencedTables: string[];
+  referencedSchemas: string[];
   referencedColumns: string[];
   hasWhere: boolean;
   hasLimit: boolean;
@@ -65,6 +66,9 @@ export function classifySql(
     sqlHash: normalized.sqlHash,
     isMultiStatement: ast.isMultiStatement,
     referencedTables: extractTables(ast),
+    referencedSchemas: dedupeCaseInsensitive(
+      ast.tables.flatMap((table) => (table.schema ? [table.schema] : [])),
+    ),
     referencedColumns: extractColumns(ast),
     hasWhere: ast.where !== undefined,
     hasLimit: ast.limit !== undefined,

@@ -47,12 +47,13 @@ function makeMockConnectionPool(queryHandler, cancelHandler) {
         datasource,
         mode,
         sessionId,
-        allowReadonlyFallbackForMutations: opts?.allowReadonlyFallbackForMutations,
+        database: opts?.database,
       });
 
       return {
         id: sessionId,
         datasource,
+        database: opts?.database,
         mode,
         async execute(sql, options) {
           state.executions.push({ sessionId, mode, sql, options });
@@ -81,7 +82,10 @@ function makeMockConnectionPool(queryHandler, cancelHandler) {
 
 test("sql executor executeReadonly uses ro session and truncates rows", async () => {
   const { pool, state } = makeMockConnectionPool(({ sql }) => {
-    assert.equal(sql, "SELECT id, name FROM users");
+    assert.equal(
+      sql,
+      "SELECT * FROM (SELECT id, name FROM users) AS __taurus_mcp_bounded LIMIT 3",
+    );
     return {
       rows: [
         { id: 1, name: "a" },
@@ -108,6 +112,7 @@ test("sql executor executeReadonly uses ro session and truncates rows", async ()
 
   assert.equal(state.acquires.length, 1);
   assert.equal(state.acquires[0].mode, "ro");
+  assert.equal(state.acquires[0].database, "demo");
   assert.equal(state.executions[0].options.timeoutMs, 1234);
   assert.equal(result.queryId, "qry_1");
   assert.equal(result.columns.length, 2);
@@ -125,7 +130,10 @@ test("sql executor executeReadonly uses ro session and truncates rows", async ()
 
 test("sql executor executeReadonly applies result redaction policy", async () => {
   const { pool } = makeMockConnectionPool(({ sql }) => {
-    assert.equal(sql, "SELECT id, name, password, notes FROM users");
+    assert.equal(
+      sql,
+      "SELECT * FROM (SELECT id, name, password, notes FROM users) AS __taurus_mcp_bounded LIMIT 201",
+    );
     return {
       rows: [
         { id: 1, name: "AliceLong", password: "secret_1", notes: "note_1" },
@@ -216,7 +224,7 @@ test("sql executor executeMutation wraps sql in begin/commit", async () => {
   assert.equal(status.mode, "rw");
 });
 
-test("sql executor executeMutation forwards mutation-session options for scoped tools", async () => {
+test("sql executor executeMutation binds the mutation session to context database", async () => {
   const { pool, state } = makeMockConnectionPool(({ sql }) => {
     if (sql === "BEGIN" || sql === "COMMIT") {
       return { rows: [] };
@@ -239,13 +247,10 @@ test("sql executor executeMutation forwards mutation-session options for scoped 
         maxColumns: 50,
       },
     }),
-    {
-      allowReadonlyFallbackForMutations: true,
-    },
   );
 
   assert.equal(state.acquires[0].mode, "rw");
-  assert.equal(state.acquires[0].allowReadonlyFallbackForMutations, true);
+  assert.equal(state.acquires[0].database, "demo");
   assert.equal(result.affectedRows, 1);
 });
 
@@ -296,6 +301,41 @@ test("sql executor executeMutation rolls back on error", async () => {
   assert.equal(status.status, "failed");
 });
 
+test("sql executor destroys a timed-out mutation session instead of reusing it", async () => {
+  const executedSql = [];
+  const { pool, state } = makeMockConnectionPool(({ sql }) => {
+    executedSql.push(sql);
+    if (sql === "BEGIN") {
+      return { rows: [] };
+    }
+    throw new Error("query timed out");
+  });
+  const executor = createSqlExecutor({
+    connectionPool: pool,
+    queryIdGenerator: () => "qry_timeout",
+  });
+
+  await assert.rejects(
+    () => executor.executeMutation(
+      "UPDATE users SET status='done' WHERE id=1",
+      makeContext({
+        limits: {
+          readonly: false,
+          timeoutMs: 5,
+          maxRows: 200,
+          maxColumns: 50,
+        },
+      }),
+    ),
+    /timed out/,
+  );
+  assert.deepEqual(executedSql, [
+    "BEGIN",
+    "UPDATE users SET status='done' WHERE id=1",
+  ]);
+  assert.equal(state.cancels.length, 1);
+});
+
 test("sql executor explain returns plan, summary and recommendations", async () => {
   const { pool } = makeMockConnectionPool(() => {
     return {
@@ -319,7 +359,10 @@ test("sql executor can cancel running query", async () => {
   const deferred = createDeferred();
   const { pool, state } = makeMockConnectionPool(
     ({ sql }) => {
-      if (sql === "SELECT sleep_query") {
+      if (
+        sql ===
+        "SELECT * FROM (SELECT sleep_query) AS __taurus_mcp_bounded LIMIT 201"
+      ) {
         return deferred.promise;
       }
       return { rows: [] };

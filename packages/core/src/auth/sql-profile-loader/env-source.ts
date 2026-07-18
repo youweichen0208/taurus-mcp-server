@@ -72,6 +72,19 @@ export function parseEnvProfile(env: NodeJS.ProcessEnv): DataSourceProfile | und
     throw new Error("Missing SQL password in environment. Set TAURUSDB_SQL_PASSWORD or include it in DSN.");
   }
 
+  const mutationUsername = asString(env.TAURUSDB_SQL_MUTATION_USER);
+  const mutationPasswordRef = Object.hasOwn(env, "TAURUSDB_SQL_MUTATION_PASSWORD")
+    ? parseCredentialRef(
+        env.TAURUSDB_SQL_MUTATION_PASSWORD,
+        "TAURUSDB_SQL_MUTATION_PASSWORD",
+      )
+    : undefined;
+  if ((mutationUsername && !mutationPasswordRef) || (!mutationUsername && mutationPasswordRef)) {
+    throw new Error(
+      "Mutation credentials require both TAURUSDB_SQL_MUTATION_USER and TAURUSDB_SQL_MUTATION_PASSWORD.",
+    );
+  }
+
   const poolSize = asInteger(env.TAURUSDB_SQL_POOL_SIZE);
   if (poolSize !== undefined && poolSize <= 0) {
     throw new Error("Invalid TAURUSDB_SQL_POOL_SIZE: must be positive.");
@@ -87,6 +100,10 @@ export function parseEnvProfile(env: NodeJS.ProcessEnv): DataSourceProfile | und
       username,
       password: passwordRef,
     },
+    mutationUser:
+      mutationUsername && mutationPasswordRef
+        ? { username: mutationUsername, password: mutationPasswordRef }
+        : undefined,
     poolSize,
   });
 }

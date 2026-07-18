@@ -3,6 +3,7 @@ import {
   DatasourceResolutionError,
   FlashbackNoViewError,
   logger,
+  QueryConcurrencyError,
   SchemaIntrospectionError,
   UnsupportedFeatureError,
 } from "taurusdb-core";
@@ -127,6 +128,16 @@ export function formatToolError(error: unknown, context: ToolErrorContext): Tool
         "No historical flashback view was available for the requested timestamp.",
       metadata: context.metadata,
       details: detailsOf(error),
+    });
+  }
+
+  if (error instanceof QueryConcurrencyError) {
+    return formatError({
+      code: ErrorCode.SERVER_BUSY,
+      message: error.message,
+      summary: `${context.action} could not start because query capacity is exhausted.`,
+      metadata: context.metadata,
+      retryable: true,
     });
   }
 

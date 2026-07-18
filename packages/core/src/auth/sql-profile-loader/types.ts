@@ -28,7 +28,12 @@ export interface DataSourceProfile {
   host?: string;
   port: number;
   database?: string;
+  instanceId?: string;
+  nodeId?: string;
+  /** Read-only credential used by discovery, diagnostics, and query tools. */
   user?: UserCredential;
+  /** Separate credential required for mutation tools. No fallback is allowed. */
+  mutationUser?: UserCredential;
   tls?: TlsOptions;
   poolSize?: number;
   toString(): string;

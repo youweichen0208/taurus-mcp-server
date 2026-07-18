@@ -256,7 +256,7 @@ TaurusDB 特性怎么参与：
 
 TaurusDB 特性怎么参与：
 
-- Tool 会尝试读取复制状态，并合并 CES replication delay、long transaction、write IOPS、write throughput。
+- Tool 会读取只读复制状态快照；CES replication delay、long transaction 和写压力指标需在真实云 RC 阶段验证后再接入。
 - 如果延迟来自大事务，结果会把问题导向写压力和长事务，而不是只看 replica 本身。
 - Flashback Query 可用于判断业务读到旧数据时，主库历史状态和只读节点观察是否一致。
 

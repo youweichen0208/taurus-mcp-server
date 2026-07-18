@@ -191,6 +191,8 @@ export function buildRawConfigFromEnv(
       accessKeyId: cloudAccessKeyId,
       secretAccessKey: cloudSecretAccessKey,
       securityToken: cloudSecurityToken,
+      keychainService: readString(env.TAURUSDB_CLOUD_KEYCHAIN_SERVICE),
+      keychainAccount: readString(env.TAURUSDB_CLOUD_KEYCHAIN_ACCOUNT),
       apiEndpoint: buildHuaweiCloudEndpoint(
         "gaussdb",
         cloudRegion,
@@ -201,6 +203,12 @@ export function buildRawConfigFromEnv(
         cloudRegion,
         cloudDomainSuffix,
       ),
+      kmsEndpoint:
+        readString(env.TAURUSDB_CLOUD_KMS_ENDPOINT) ??
+        buildHuaweiCloudEndpoint("kms", cloudRegion, cloudDomainSuffix),
+      csmsEndpoint:
+        readString(env.TAURUSDB_CLOUD_CSMS_ENDPOINT) ??
+        buildHuaweiCloudEndpoint("csms", cloudRegion, cloudDomainSuffix),
       domainSuffix: cloudDomainSuffix,
       language:
         readString(env.TAURUSDB_CLOUD_LANGUAGE) ??
@@ -220,12 +228,53 @@ export function buildRawConfigFromEnv(
         env.TAURUSDB_MCP_MAX_FIELD_CHARS,
         "TAURUSDB_MCP_MAX_FIELD_CHARS",
       ),
+      maxResultBytes: parseInteger(
+        env.TAURUSDB_MCP_MAX_RESULT_BYTES,
+        "TAURUSDB_MCP_MAX_RESULT_BYTES",
+      ),
+      maxBlobBytes: parseInteger(
+        env.TAURUSDB_MCP_MAX_BLOB_BYTES,
+        "TAURUSDB_MCP_MAX_BLOB_BYTES",
+      ),
+      maxConcurrentQueries: parseInteger(
+        env.TAURUSDB_MCP_MAX_CONCURRENT_QUERIES,
+        "TAURUSDB_MCP_MAX_CONCURRENT_QUERIES",
+      ),
+      maxQueuedQueries: parseInteger(
+        env.TAURUSDB_MCP_MAX_QUEUED_QUERIES,
+        "TAURUSDB_MCP_MAX_QUEUED_QUERIES",
+      ),
+      queueTimeoutMs: parseInteger(
+        env.TAURUSDB_MCP_QUEUE_TIMEOUT_MS,
+        "TAURUSDB_MCP_QUEUE_TIMEOUT_MS",
+      ),
     },
     audit: {
       logPath: expandTildePath(readString(env.TAURUSDB_MCP_AUDIT_LOG_PATH)),
       includeRawSql: parseBoolean(
         env.TAURUSDB_MCP_AUDIT_INCLUDE_RAW_SQL,
         "TAURUSDB_MCP_AUDIT_INCLUDE_RAW_SQL",
+      ),
+    },
+    security: {
+      mutationsEnabled: parseBoolean(
+        env.TAURUSDB_ENABLE_MUTATIONS,
+        "TAURUSDB_ENABLE_MUTATIONS",
+      ),
+      dynamicTargetsEnabled: parseBoolean(
+        env.TAURUSDB_ENABLE_DYNAMIC_TARGETS,
+        "TAURUSDB_ENABLE_DYNAMIC_TARGETS",
+      ),
+      requireTls: parseBoolean(
+        env.TAURUSDB_REQUIRE_TLS,
+        "TAURUSDB_REQUIRE_TLS",
+      ),
+      approvalSecretPath: expandTildePath(
+        readString(env.TAURUSDB_MUTATION_APPROVAL_SECRET_FILE),
+      ),
+      approvalTtlSeconds: parseInteger(
+        env.TAURUSDB_MUTATION_APPROVAL_TTL_SECONDS,
+        "TAURUSDB_MUTATION_APPROVAL_TTL_SECONDS",
       ),
     },
     slowSqlSource: {

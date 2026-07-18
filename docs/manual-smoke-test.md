@@ -135,7 +135,8 @@ env | rg '^TAURUSDB_' | sed 's/=.*$/=<set>/'
 - diagnostics 本地 smoke 依赖 `PROCESS` 和 `SELECT ON performance_schema.*`
 - 仓库里的 [local-mysql-users.sql](../testdata/mysql/local-mysql-users.sql) 已包含这两项授权
 - 上云联调请按 [cloud-taurusdb-testing.md](./cloud-taurusdb-testing.md) 准备 datasource、DAS/CES 环境变量和 `npm run cloud:validate`
-- 如果你不想预先写死数据库账号或默认库，也可以启动 MCP 后通过 `begin_sql_login` 的本地一次性页面和 `set_default_database` 在当前会话里绑定
+- 本地 MySQL smoke test 可以使用测试密码；正式环境建议使用 `file:`、`hw-kms:` 或 `hw-kms-file:` 引用
+- 使用正式 `taurusdb-mcp` 启动入口时，不要把数据库明文密码直接写入 MCP 客户端配置
 
 ---
 
@@ -184,7 +185,7 @@ node packages/mcp/dist/index.js
 - 它更适合验证 MCP 协议本身
 - 你可以直接看到 tool 列表、入参、原始返回
 - 更容易检查 `ok`、`summary`、`metadata`、`error.code`
-- 更适合验证 confirmation token 主链路
+- 更适合验证 external approval 主链路
 
 建议优先用它做：
 
@@ -291,7 +292,7 @@ npx @modelcontextprotocol/inspector \
 - 调用后返回的原始响应结构是否完整
 - `ok`、`summary`、`metadata` 是否稳定
 - 失败时 `error.code` 是否明确
-- confirmation token 是否能完整看到和复用
+- external approval 是否能完整看到和复用
 
 ### 7.4 Inspector 推荐验证顺序
 
@@ -597,7 +598,7 @@ WHERE id = 1
 
 首次调用时：
 
-- 不带 `confirmation_token`
+- 不带 `approval_token`
 
 目标：
 
@@ -607,7 +608,7 @@ WHERE id = 1
 
 - 返回 `ok=false`
 - `error.code=CONFIRMATION_REQUIRED`
-- 返回 `confirmation_token`
+- 返回 `approval_request` 和 `request_id`
 - 数据库此时还没实际变更
 
 ### 7.4.11 `execute_sql` 第二次调用
@@ -618,7 +619,8 @@ SQL：
 
 参数：
 
-- 携带上一步返回的 `confirmation_token`
+- 由独立 operator 使用 `taurusdb-mcp approve` 签名上一步的
+  `approval_request`，再携带生成的 `approval_token`
 
 目标：
 
@@ -638,8 +640,9 @@ SQL：
 
 1. 在云端 TaurusDB 上先准备一个可丢弃的测试表。
 2. 通过 `list_recycle_bin` 确认回收站里出现了目标表。
-3. 调用 `restore_recycle_bin_table`，第一次不带 `confirmation_token`。
-4. 用返回的 `confirmation_token` 重试同一组参数。
+3. 调用 `restore_recycle_bin_table`，第一次不带 `approval_token`。
+4. 由 operator 签名返回的 `approval_request`，再用生成的
+   `approval_token` 重试同一组参数。
 
 重点看：
 
@@ -964,7 +967,7 @@ claude mcp get huaweicloud-taurusdb-local
 
 - Claude 是否能正确选到对应 Tool
 - Tool 返回后 Claude 是否能组织出合理结论
-- mutation 场景下是否能处理 confirmation token 过程
+- mutation 场景下是否能处理 external approval 过程
 - diagnostics 场景下是否能优先选择 `diagnose_*` tool，而不是退化成普通 `execute_readonly_sql`
 
 ---

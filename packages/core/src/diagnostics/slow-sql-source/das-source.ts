@@ -1,4 +1,4 @@
-import { fetchHuaweiCloud } from "../../cloud/auth.js";
+import { fetchHuaweiCloud, type HuaweiCloudCredentialProvider } from "../../cloud/auth.js";
 import type { SessionContext } from "../../context/session-context.js";
 import type { FindTopSlowSqlInput } from "../types.js";
 import { buildQueryString, candidateToExternalSample, formatUnixSeconds, normalizeTimeRange, parseResponse, pickNextMarker, readNumber, readString, scoreCandidate, secondsToMs, sortExternalSamples } from "./utils.js";
@@ -13,6 +13,7 @@ type DasSlowSqlSourceOptions = {
   accessKeyId?: string;
   secretAccessKey?: string;
   securityToken?: string;
+  credentialProvider?: HuaweiCloudCredentialProvider;
   datastoreType: "MySQL" | "TaurusDB";
   requestTimeoutMs: number;
   defaultLookbackMinutes: number;
@@ -29,6 +30,7 @@ export class DasSlowSqlSource implements SlowSqlSource {
   private readonly accessKeyId?: string;
   private readonly secretAccessKey?: string;
   private readonly securityToken?: string;
+  private readonly credentialProvider?: HuaweiCloudCredentialProvider;
   private readonly datastoreType: "MySQL" | "TaurusDB";
   private readonly requestTimeoutMs: number;
   private readonly defaultLookbackMinutes: number;
@@ -44,6 +46,7 @@ export class DasSlowSqlSource implements SlowSqlSource {
     this.accessKeyId = options.accessKeyId;
     this.secretAccessKey = options.secretAccessKey;
     this.securityToken = options.securityToken;
+    this.credentialProvider = options.credentialProvider;
     this.datastoreType = options.datastoreType;
     this.requestTimeoutMs = options.requestTimeoutMs;
     this.defaultLookbackMinutes = options.defaultLookbackMinutes;
@@ -249,6 +252,7 @@ export class DasSlowSqlSource implements SlowSqlSource {
           accessKeyId: this.accessKeyId,
           secretAccessKey: this.secretAccessKey,
           securityToken: this.securityToken,
+          credentialProvider: this.credentialProvider,
         },
         fetchImpl: (input, init) =>
           this.fetchImpl(input, {

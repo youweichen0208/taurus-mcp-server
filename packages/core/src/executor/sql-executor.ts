@@ -15,6 +15,8 @@ import {
   type ResultRedactor,
 } from "../safety/redaction.js";
 import { asFiniteNumber, inferColumns, normalizeRows } from "./result-normalizer.js";
+import { QueryConcurrencyLimiter } from "./concurrency-limiter.js";
+import { buildServerBoundedReadonlySql } from "./bounded-sql.js";
 import type {
   CancelResult,
   ExplainResult,
@@ -44,6 +46,26 @@ type ActiveSession = {
   cancelRequested: boolean;
 };
 
+function isTimeoutError(error: unknown): boolean {
+  return /timeout|timed out/i.test(
+    error instanceof Error ? error.message : String(error),
+  );
+}
+
+async function cancelTimedOutSession(
+  session: Session,
+  error: unknown,
+): Promise<void> {
+  if (!isTimeoutError(error)) {
+    return;
+  }
+  try {
+    await session.cancel();
+  } catch {
+    // Keep the original timeout error.
+  }
+}
+
 export type SqlExecutorOptions = {
   connectionPool: ConnectionPool;
   now?: () => number;
@@ -51,6 +73,9 @@ export type SqlExecutorOptions = {
   historyLimit?: number;
   queryTracker?: QueryTracker;
   resultRedactor?: ResultRedactor;
+  maxConcurrentQueries?: number;
+  maxQueuedQueries?: number;
+  queueTimeoutMs?: number;
 };
 
 export class SqlExecutorImpl implements SqlExecutor {
@@ -77,7 +102,9 @@ export class SqlExecutorImpl implements SqlExecutor {
   async explain(sql: string, ctx: SessionContext): Promise<ExplainResult> {
     const queryId = this.queryIdGenerator();
     const startedAt = this.now();
-    const session = await this.connectionPool.acquire(ctx.datasource, "ro");
+    const session = await this.connectionPool.acquire(ctx.datasource, "ro", {
+      database: ctx.database,
+    });
     const active = this.beginQuery(queryId, session, ctx, "ro", startedAt);
 
     try {
@@ -98,6 +125,7 @@ export class SqlExecutorImpl implements SqlExecutor {
         durationMs,
       };
     } catch (error) {
+      await cancelTimedOutSession(session, error);
       const durationMs = this.now() - startedAt;
       this.completeQuery(
         active.queryId,
@@ -121,13 +149,18 @@ export class SqlExecutorImpl implements SqlExecutor {
     const maxRows = opts.maxRows ?? ctx.limits.maxRows;
     const maxColumns = opts.maxColumns ?? ctx.limits.maxColumns;
     const maxFieldChars = opts.maxFieldChars ?? ctx.limits.maxFieldChars ?? 2048;
+    const maxResultBytes = opts.maxResultBytes ?? ctx.limits.maxResultBytes ?? 1048576;
+    const maxBlobBytes = opts.maxBlobBytes ?? ctx.limits.maxBlobBytes ?? 65536;
     const timeoutMs = opts.timeoutMs ?? ctx.limits.timeoutMs;
 
-    const session = await this.connectionPool.acquire(ctx.datasource, "ro");
+    const session = await this.connectionPool.acquire(ctx.datasource, "ro", {
+      database: ctx.database,
+    });
     const active = this.beginQuery(queryId, session, ctx, "ro", startedAt);
 
     try {
-      const result = await session.execute(sql, { timeoutMs });
+      const executionSql = buildServerBoundedReadonlySql(sql, maxRows);
+      const result = await session.execute(executionSql, { timeoutMs });
       const sourceRows = Array.isArray(result.rows) ? result.rows : [];
       const columns = inferColumns(result, sourceRows);
       const normalizedRows = normalizeRows(sourceRows, columns);
@@ -142,6 +175,9 @@ export class SqlExecutorImpl implements SqlExecutor {
           maxRows,
           maxColumns,
           maxFieldChars,
+          maxResultBytes,
+          maxBlobBytes,
+          maskAllColumns: opts.maskAllColumns,
           sensitiveColumns: opts.sensitiveColumns,
           sensitiveStrategy: opts.sensitiveStrategy,
         },
@@ -159,12 +195,15 @@ export class SqlExecutorImpl implements SqlExecutor {
         rowTruncated: redacted.rowTruncated,
         columnTruncated: redacted.columnTruncated,
         fieldTruncated: redacted.fieldTruncated,
+        byteTruncated: redacted.byteTruncated,
+        returnedBytes: redacted.returnedBytes,
         redactedColumns: redacted.redactedColumns,
         droppedColumns: redacted.droppedColumns,
         truncatedColumns: redacted.truncatedColumns,
         durationMs,
       };
     } catch (error) {
+      await cancelTimedOutSession(session, error);
       const durationMs = this.now() - startedAt;
       this.completeQuery(
         active.queryId,
@@ -192,7 +231,7 @@ export class SqlExecutorImpl implements SqlExecutor {
     const timeoutMs = opts.timeoutMs ?? ctx.limits.timeoutMs;
 
     const session = await this.connectionPool.acquire(ctx.datasource, "rw", {
-      allowReadonlyFallbackForMutations: opts.allowReadonlyFallbackForMutations,
+      database: ctx.database,
     });
     const active = this.beginQuery(queryId, session, ctx, "rw", startedAt);
 
@@ -214,10 +253,14 @@ export class SqlExecutorImpl implements SqlExecutor {
         durationMs,
       };
     } catch (error) {
-      try {
-        await session.execute("ROLLBACK", { timeoutMs });
-      } catch {
-        // Ignore rollback failure and keep original error.
+      if (isTimeoutError(error)) {
+        await cancelTimedOutSession(session, error);
+      } else {
+        try {
+          await session.execute("ROLLBACK", { timeoutMs });
+        } catch {
+          // Ignore rollback failure and keep original error.
+        }
       }
       const durationMs = this.now() - startedAt;
       this.completeQuery(
@@ -350,5 +393,19 @@ export class SqlExecutorImpl implements SqlExecutor {
 }
 
 export function createSqlExecutor(options: SqlExecutorOptions): SqlExecutor {
-  return new SqlExecutorImpl(options);
+  const executor = new SqlExecutorImpl(options);
+  const limiter = new QueryConcurrencyLimiter(
+    options.maxConcurrentQueries ?? 8,
+    options.maxQueuedQueries ?? 32,
+    options.queueTimeoutMs ?? 5000,
+  );
+  return {
+    explain: (sql, ctx) => limiter.run(() => executor.explain(sql, ctx)),
+    executeReadonly: (sql, ctx, opts) =>
+      limiter.run(() => executor.executeReadonly(sql, ctx, opts)),
+    executeMutation: (sql, ctx, opts) =>
+      limiter.run(() => executor.executeMutation(sql, ctx, opts)),
+    getQueryStatus: (queryId) => executor.getQueryStatus(queryId),
+    cancelQuery: (queryId) => executor.cancelQuery(queryId),
+  };
 }

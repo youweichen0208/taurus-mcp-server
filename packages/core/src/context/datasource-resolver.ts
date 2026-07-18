@@ -68,12 +68,19 @@ export class DefaultDatasourceResolver implements DatasourceResolver {
       engine: profile.engine,
       database: normalizeString(input.database) ?? profile.database,
       schema: normalizeString(input.schema),
+      host: profile.host,
+      port: profile.port,
+      projectId: this.config.cloud.projectId,
+      instanceId: profile.instanceId ?? this.config.cloud.instanceId,
+      nodeId: profile.nodeId ?? this.config.cloud.nodeId,
       limits: {
         readonly: input.readonly ?? true,
         timeoutMs: resolveTimeoutMs(input.timeout_ms, this.config.limits.maxStatementMs),
         maxRows: this.config.limits.maxRows,
         maxColumns: this.config.limits.maxColumns,
         maxFieldChars: this.config.limits.maxFieldChars,
+        maxResultBytes: this.config.limits.maxResultBytes,
+        maxBlobBytes: this.config.limits.maxBlobBytes,
       },
     };
   }

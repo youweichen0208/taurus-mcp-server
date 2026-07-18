@@ -175,6 +175,22 @@ async function validateMcpDataPlane(config) {
     });
     failed ||= !pingResult.ok;
 
+    if (config.security.requireTls) {
+      const tlsResult = await runCheck("MCP SQL TLS negotiation", async () => {
+        const result = await engine.executeReadonly(
+          "SHOW STATUS LIKE 'Ssl_cipher'",
+          ctx,
+          { maxRows: 2, maxColumns: 2, timeoutMs: 5000 },
+        );
+        const cipher = result.rows[0]?.[1];
+        if (typeof cipher !== "string" || !cipher.trim()) {
+          throw new Error("Database session did not negotiate a TLS cipher.");
+        }
+        return "verified=true";
+      });
+      failed ||= !tlsResult.ok;
+    }
+
     const databasesResult = await runCheck("MCP list databases", async () => {
       const items = await engine.listDatabases(ctx);
       return `count=${items.length}`;
@@ -207,6 +223,12 @@ async function validateMcpDataPlane(config) {
 
     const capabilityResult = await runCheck("TaurusDB capability probe", async () => {
       const snapshot = await engine.probeCapabilities(ctx);
+      if (
+        optional("TAURUSDB_CLOUD_VALIDATE_REQUIRE_TAURUSDB", "true") !== "false" &&
+        !snapshot.kernelInfo.isTaurusDB
+      ) {
+        throw new Error("The selected endpoint was not identified as TaurusDB.");
+      }
       const featureSummary = Object.entries(snapshot.features)
         .map(([name, feature]) => `${name}:${feature.available ? "yes" : "no"}`)
         .join(",");
@@ -244,6 +266,20 @@ async function validateMcpDataPlane(config) {
       return `status=${result.status} candidates=${result.topCandidates.length} evidence=${result.evidence.map((item) => item.source).join(",") || "<none>"}`;
     });
     failed ||= !latencyResult.ok;
+
+    const replicationResult = await runCheck("Diagnostics replication lag", async () => {
+      const result = await engine.diagnoseReplicationLag(
+        {
+          datasource: validationDatasource,
+          database: validationDatabase,
+          timeRange: { relative: optional("TAURUSDB_CLOUD_VALIDATE_TIME_RANGE", "30m") },
+          evidenceLevel: "standard",
+        },
+        ctx,
+      );
+      return `status=${result.status} severity=${result.severity} evidence=${result.evidence.map((item) => item.source).join(",") || "<none>"}`;
+    });
+    failed ||= !replicationResult.ok;
 
     return {
       failed,

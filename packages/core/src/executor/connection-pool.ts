@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { ulid } from "ulid";
 import type { Config } from "../config/index.js";
 import type {
@@ -26,6 +27,7 @@ export interface RawResult {
 export interface Session {
   id: string;
   datasource: string;
+  database?: string;
   mode: PoolMode;
   execute(sql: string, options?: ExecOptions): Promise<RawResult>;
   cancel(): Promise<void>;
@@ -49,7 +51,7 @@ export interface ConnectionPool {
     datasource: string,
     mode: PoolMode,
     opts?: {
-      allowReadonlyFallbackForMutations?: boolean;
+      database?: string;
     },
   ): Promise<Session>;
   release(session: Session): Promise<void>;
@@ -114,6 +116,7 @@ export class ConnectionPoolError extends Error {
 type InternalPoolEntry = {
   key: string;
   datasource: string;
+  database?: string;
   mode: PoolMode;
   pool: DriverPool;
 };
@@ -123,34 +126,48 @@ type ActiveSession = {
   entryKey: string;
   driverSession: DriverSession;
   datasource: string;
+  database?: string;
   mode: PoolMode;
 };
 
-function poolKey(datasource: string, mode: PoolMode): string {
-  return `${datasource}:${mode}`;
+function poolKey(datasource: string, mode: PoolMode, database?: string): string {
+  return JSON.stringify([datasource, mode, database ?? null]);
 }
 
 async function resolveTls(
   tls: TlsOptions | undefined,
   secretResolver: SecretResolver,
+  host: string,
+  requireTls: boolean,
 ): Promise<DriverPoolCreateInput["tls"]> {
-  if (!tls) {
+  if (!tls && !requireTls) {
     return undefined;
   }
 
+  if (requireTls && tls?.enabled === false) {
+    throw new ConnectionPoolError(
+      "TLS is required by server policy and cannot be disabled for this datasource.",
+    );
+  }
+  if (requireTls && tls?.rejectUnauthorized === false) {
+    throw new ConnectionPoolError(
+      "TLS certificate verification is required by server policy.",
+    );
+  }
+
   const resolved: DriverPoolCreateInput["tls"] = {
-    enabled: tls.enabled,
-    rejectUnauthorized: tls.rejectUnauthorized,
-    servername: tls.servername,
+    enabled: tls?.enabled ?? true,
+    rejectUnauthorized: tls?.rejectUnauthorized ?? true,
+    servername: tls?.servername ?? (isIP(host) === 0 ? host : undefined),
   };
 
-  if (tls.ca) {
+  if (tls?.ca) {
     resolved.ca = await secretResolver.resolve(tls.ca);
   }
-  if (tls.cert) {
+  if (tls?.cert) {
     resolved.cert = await secretResolver.resolve(tls.cert);
   }
-  if (tls.key) {
+  if (tls?.key) {
     resolved.key = await secretResolver.resolve(tls.key);
   }
 
@@ -160,15 +177,15 @@ async function resolveTls(
 function selectCredential(
   profile: DataSourceProfile,
   mode: PoolMode,
-  _opts: { allowReadonlyFallbackForMutations?: boolean } = {},
 ) {
-  void mode;
-  if (!profile.user) {
+  const credential = mode === "rw" ? profile.mutationUser : profile.user;
+  if (!credential) {
+    const credentialKind = mode === "rw" ? "mutation" : "read-only";
     throw new ConnectionPoolError(
-      `Datasource "${profile.name}" does not define SQL credentials. Call begin_sql_login and complete the secure local login form before executing SQL.`,
+      `Datasource "${profile.name}" does not define ${credentialKind} SQL credentials. Configure a dedicated ${credentialKind} database username and password reference.`,
     );
   }
-  return profile.user;
+  return credential;
 }
 
 async function resolveCredentialValue(
@@ -202,7 +219,7 @@ export class ConnectionPoolManager implements ConnectionPool {
     datasource: string,
     mode: PoolMode,
     opts: {
-      allowReadonlyFallbackForMutations?: boolean;
+      database?: string;
     } = {},
   ): Promise<Session> {
     const profile = await this.profileLoader.get(datasource);
@@ -210,7 +227,8 @@ export class ConnectionPoolManager implements ConnectionPool {
       throw new ConnectionPoolError(`Datasource profile not found: "${datasource}".`);
     }
 
-    const entry = await this.getOrCreatePool(profile, mode, opts);
+    const database = opts.database ?? profile.database;
+    const entry = await this.getOrCreatePool(profile, mode, database);
     let driverSession: DriverSession;
     try {
       driverSession = await entry.pool.acquire();
@@ -227,6 +245,7 @@ export class ConnectionPoolManager implements ConnectionPool {
       entryKey: entry.key,
       driverSession,
       datasource,
+      database,
       mode,
     };
     this.activeSessions.set(sessionId, active);
@@ -235,6 +254,7 @@ export class ConnectionPoolManager implements ConnectionPool {
     return {
       id: sessionId,
       datasource,
+      database,
       mode,
       async execute(sql: string, options?: ExecOptions): Promise<RawResult> {
         return active.driverSession.execute(sql, options);
@@ -312,15 +332,15 @@ export class ConnectionPoolManager implements ConnectionPool {
   private async getOrCreatePool(
     profile: DataSourceProfile,
     mode: PoolMode,
-    opts: { allowReadonlyFallbackForMutations?: boolean } = {},
+    database?: string,
   ): Promise<InternalPoolEntry> {
-    const key = poolKey(profile.name, mode);
+    const key = poolKey(profile.name, mode, database);
     const existing = this.pools.get(key);
     if (existing) {
       return existing instanceof Promise ? existing : existing;
     }
 
-    const pending = this.createPool(profile, mode, opts)
+    const pending = this.createPool(profile, mode, database)
       .then((entry) => {
         this.pools.set(key, entry);
         return entry;
@@ -337,7 +357,7 @@ export class ConnectionPoolManager implements ConnectionPool {
   private async createPool(
     profile: DataSourceProfile,
     mode: PoolMode,
-    opts: { allowReadonlyFallbackForMutations?: boolean } = {},
+    database?: string,
   ): Promise<InternalPoolEntry> {
     const adapter = this.adapters[profile.engine];
     if (!adapter) {
@@ -349,13 +369,18 @@ export class ConnectionPoolManager implements ConnectionPool {
       );
     }
 
-    const credential = selectCredential(profile, mode, opts);
+    const credential = selectCredential(profile, mode);
     const password = await resolveCredentialValue(
       credential.password,
       this.secretResolver,
       `${profile.name}.${mode}.password`,
     );
-    const tls = await resolveTls(profile.tls, this.secretResolver);
+    const tls = await resolveTls(
+      profile.tls,
+      this.secretResolver,
+      profile.host,
+      this.config.security.requireTls,
+    );
 
     let pool: DriverPool;
     try {
@@ -365,7 +390,7 @@ export class ConnectionPoolManager implements ConnectionPool {
         engine: profile.engine,
         host: profile.host,
         port: profile.port,
-        database: profile.database,
+        database,
         username: credential.username,
         password,
         poolSize: profile.poolSize,
@@ -379,8 +404,9 @@ export class ConnectionPoolManager implements ConnectionPool {
     }
 
     return {
-      key: poolKey(profile.name, mode),
+      key: poolKey(profile.name, mode, database),
       datasource: profile.name,
+      database,
       mode,
       pool,
     };

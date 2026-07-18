@@ -404,7 +404,7 @@ export class TaurusDBEngine {
   cancelQuery(queryId: string): Promise<CancelResult>;
 
   // Confirmation
-  issueConfirmation(input: IssueInput): Promise<ConfirmationToken>;
+  issueConfirmation(input: IssueInput): Promise<ConfirmationRequest>;
   validateConfirmation(
     token: string,
     sql: string,
@@ -525,13 +525,16 @@ export async function bootstrapDependencies(): Promise<ServerDeps> {
 
 ### 3.3 当前确认模型
 
-当前实现不再引入 `ConfirmationStrategy` 抽象。`core` 只保留一套 token-based confirmation 原语：
+当前实现不再引入 `ConfirmationStrategy` 抽象。`core` 保留一套外部审批原语：
 
 - `issueConfirmation`
 - `validateConfirmation`
 - `handleConfirmation`
 
-MCP 直接把 token 返回给客户端，要求用户携带 `confirmation_token` 重试。
+MCP 返回不可直接执行写操作的 `approval_request`。独立 operator 在 MCP
+客户端之外使用受保护的审批密钥签名，客户端再携带一次性
+`approval_token` 重试。token 绑定 SQL hash、datasource、database、风险和
+有效期，并记录审批 actor。
 
 ### 3.4 各模块职责（与原架构一致，仅强调归属）
 
@@ -657,7 +660,7 @@ flowchart TB
   B --> C{action}
   C -->|block| D[直接抛 BlockedError]
   C -->|confirm 且无 token| E[返回 CONFIRMATION_REQUIRED]
-  E --> G[前端重新发起并携带 confirmation_token]
+  E --> G[前端重新发起并携带 approval_token]
   C -->|allow| G
   G --> H[从连接池获取会话]
   H --> I[注入运行时限制]
@@ -1345,11 +1348,11 @@ const server = new McpServer({
   "summary": "This SQL will modify data and requires explicit confirmation.",
   "error": {
     "code": "CONFIRMATION_REQUIRED",
-    "message": "Re-run the same SQL with confirmation_token to continue.",
+    "message": "Re-run the same SQL with approval_token to continue.",
     "retryable": true
   },
   "data": {
-    "confirmation_token": "ctok_eyJhbGciOi...",
+    "approval_token": "ctok_eyJhbGciOi...",
     "risk_level": "medium",
     "sql_hash": "c194..."
   },
@@ -1551,7 +1554,7 @@ MCP 返回结果本身就可能流向 LLM 或工单系统，需要严格的数�
    多语句、DCL、`TRUNCATE`、`DROP DATABASE`、无 `WHERE` 的 `UPDATE/DELETE` 直接阻断。
 
 2. **Token 确认流**
-   对高风险写 SQL 返回 `CONFIRMATION_REQUIRED`，由前端携带 `confirmation_token` 重试。
+   对高风险写 SQL 返回 `CONFIRMATION_REQUIRED`，由前端携带 `approval_token` 重试。
 
 3. **TaurusDB 原生差异化只读能力**
    当前已桥接 `get_kernel_info`、`list_taurus_features`、`explain_sql_enhanced`、`flashback_query`，并已默认注册第一版 diagnostics Tool 面。
@@ -1628,7 +1631,7 @@ MCP 返回结果本身就可能流向 LLM 或工单系统，需要严格的数�
 **core 包单元测试**：
 
 - SQL 分类、风险规则、AST 解析
-- confirmation token 的签发与校验
+- external approval 的签发与校验
 - 结果裁剪和脱敏
 - capability probe 的版本比较与 feature matrix 构建
 - flashback 时间解析与 SQL 构造
