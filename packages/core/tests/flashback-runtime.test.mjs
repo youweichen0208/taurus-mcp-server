@@ -22,6 +22,7 @@ function makeContext() {
 
 test("flashbackQuery returns contextual diagnostics when no historical view is available", async () => {
   const ctx = makeContext();
+  ctx.database = "db-1";
   const engine = {
     capabilityProbe: {
       async listFeatures() {
@@ -82,7 +83,7 @@ test("flashbackQuery returns contextual diagnostics when no historical view is a
     flashbackQuery(
       engine,
       {
-        database: "taurusdb_test",
+        database: "db-1",
         table: "t_flashback_query_test",
         asOf: { timestamp: "2026-05-13 11:06:00" },
         where: "id = 1",
