@@ -1,6 +1,7 @@
 import type { ReadonlyOptions } from "../executor/sql-executor.js";
 import { createSqlParser } from "../safety/parser/index.js";
 import { normalizeSql } from "../utils/hash.js";
+import { quoteMysqlIdentifier } from "../utils/mysql-identifier.js";
 
 export interface FlashbackInput {
   database?: string;
@@ -13,7 +14,6 @@ export interface FlashbackInput {
   limit?: number;
 }
 
-const IDENTIFIER_PATTERN = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 const SQL_TIMESTAMP_PATTERN =
   /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.\d{1,6})?$/;
 const RELATIVE_DURATION_PATTERN =
@@ -44,13 +44,6 @@ function normalizeDurationUnit(unit: string): DurationUnit {
     return "h";
   }
   return "d";
-}
-
-function quoteIdentifier(identifier: string, fieldName: string): string {
-  if (!IDENTIFIER_PATTERN.test(identifier)) {
-    throw new Error(`Invalid ${fieldName}: "${identifier}".`);
-  }
-  return `\`${identifier}\``;
 }
 
 export function normalizeFlashbackWhereClause(where: string): string {
@@ -190,11 +183,11 @@ export function buildFlashbackSql(
   defaultDatabase: string,
   now: () => number = Date.now,
 ): string {
-  const database = quoteIdentifier(input.database ?? defaultDatabase, "database");
-  const table = quoteIdentifier(input.table, "table");
+  const database = quoteMysqlIdentifier(input.database ?? defaultDatabase, "database");
+  const table = quoteMysqlIdentifier(input.table, "table");
   const columns =
     input.columns && input.columns.length > 0
-      ? input.columns.map((column) => quoteIdentifier(column, "column")).join(", ")
+      ? input.columns.map((column) => quoteMysqlIdentifier(column, "column")).join(", ")
       : "*";
   const timestamp = resolveFlashbackTimestamp(input.asOf, now);
   const clauses = [
