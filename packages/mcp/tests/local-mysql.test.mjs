@@ -124,13 +124,16 @@ async function createProfilesFile() {
 }
 
 function mysqlConnectionConfig({ mutation = false } = {}) {
-  void mutation;
   return {
     host: requiredEnv("TAURUSDB_TEST_MYSQL_HOST"),
     port: parseInteger(process.env.TAURUSDB_TEST_MYSQL_PORT, 3306),
     database: requiredEnv("TAURUSDB_TEST_MYSQL_DATABASE"),
-    user: requiredEnv("TAURUSDB_TEST_MYSQL_USER"),
-    password: requiredEnv("TAURUSDB_TEST_MYSQL_PASSWORD"),
+    user: requiredEnv(
+      mutation ? "TAURUSDB_TEST_MYSQL_MUTATION_USER" : "TAURUSDB_TEST_MYSQL_USER",
+    ),
+    password: requiredEnv(
+      mutation ? "TAURUSDB_TEST_MYSQL_MUTATION_PASSWORD" : "TAURUSDB_TEST_MYSQL_PASSWORD",
+    ),
   };
 }
 
