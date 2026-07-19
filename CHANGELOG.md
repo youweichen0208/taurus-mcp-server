@@ -2,6 +2,29 @@
 
 All notable changes follow Keep a Changelog and Semantic Versioning.
 
+## [0.5.0-rc.1] - 2026-07-19
+
+### Added
+
+- Bounded audit log rotation with private permissions and concurrent-write
+  integrity coverage.
+- Deterministic concurrency, queue saturation, large-result, and MySQL scale
+  validation.
+- Customer deployment, centralized audit handoff, and release verification
+  guidance.
+
+### Changed
+
+- Customer configuration examples now prefer the operating-system credential
+  store and no longer contain developer-specific paths or addresses.
+- Development tooling was updated to remove the remaining npm audit advisory.
+
+### Fixed
+
+- MySQL integration tests now execute in CI instead of being silently skipped.
+- Restored version-controlled MySQL fixtures and use the mutation account for
+  lock-contention workloads.
+
 ## [0.4.0] - 2026-07-18
 
 ### Added

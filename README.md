@@ -155,7 +155,7 @@ npx -y taurusdb-mcp init --client vscode
 
 ## 可用工具
 
-当前 `0.4.0` 默认只注册只读、发现、能力探测和诊断 tools。
+当前 `0.5.0-rc.1` 默认只注册只读、发现、能力探测和诊断 tools。
 
 ### 通用工具
 

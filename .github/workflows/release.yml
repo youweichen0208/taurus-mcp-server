@@ -22,6 +22,30 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
       - run: npm ci
+      - name: Verify release metadata
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node <<'NODE'
+          const { appendFileSync, readFileSync } = require("node:fs");
+          const readPackage = (file) => JSON.parse(readFileSync(file, "utf8"));
+          const root = readPackage("package.json");
+          const core = readPackage("packages/core/package.json");
+          const mcp = readPackage("packages/mcp/package.json");
+          const versions = new Set([root.version, core.version, mcp.version]);
+          if (versions.size !== 1) {
+            throw new Error("Root and workspace package versions must match.");
+          }
+          if (mcp.dependencies["taurusdb-core"] !== core.version) {
+            throw new Error("taurusdb-mcp must depend on the release version of taurusdb-core.");
+          }
+          if (process.env.RELEASE_TAG !== `v${root.version}`) {
+            throw new Error(`Tag ${process.env.RELEASE_TAG} does not match package version ${root.version}.`);
+          }
+          const npmTag = root.version.includes("-") ? "next" : "latest";
+          appendFileSync(process.env.GITHUB_OUTPUT, `npm-tag=${npmTag}\n`);
+          NODE
       - run: npm run release:check
       - name: Generate CycloneDX SBOM
         run: npm sbom --workspaces --sbom-format cyclonedx > taurusdb-sbom.cdx.json
@@ -30,5 +54,5 @@ jobs:
           name: taurusdb-mcp-${{ github.ref_name }}-sbom
           path: taurusdb-sbom.cdx.json
           if-no-files-found: error
-      - run: npm publish --workspace taurusdb-core --provenance --access public
-      - run: npm publish --workspace taurusdb-mcp --provenance --access public
+      - run: npm publish --workspace taurusdb-core --provenance --access public --tag ${{ steps.release.outputs.npm-tag }}
+      - run: npm publish --workspace taurusdb-mcp --provenance --access public --tag ${{ steps.release.outputs.npm-tag }}

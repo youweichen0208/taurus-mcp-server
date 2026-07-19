@@ -1,6 +1,6 @@
 {
   "name": "taurusdb-core",
-  "version": "0.4.0",
+  "version": "0.5.0-rc.1",
   "description": "Shared TaurusDB data-plane engine for schema, SQL execution, guardrails, and diagnostics.",
   "license": "MIT",
   "repository": {
