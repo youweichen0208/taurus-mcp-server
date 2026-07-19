@@ -18,6 +18,8 @@ const AuditSchema = z
   .object({
     logPath: z.string().min(1).default("~/.taurusdb-mcp/audit.jsonl"),
     includeRawSql: z.boolean().default(false),
+    maxBytes: z.number().int().positive().default(104857600),
+    maxFiles: z.number().int().positive().max(100).default(10),
   })
   .default({});
 

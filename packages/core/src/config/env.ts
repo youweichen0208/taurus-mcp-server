@@ -255,6 +255,14 @@ export function buildRawConfigFromEnv(
         env.TAURUSDB_MCP_AUDIT_INCLUDE_RAW_SQL,
         "TAURUSDB_MCP_AUDIT_INCLUDE_RAW_SQL",
       ),
+      maxBytes: parseInteger(
+        env.TAURUSDB_MCP_AUDIT_MAX_BYTES,
+        "TAURUSDB_MCP_AUDIT_MAX_BYTES",
+      ),
+      maxFiles: parseInteger(
+        env.TAURUSDB_MCP_AUDIT_MAX_FILES,
+        "TAURUSDB_MCP_AUDIT_MAX_FILES",
+      ),
     },
     security: {
       mutationsEnabled: parseBoolean(

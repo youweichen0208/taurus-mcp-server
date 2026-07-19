@@ -40,6 +40,8 @@ test("config uses documented defaults when env is empty", () => {
   assert.equal(config.limits.queueTimeoutMs, 5000);
   assert.equal(config.audit.includeRawSql, false);
   assert.equal(config.audit.logPath, "~/.taurusdb-mcp/audit.jsonl");
+  assert.equal(config.audit.maxBytes, 104857600);
+  assert.equal(config.audit.maxFiles, 10);
   assert.equal(config.security.mutationsEnabled, false);
   assert.equal(config.security.dynamicTargetsEnabled, false);
   assert.equal(config.security.requireTls, true);
@@ -83,6 +85,8 @@ test("config maps env vars into typed fields", () => {
     TAURUSDB_MCP_QUEUE_TIMEOUT_MS: "250",
     TAURUSDB_MCP_AUDIT_LOG_PATH: "~/audit.jsonl",
     TAURUSDB_MCP_AUDIT_INCLUDE_RAW_SQL: "1",
+    TAURUSDB_MCP_AUDIT_MAX_BYTES: "4096",
+    TAURUSDB_MCP_AUDIT_MAX_FILES: "3",
     TAURUSDB_ENABLE_MUTATIONS: "true",
     TAURUSDB_ENABLE_DYNAMIC_TARGETS: "true",
     TAURUSDB_REQUIRE_TLS: "false",
@@ -159,6 +163,8 @@ test("config maps env vars into typed fields", () => {
   assert.equal(config.limits.queueTimeoutMs, 250);
   assert.equal(config.audit.logPath, `${os.homedir()}/audit.jsonl`);
   assert.equal(config.audit.includeRawSql, true);
+  assert.equal(config.audit.maxBytes, 4096);
+  assert.equal(config.audit.maxFiles, 3);
   assert.equal(config.security.mutationsEnabled, true);
   assert.equal(config.security.dynamicTargetsEnabled, true);
   assert.equal(config.security.requireTls, false);

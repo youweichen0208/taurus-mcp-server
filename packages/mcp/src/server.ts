@@ -39,6 +39,8 @@ export async function bootstrapDependencies(): Promise<ServerDeps> {
   const engine = await TaurusDBEngine.create({ config, profileLoader });
   const auditWriter = await createJsonlAuditWriter({
     logPath: config.audit.logPath,
+    maxBytes: config.audit.maxBytes,
+    maxFiles: config.audit.maxFiles,
   });
 
   return {
