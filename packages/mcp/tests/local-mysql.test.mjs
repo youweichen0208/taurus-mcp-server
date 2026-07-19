@@ -16,7 +16,9 @@ const serverEntrypoint = path.resolve(__dirname, "../dist/index.js");
 const schemaSqlPath = path.resolve(repoRoot, "testdata/mysql/local-mysql-schema.sql");
 const seedSqlPath = path.resolve(repoRoot, "testdata/mysql/local-mysql-seed.sql");
 const usersSqlPath = path.resolve(repoRoot, "testdata/mysql/local-mysql-users.sql");
-const runLocalMysqlTests = process.env.TAURUSDB_RUN_LOCAL_MYSQL_TESTS === "true";
+const runLocalMysqlTests = ["1", "true"].includes(
+  process.env.TAURUSDB_RUN_LOCAL_MYSQL_TESTS?.trim().toLowerCase(),
+);
 const localMysqlTest = runLocalMysqlTests ? test : test.skip;
 const approvalSecret = "local-mysql-approval-secret-that-is-at-least-32-bytes";
 
