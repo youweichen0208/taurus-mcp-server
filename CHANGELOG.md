@@ -2,6 +2,14 @@
 
 All notable changes follow Keep a Changelog and Semantic Versioning.
 
+## [0.5.0-rc.2] - 2026-07-19
+
+### Fixed
+
+- CLI version output now reads the published package metadata instead of a
+  hard-coded value.
+- Release automation uses an OIDC-capable Node.js and npm CLI combination.
+
 ## [0.5.0-rc.1] - 2026-07-19
 
 ### Added

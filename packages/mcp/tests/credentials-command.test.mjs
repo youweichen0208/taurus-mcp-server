@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -30,9 +31,12 @@ test("credentials configure help is available from the published CLI", () => {
 
 test("CLI version matches the published package version", () => {
   const result = run(["--version"]);
+  const packageMetadata = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  );
 
   assert.equal(result.status, 0);
-  assert.equal(result.stdout.trim(), "0.4.0");
+  assert.equal(result.stdout.trim(), packageMetadata.version);
 });
 
 test("credentials check help is available from the published CLI", () => {
