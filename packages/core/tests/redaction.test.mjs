@@ -147,3 +147,28 @@ test("result redactor can conservatively mask all output aliases", () => {
   assert.deepEqual(result.rows, [["***"]]);
   assert.deepEqual(result.redactedColumns, ["contact"]);
 });
+
+test("result redactor bounds a large in-memory driver result by serialized bytes", () => {
+  const redactor = createResultRedactor();
+  const result = redactor.redact(
+    {
+      columns: [{ name: "id" }, { name: "payload" }],
+      rows: Array.from({ length: 10_000 }, (_, index) => [
+        index,
+        `payload-${index}-${"x".repeat(4096)}`,
+      ]),
+      rowCount: 10_000,
+    },
+    {
+      maxRows: 10_000,
+      maxColumns: 10,
+      maxFieldChars: 8192,
+      maxResultBytes: 64 * 1024,
+    },
+  );
+
+  assert.equal(result.byteTruncated, true);
+  assert.equal(result.rowTruncated, true);
+  assert.equal(result.returnedBytes <= 64 * 1024, true);
+  assert.equal(result.rows.length < 100, true);
+});

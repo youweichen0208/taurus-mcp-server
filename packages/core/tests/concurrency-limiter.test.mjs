@@ -46,3 +46,24 @@ test("query concurrency limiter times out queued work", async () => {
   releaseFirst();
   await first;
 });
+
+test("query concurrency limiter keeps a sustained burst within the active cap", async () => {
+  const maxConcurrent = 8;
+  const limiter = new QueryConcurrencyLimiter(maxConcurrent, 192, 5000);
+  let active = 0;
+  let peakActive = 0;
+
+  const results = await Promise.all(
+    Array.from({ length: 200 }, (_, index) => limiter.run(async () => {
+      active += 1;
+      peakActive = Math.max(peakActive, active);
+      await new Promise((resolve) => setTimeout(resolve, index % 3));
+      active -= 1;
+      return index;
+    })),
+  );
+
+  assert.deepEqual(results, Array.from({ length: 200 }, (_, index) => index));
+  assert.equal(peakActive, maxConcurrent);
+  assert.equal(active, 0);
+});

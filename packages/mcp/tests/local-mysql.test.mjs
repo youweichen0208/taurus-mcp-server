@@ -193,6 +193,26 @@ async function prepareStoragePressureFixture() {
   }, { database: requiredEnv("TAURUSDB_TEST_MYSQL_DATABASE") });
 }
 
+async function prepareLargeResultFixture() {
+  await withBootstrapConnection(async (connection) => {
+    await connection.query("DROP TABLE IF EXISTS mcp_large_results");
+    await connection.query(`
+      CREATE TABLE mcp_large_results (
+        id BIGINT PRIMARY KEY,
+        payload TEXT NOT NULL
+      ) ENGINE=InnoDB
+    `);
+    const rows = Array.from({ length: 300 }, (_, index) => [
+      index + 1,
+      `large-result-${index}-${"x".repeat(4096)}`,
+    ]);
+    await connection.query(
+      "INSERT INTO mcp_large_results (id, payload) VALUES ?",
+      [rows],
+    );
+  }, { database: requiredEnv("TAURUSDB_TEST_MYSQL_DATABASE") });
+}
+
 async function runStoragePressureWorkload() {
   return withBootstrapConnection(async (connection) => {
     await connection.query("SET SESSION internal_tmp_mem_storage_engine = MEMORY");
@@ -230,6 +250,7 @@ async function withClient(run, options = {}) {
       TAURUSDB_ENABLE_MUTATIONS: "true",
       TAURUSDB_REQUIRE_TLS: "false",
       TAURUSDB_MUTATION_APPROVAL_SECRET_FILE: approvalSecretPath,
+      ...options.env,
     },
   });
   const stderr = collectStderr(transport.stderr);
@@ -363,6 +384,40 @@ localMysqlTest("local mysql MCP covers mutation confirmation flow", async () => 
     assert.equal(verify.isError, false);
     assert.equal(verify.structuredContent.data.rows[0][0], "cancelled");
   });
+});
+
+localMysqlTest("local mysql MCP bounds a large database result by response bytes", async () => {
+  await prepareDatabase();
+  await prepareLargeResultFixture();
+
+  try {
+    await withClient(async ({ client }) => {
+      const result = await client.callTool({
+        name: "execute_readonly_sql",
+        arguments: {
+          sql: "SELECT id, payload FROM mcp_large_results ORDER BY id",
+        },
+      });
+
+      assert.equal(result.isError, false);
+      assert.equal(result.structuredContent.data.byte_truncated, true);
+      assert.equal(result.structuredContent.data.row_truncated, true);
+      assert.equal(result.structuredContent.data.returned_bytes <= 8192, true);
+      assert.equal(result.structuredContent.data.rows.length < 10, true);
+    }, {
+      skipPrepareDatabase: true,
+      env: {
+        TAURUSDB_MCP_MAX_ROWS: "1000",
+        TAURUSDB_MCP_MAX_FIELD_CHARS: "8192",
+        TAURUSDB_MCP_MAX_RESULT_BYTES: "8192",
+      },
+    });
+  } finally {
+    await withBootstrapConnection(
+      (connection) => connection.query("DROP TABLE IF EXISTS mcp_large_results"),
+      { database: requiredEnv("TAURUSDB_TEST_MYSQL_DATABASE") },
+    );
+  }
 });
 
 localMysqlTest("local mysql MCP exposes diagnostics tools by default", async () => {
