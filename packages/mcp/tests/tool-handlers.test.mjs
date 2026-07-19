@@ -4,8 +4,8 @@ import test from "node:test";
 import { createConfigFromEnv, FlashbackNoViewError, UnsupportedFeatureError } from "taurusdb-core";
 import { ErrorCode } from "../dist/utils/formatter.js";
 import {
+  analyzeMutationSqlTool,
   executeReadonlySqlTool,
-  executeSqlTool,
   explainSqlTool,
 } from "../dist/tools/query.js";
 import {
@@ -36,10 +36,7 @@ import {
   setDefaultDatabaseTool,
 } from "../dist/tools/taurus/cloud-context.js";
 import { beginSqlLoginTool } from "../dist/tools/taurus/sql-login.js";
-import {
-  listRecycleBinTool,
-  restoreRecycleBinTableTool,
-} from "../dist/tools/taurus/recycle-bin.js";
+import { listRecycleBinTool } from "../dist/tools/taurus/recycle-bin.js";
 
 function createDeps(engineOverrides = {}) {
   const runtimeTargets = new Map();
@@ -75,7 +72,9 @@ function createDeps(engineOverrides = {}) {
         return "taurus_mcp";
       },
       async get(name) {
-        return profiles.get(name);
+        const profile = profiles.get(name);
+        const target = runtimeTargets.get(name);
+        return profile && target ? { ...profile, ...target } : profile;
       },
       setRuntimeTarget(name, target) {
         const current = runtimeTargets.get(name) ?? {};
@@ -112,6 +111,7 @@ function createDeps(engineOverrides = {}) {
       },
       async close() {},
     },
+    sqlCredentialValidator: async () => {},
     engine: {
       listDataSources: async () => [],
       getDefaultDataSource: async () => undefined,
@@ -1053,7 +1053,13 @@ test("list_recycle_bin returns parameter hint when TaurusDB feature is disabled"
 });
 
 test("set_default_database binds a session-scoped default database after instance selection", async () => {
-  const deps = createDeps();
+  let schemaProbe;
+  const deps = createDeps({
+    listTables: async (ctx, database) => {
+      schemaProbe = { ctx, database };
+      return [];
+    },
+  });
 
   deps.profileLoader.setRuntimeTarget("taurus_mcp", {
     host: "1.2.3.4",
@@ -1074,6 +1080,8 @@ test("set_default_database binds a session-scoped default database after instanc
   assert.equal(result.ok, true);
   assert.equal(result.data.datasource, "taurus_mcp");
   assert.equal(result.data.database, "analytics");
+  assert.equal(schemaProbe.database, "analytics");
+  assert.equal(schemaProbe.ctx.database, "analytics");
   assert.deepEqual(deps.profileLoader.getRuntimeTarget("taurus_mcp"), {
     host: "1.2.3.4",
     port: 3306,
@@ -1086,6 +1094,11 @@ test("set_default_database binds a session-scoped default database after instanc
 test("begin_sql_login returns a secure local URL without credential fields", async () => {
   const deps = createDeps({
     getDefaultDataSource: async () => "taurus_mcp",
+  });
+  deps.profileLoader.setRuntimeTarget("taurus_mcp", {
+    host: "1.2.3.4",
+    port: 3306,
+    instanceId: "instance-1",
   });
 
   const result = await beginSqlLoginTool.handler(
@@ -1107,6 +1120,9 @@ test("begin_sql_login returns a secure local URL without credential fields", asy
 test("begin_sql_login binds submitted credentials and rebuilds the engine", async () => {
   let pendingLogin;
   let closed = false;
+  let validated = false;
+  let activatedDatasource;
+  let expiration;
   const deps = createDeps({
     getDefaultDataSource: async () => "taurus_mcp",
     close: async () => {
@@ -1123,6 +1139,20 @@ test("begin_sql_login binds submitted credentials and rebuilds the engine", asyn
     },
     async close() {},
   };
+  deps.sqlCredentialValidator = async () => {
+    validated = true;
+  };
+  deps.credentialSessions = {
+    activate(datasource, onExpire) {
+      activatedDatasource = datasource;
+      expiration = onExpire;
+    },
+  };
+  deps.profileLoader.setRuntimeTarget("taurus_mcp", {
+    host: "1.2.3.4",
+    port: 3306,
+    instanceId: "instance-1",
+  });
 
   const result = await beginSqlLoginTool.handler(
     {},
@@ -1139,17 +1169,75 @@ test("begin_sql_login binds submitted credentials and rebuilds the engine", asyn
   });
 
   assert.equal(closed, true);
+  assert.equal(validated, true);
+  assert.equal(activatedDatasource, "taurus_mcp");
   assert.deepEqual(deps.profileLoader.getRuntimeTarget("taurus_mcp"), {
-    host: undefined,
+    host: "1.2.3.4",
     port: 3306,
     database: "app",
     user: {
       username: "session_app",
       password: { type: "plain", value: "session_pwd" },
     },
-    instanceId: undefined,
+    instanceId: "instance-1",
     nodeId: undefined,
   });
+  await expiration();
+  assert.deepEqual(deps.profileLoader.getRuntimeTarget("taurus_mcp"), {
+    host: "1.2.3.4",
+    port: 3306,
+    database: "app",
+    instanceId: "instance-1",
+    nodeId: undefined,
+  });
+});
+
+test("begin_sql_login rejects invalid credentials and restores the previous target", async () => {
+  let pendingLogin;
+  const deps = createDeps({ getDefaultDataSource: async () => "taurus_mcp" });
+  deps.profileLoader.setRuntimeTarget("taurus_mcp", {
+    host: "1.2.3.4",
+    port: 3306,
+    instanceId: "instance-1",
+  });
+  deps.credentialLogin = {
+    async issueSqlLogin(request) {
+      pendingLogin = request;
+      return {
+        loginUrl: "http://127.0.0.1:12345/sql-login/token",
+        expiresAt: "2026-06-07T01:00:00.000Z",
+      };
+    },
+    async close() {},
+  };
+  deps.sqlCredentialValidator = async () => {
+    const error = new Error("access denied for password secret");
+    error.code = "ER_ACCESS_DENIED_ERROR";
+    throw error;
+  };
+
+  const issued = await beginSqlLoginTool.handler({}, deps, { taskId: "task_invalid_login" });
+  assert.equal(issued.ok, true);
+  await assert.rejects(
+    pendingLogin.bind({
+      datasource: "taurus_mcp",
+      username: "bad_user",
+      password: "bad_password",
+    }),
+    (error) => error?.name === "SqlCredentialValidationError" && error?.kind === "credentials",
+  );
+  assert.deepEqual(deps.profileLoader.getRuntimeTarget("taurus_mcp"), {
+    host: "1.2.3.4",
+    port: 3306,
+    instanceId: "instance-1",
+  });
+});
+
+test("begin_sql_login requires a resolved database host", async () => {
+  const deps = createDeps({ getDefaultDataSource: async () => "taurus_mcp" });
+  const result = await beginSqlLoginTool.handler({}, deps, { taskId: "task_login_without_host" });
+  assert.equal(result.ok, false);
+  assert.match(result.error.message, /does not define a database host/i);
 });
 
 test("clear_sql_credentials restores datasource profile credentials", async () => {
@@ -1205,7 +1293,7 @@ test("get_session_binding returns current runtime binding with masked username",
 
   assert.equal(result.ok, true);
   assert.equal(result.data.datasource, "taurus_mcp");
-  assert.equal(result.data.username_masked, "a***p");
+  assert.equal(result.data.username_masked, "s***p");
   assert.equal(result.data.runtime_override.instance_id, "instance-1");
   assert.equal(result.data.runtime_override.database, "analytics");
   assert.equal(result.data.runtime_override.has_sql_credentials_override, true);
@@ -1312,114 +1400,102 @@ test("select_cloud_taurus_instance prefers private host when binding runtime dat
   }
 });
 
-test("restore_recycle_bin_table requires confirmation before restore", async () => {
-  const deps = createDeps();
-
-  const first = await restoreRecycleBinTableTool.handler(
-    {
-      recycle_table: "orders@123",
-      method: "native_restore",
-    },
-    deps,
-    context,
-  );
-
-  assert.equal(first.ok, false);
-  assert.equal(first.error.code, ErrorCode.CONFIRMATION_REQUIRED);
-  assert.equal(first.data.approval_request, "creq_restore_1");
-
-  const second = await restoreRecycleBinTableTool.handler(
-    {
-      recycle_table: "orders@123",
-      method: "native_restore",
-      approval_token: "ctok_restore_1",
-    },
-    deps,
-    context,
-  );
-
-  assert.equal(second.ok, true);
-  assert.equal(second.data.affected_rows, 1);
-});
-
-test("execute_sql returns confirmation_invalid when token validation fails", async () => {
+test("analyze_mutation_sql returns readonly evidence and never executes the mutation", async () => {
+  let readonlySql;
+  let mutationCalls = 0;
   const deps = createDeps({
-    inspectSql: async () => ({
-      action: "confirm",
-      riskLevel: "high",
-      reasonCodes: ["R006"],
-      riskHints: ["Mutation SQL with WHERE requires confirmation."],
-      normalizedSql: "DELETE FROM orders WHERE id = 1",
-      sqlHash: "sql_hash_mutation",
-      requiresExplain: true,
-      requiresConfirmation: true,
-      runtimeLimits: {
-        readonly: false,
-        timeoutMs: 30_000,
-        maxRows: 100,
-        maxColumns: 50,
-        maxFieldChars: 256,
-      },
+    describeTable: async () => ({
+      database: "app",
+      table: "orders",
+      columns: [
+        { name: "id", dataType: "bigint", nullable: false },
+        { name: "status", dataType: "varchar(32)", nullable: false },
+      ],
+      indexes: [{ name: "PRIMARY", columns: ["id"], unique: true }],
     }),
-    validateConfirmation: async () => ({
-      valid: false,
-      action: "block",
-      riskLevel: "blocked",
-      reason: "token expired",
-      reasonCodes: ["CF002"],
-      riskHints: ["token expired"],
-    }),
+    executeReadonly: async (sql) => {
+      readonlySql = sql;
+      return { queryId: "count", columns: [{ name: "matched_row_count" }], rows: [[2]], rowCount: 1, originalRowCount: 1, truncated: false, rowTruncated: false, columnTruncated: false, fieldTruncated: false, byteTruncated: false, returnedBytes: 8, redactedColumns: [], droppedColumns: [], truncatedColumns: [], durationMs: 1 };
+    },
+    executeMutation: async () => { mutationCalls += 1; throw new Error("must not be called"); },
   });
 
-  const result = await executeSqlTool.handler(
-    { sql: "DELETE FROM orders WHERE id = 1", approval_token: "ctok_bad" },
-    deps,
-    context,
-  );
-
-  assert.equal(result.ok, false);
-  assert.equal(result.error.code, ErrorCode.CONFIRMATION_INVALID);
-  assert.match(result.error.message, /token expired/);
-});
-
-test("execute_sql executes the normalized SQL inspected by guardrail", async () => {
-  let executedSql;
-  const deps = createDeps({
-    inspectSql: async () => ({
-      action: "allow",
-      riskLevel: "low",
-      reasonCodes: [],
-      riskHints: [],
-      normalizedSql: "UPDATE orders SET status = 'done' WHERE id = 1",
-      sqlHash: "sql_hash_normalized_mutation",
-      requiresExplain: false,
-      requiresConfirmation: false,
-      runtimeLimits: {
-        readonly: false,
-        timeoutMs: 30_000,
-        maxRows: 100,
-        maxColumns: 50,
-        maxFieldChars: 256,
-      },
-    }),
-    executeMutation: async (sql) => {
-      executedSql = sql;
-      return {
-        queryId: "qry_mutation_normalized",
-        affectedRows: 1,
-        durationMs: 1,
-      };
-    },
-  });
-
-  const result = await executeSqlTool.handler(
-    { sql: "UPDATE orders SET status = 'done' WHERE id = 1 /*! executable comment */" },
+  const result = await analyzeMutationSqlTool.handler(
+    { database: "app", sql: "UPDATE orders SET status = 'done' WHERE id IN (1, 2)" },
     deps,
     context,
   );
 
   assert.equal(result.ok, true);
-  assert.equal(executedSql, "UPDATE orders SET status = 'done' WHERE id = 1");
+  assert.equal(result.data.execution_status, "not_executed");
+  assert.match(result.data.advised_sql, /^UPDATE orders SET status/);
+  assert.equal(result.data.human_review_required, true);
+  assert.equal(result.data.impact_analysis.sample_rows_read, false);
+  assert.equal(result.data.impact_analysis.matched_row_count, 2);
+  assert.match(readonlySql, /^SELECT COUNT\(\*\).*WHERE id IN \(1, 2\)$/);
+  assert.equal(mutationCalls, 0);
+});
+
+test("analyze_mutation_sql refuses copy-ready advice for unbounded updates", async () => {
+  const result = await analyzeMutationSqlTool.handler(
+    { database: "app", sql: "UPDATE orders SET status = 'done'" },
+    createDeps(),
+    context,
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.data.execution_status, "not_executed");
+  assert.equal(result.data.advised_sql, null);
+  assert.equal(result.data.risk_findings.some((finding) => /without a WHERE/i.test(finding)), true);
+});
+
+test("analyze_mutation_sql does not inspect or advise a cross-database mutation", async () => {
+  let databaseCalls = 0;
+  const deps = createDeps({
+    describeTable: async () => { databaseCalls += 1; throw new Error("must not be called"); },
+    explain: async () => { databaseCalls += 1; throw new Error("must not be called"); },
+    executeReadonly: async () => { databaseCalls += 1; throw new Error("must not be called"); },
+  });
+  const result = await analyzeMutationSqlTool.handler(
+    { database: "app", sql: "UPDATE other_db.orders SET status = 'done' WHERE id = 1" },
+    deps,
+    context,
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.data.advised_sql, null);
+  assert.equal(result.data.risk_findings.some((finding) => /outside the bound session/i.test(finding)), true);
+  assert.equal(databaseCalls, 0);
+});
+
+test("analyze_mutation_sql warns on destructive DDL without returning copy-ready SQL", async () => {
+  const result = await analyzeMutationSqlTool.handler(
+    { database: "app", sql: "DROP TABLE orders" },
+    createDeps(),
+    context,
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.data.execution_status, "not_executed");
+  assert.equal(result.data.advised_sql, null);
+  assert.equal(result.data.risk_findings.some((finding) => /outside copy-ready SQL Advice scope/i.test(finding)), true);
+});
+
+test("analyze_mutation_sql validates CREATE INDEX against current schema", async () => {
+  const deps = createDeps({
+    describeTable: async () => ({
+      database: "app",
+      table: "orders",
+      columns: [{ name: "status", dataType: "varchar(32)", nullable: false }],
+      indexes: [],
+    }),
+  });
+  const result = await analyzeMutationSqlTool.handler(
+    { database: "app", sql: "CREATE INDEX idx_orders_status ON orders(status)" },
+    deps,
+    context,
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.data.execution_status, "not_executed");
+  assert.match(result.data.advised_sql, /^CREATE INDEX/);
+  assert.equal(result.data.schema_findings.length, 1);
 });
 
 test("diagnose_slow_query validates that at least one SQL identifier is provided", async () => {

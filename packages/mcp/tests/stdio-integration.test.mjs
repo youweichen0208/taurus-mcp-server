@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import path from "node:path";
 import os from "node:os";
-import { mkdtemp, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -59,6 +58,7 @@ test("stdio transport exposes expected tools and keeps logs on stderr", async ()
       "show_processlist",
       "execute_readonly_sql",
       "explain_sql",
+      "analyze_mutation_sql",
       "get_kernel_info",
       "list_taurus_features",
       "get_session_binding",
@@ -94,7 +94,7 @@ test("stdio transport exposes expected tools and keeps logs on stderr", async ()
   }
 });
 
-test("stdio transport hides execute_sql by default", async () => {
+test("stdio transport never exposes database mutation tools", async () => {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [serverEntrypoint],
@@ -114,19 +114,14 @@ test("stdio transport hides execute_sql by default", async () => {
     await client.connect(transport);
     const tools = await client.listTools();
     assert.equal(tools.tools.some((tool) => tool.name === "execute_sql"), false);
+    assert.equal(tools.tools.some((tool) => tool.name === "restore_recycle_bin_table"), false);
+    assert.equal(tools.tools.some((tool) => tool.name === "analyze_mutation_sql"), true);
   } finally {
     await transport.close();
   }
 });
 
-test("stdio transport exposes execute_sql only when mutations are enabled", async () => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), "taurusdb-approval-"));
-  const approvalSecretPath = path.join(tempDir, "secret");
-  await writeFile(
-    approvalSecretPath,
-    "stdio-test-approval-secret-that-is-at-least-32-bytes\n",
-    { encoding: "utf8", mode: 0o600 },
-  );
+test("legacy mutation environment flags cannot re-enable database writes", async () => {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [serverEntrypoint],
@@ -136,14 +131,15 @@ test("stdio transport exposes execute_sql only when mutations are enabled", asyn
       TAURUSDB_MCP_LOG_LEVEL: "error",
       TAURUSDB_MCP_AUDIT_LOG_PATH: auditLogPath,
       TAURUSDB_ENABLE_MUTATIONS: "true",
-      TAURUSDB_MUTATION_APPROVAL_SECRET_FILE: approvalSecretPath,
     },
   });
   const client = new Client({ name: "taurusdb-mcp-stdio-test-mutations", version: "1.0.0" });
   try {
     await client.connect(transport);
     const tools = await client.listTools();
-    assert.equal(tools.tools.some((tool) => tool.name === "execute_sql"), true);
+    assert.equal(tools.tools.some((tool) => tool.name === "execute_sql"), false);
+    assert.equal(tools.tools.some((tool) => tool.name === "restore_recycle_bin_table"), false);
+    assert.equal(tools.tools.some((tool) => tool.name === "analyze_mutation_sql"), true);
   } finally {
     await transport.close();
   }

@@ -155,7 +155,7 @@ npx -y taurusdb-mcp init --client vscode
 
 ## 可用工具
 
-当前 `0.5.0-rc.2` 默认只注册只读、发现、能力探测和诊断 tools。
+当前 `0.5.0-rc.3` 默认只注册只读、发现、能力探测和诊断 tools。
 
 ### 通用工具
 
@@ -167,6 +167,7 @@ npx -y taurusdb-mcp init --client vscode
 - `show_processlist`
 - `execute_readonly_sql`
 - `explain_sql`
+- `analyze_mutation_sql`（只返回 SQL Advice，不执行状态变更）
 
 ### 云会话与能力工具
 
@@ -196,13 +197,15 @@ npx -y taurusdb-mcp init --client vscode
 
 - TaurusDB 专属 tools 在 `tools/list` 中默认可见。
 - 如果当前实例不是 TaurusDB，或者某项能力未开启，调用时会返回结构化 unsupported-feature 错误，而不是直接把 tool 隐藏掉。
-- `execute_sql` 和 `restore_recycle_bin_table` 默认隐藏；只有
-  `TAURUSDB_ENABLE_MUTATIONS=true` 时才注册。
+- MCP 永不注册数据库写入或回收站恢复工具；账号权限、环境变量和审批 token
+  都不能改变这条边界。
 - `set_cloud_region`、`select_cloud_taurus_instance`、
   `set_default_database`、`begin_sql_login` 和
   `clear_sql_credentials` 默认隐藏；只有
   `TAURUSDB_ENABLE_DYNAMIC_TARGETS=true` 时才注册。
-- mutation 必须同时配置独立写账号和外部审批密钥，不会回退复用只读账号。
+- `analyze_mutation_sql` 可以使用只读元数据、`EXPLAIN` 和安全派生的
+  `COUNT(*)` 生成 SQL Advice；返回结果始终标记 `not_executed` 和
+  `human_review_required`。
 
 ## 生产安全基线
 
@@ -210,9 +213,10 @@ npx -y taurusdb-mcp init --client vscode
 
 - SQL 连接启用 TLS 并验证服务端证书；仅本地 disposable harness 可显式设置
   `TAURUSDB_REQUIRE_TLS=false`。
-- datasource 的 `user` 是只读账号，`mutationUser` 是独立写账号。
-- 写工具默认关闭；开启后每次写操作都需要外部 operator 对一次性
-  `approval_request` 签名。
+- datasource 只配置最小权限只读账号；即使误配为可写账号，MCP 也没有数据库
+  状态变更工具。
+- INSERT、UPDATE、DELETE、DDL、DCL 和管理语句只可进入 SQL Advice，必须由客户
+  在 MCP 之外人工复核和执行。
 - datasource/database 会绑定到实际连接池，跨数据库 SQL 会被阻断。
 - 云 API 只允许 HTTPS 和华为云域名；私有 endpoint 必须由 operator
   在静态配置中显式列出。
@@ -233,29 +237,14 @@ TAURUSDB_MCP_MAX_QUEUED_QUERIES=32
 TAURUSDB_MCP_QUEUE_TIMEOUT_MS=5000
 TAURUSDB_MCP_MAX_RESULT_BYTES=1048576
 TAURUSDB_MCP_MAX_BLOB_BYTES=65536
+TAURUSDB_SQL_CREDENTIAL_IDLE_TTL_MINUTES=30
+TAURUSDB_SQL_CREDENTIAL_MAX_TTL_MINUTES=480
 ```
 
-如果客户确实需要写能力，再额外配置：
+通过 `begin_sql_login` 绑定的数据库凭据在空闲 30 分钟后自动清除，且无论是否活跃都不会超过 8 小时。管理员可以缩短这两个值，但不能超过默认安全上限。
 
-```bash
-TAURUSDB_ENABLE_MUTATIONS=true
-TAURUSDB_SQL_MUTATION_USER=<dedicated-writer>
-TAURUSDB_SQL_MUTATION_PASSWORD=<secret-reference>
-TAURUSDB_MUTATION_APPROVAL_SECRET_FILE=/run/secrets/taurusdb-approval
-```
-
-审批密钥文件必须至少 32 bytes，且在 POSIX 系统上必须为 `0600`。第一次
-调用写 tool 会返回 `approval_request`；operator 在 MCP 客户端之外执行：
-
-```bash
-npx taurusdb-mcp approve \
-  --request '<approval_request>' \
-  --actor '<operator-identity>' \
-  --secret-file /run/secrets/taurusdb-approval
-```
-
-然后由客户端使用输出的单次 `approval_token` 重试完全相同的操作。token
-绑定 SQL hash、datasource、database、风险级别和有效期，使用一次后立即失效。
+本产品没有“开启写能力”的配置。客户需要落库时，应复制经过人工复核的
+`advised_sql`，在其受控数据库变更流程中自行执行；MCP 不参与执行或授权。
 
 正式发版前必须完成 [release readiness](docs/release-readiness.md) 中的自动化
 门禁和真实 TaurusDB release-candidate 验证。
@@ -731,10 +720,6 @@ stat -f '%Sp %N' ~/.taurusdb-mcp/production-password.ciphertext 2>/dev/null \
         "username": "taurus_readonly",
         "password": "hw-kms-file:~/.taurusdb-mcp/production-password.ciphertext"
       },
-      "mutationUser": {
-        "username": "taurus_writer",
-        "password": "hw-csms://<writer-secret-name>"
-      },
       "tls": {
         "enabled": true,
         "rejectUnauthorized": true,
@@ -889,6 +874,8 @@ POST /v1.0/{project_id}/kms/decrypt-data
 - 数据库明文密码不会进入 Agent 对话或 MCP Tool 参数。
 - 密文文件只包含 `cipher_text`，不包含数据库明文密码。
 - KMS 解密后的密码会短暂存在于 MCP 进程内存，并被数据库驱动用于建立连接。
+- `begin_sql_login` 通过本机页面完成凭据验证；凭据不进入 Agent 对话或 MCP Tool 参数，不由 MCP 持久化保存。
+- 会话式数据库凭据空闲 30 分钟或绑定满 8 小时后自动清除，并关闭关联连接池。
 - 不要在日志、错误信息、审计记录或命令输出中打印明文密码、密文、AK/SK 或 IAM Token。
 - 推荐在客户 VPC 内运行 MCP，并通过私网和 TLS 访问 TaurusDB。
 - 推荐使用专用只读数据库账号、最小 IAM 权限和短期云凭证。

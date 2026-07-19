@@ -19,6 +19,7 @@ import {
   type CredentialLoginService,
 } from "./security/local-credential-login.js";
 import { SessionCoordinator } from "./security/session-coordinator.js";
+import { SessionCredentialManager } from "./security/session-credential-manager.js";
 
 export interface ServerDeps {
   config: Config;
@@ -27,6 +28,12 @@ export interface ServerDeps {
   credentialLogin: CredentialLoginService;
   auditWriter?: AuditWriter;
   sessionCoordinator?: SessionCoordinator;
+  credentialSessions?: SessionCredentialManager;
+  sqlCredentialValidator?: (
+    engine: TaurusDBEngine,
+    datasource: string,
+    taskId: string,
+  ) => Promise<void>;
   clientIdentityProvider?: () => { name: string; version: string } | undefined;
   pingResponse: string;
 }
@@ -42,6 +49,14 @@ export async function bootstrapDependencies(): Promise<ServerDeps> {
     maxBytes: config.audit.maxBytes,
     maxFiles: config.audit.maxFiles,
   });
+  const sessionCoordinator = new SessionCoordinator();
+  const credentialSessions = new SessionCredentialManager({
+    idleTtlMs: config.security.credentialIdleTtlMinutes * 60_000,
+    maxTtlMs: config.security.credentialMaxTtlMinutes * 60_000,
+    onExpirationError: (error, datasource) => {
+      logger.error({ err: error, datasource }, "Failed to expire SQL credential session");
+    },
+  });
 
   return {
     config,
@@ -49,7 +64,8 @@ export async function bootstrapDependencies(): Promise<ServerDeps> {
     engine,
     credentialLogin: new LocalCredentialLoginService(),
     auditWriter,
-    sessionCoordinator: new SessionCoordinator(),
+    sessionCoordinator,
+    credentialSessions,
     pingResponse: "pong",
   };
 }
@@ -65,6 +81,7 @@ export function createServer(deps: ServerDeps): McpServer {
   const cleanup = (): Promise<void> => {
     cleanupPromise ??= Promise.all([
       deps.credentialLogin.close(),
+      deps.credentialSessions?.close() ?? Promise.resolve(),
       deps.engine.close(),
       deps.auditWriter?.close() ?? Promise.resolve(),
     ]).then(() => undefined);

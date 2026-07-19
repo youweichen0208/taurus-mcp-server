@@ -265,10 +265,6 @@ export function buildRawConfigFromEnv(
       ),
     },
     security: {
-      mutationsEnabled: parseBoolean(
-        env.TAURUSDB_ENABLE_MUTATIONS,
-        "TAURUSDB_ENABLE_MUTATIONS",
-      ),
       dynamicTargetsEnabled: parseBoolean(
         env.TAURUSDB_ENABLE_DYNAMIC_TARGETS,
         "TAURUSDB_ENABLE_DYNAMIC_TARGETS",
@@ -283,6 +279,14 @@ export function buildRawConfigFromEnv(
       approvalTtlSeconds: parseInteger(
         env.TAURUSDB_MUTATION_APPROVAL_TTL_SECONDS,
         "TAURUSDB_MUTATION_APPROVAL_TTL_SECONDS",
+      ),
+      credentialIdleTtlMinutes: parseInteger(
+        env.TAURUSDB_SQL_CREDENTIAL_IDLE_TTL_MINUTES,
+        "TAURUSDB_SQL_CREDENTIAL_IDLE_TTL_MINUTES",
+      ),
+      credentialMaxTtlMinutes: parseInteger(
+        env.TAURUSDB_SQL_CREDENTIAL_MAX_TTL_MINUTES,
+        "TAURUSDB_SQL_CREDENTIAL_MAX_TTL_MINUTES",
       ),
     },
     slowSqlSource: {

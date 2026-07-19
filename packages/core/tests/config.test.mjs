@@ -42,11 +42,12 @@ test("config uses documented defaults when env is empty", () => {
   assert.equal(config.audit.logPath, "~/.taurusdb-mcp/audit.jsonl");
   assert.equal(config.audit.maxBytes, 104857600);
   assert.equal(config.audit.maxFiles, 10);
-  assert.equal(config.security.mutationsEnabled, false);
   assert.equal(config.security.dynamicTargetsEnabled, false);
   assert.equal(config.security.requireTls, true);
   assert.equal(config.security.approvalSecretPath, undefined);
   assert.equal(config.security.approvalTtlSeconds, 300);
+  assert.equal(config.security.credentialIdleTtlMinutes, 30);
+  assert.equal(config.security.credentialMaxTtlMinutes, 480);
   assert.equal(config.slowSqlSource.taurusApi.enabled, false);
   assert.equal(config.slowSqlSource.taurusApi.requestTimeoutMs, 5000);
   assert.equal(config.slowSqlSource.taurusApi.defaultLookbackMinutes, 60);
@@ -87,11 +88,12 @@ test("config maps env vars into typed fields", () => {
     TAURUSDB_MCP_AUDIT_INCLUDE_RAW_SQL: "1",
     TAURUSDB_MCP_AUDIT_MAX_BYTES: "4096",
     TAURUSDB_MCP_AUDIT_MAX_FILES: "3",
-    TAURUSDB_ENABLE_MUTATIONS: "true",
     TAURUSDB_ENABLE_DYNAMIC_TARGETS: "true",
     TAURUSDB_REQUIRE_TLS: "false",
     TAURUSDB_MUTATION_APPROVAL_SECRET_FILE: "~/approval-secret",
     TAURUSDB_MUTATION_APPROVAL_TTL_SECONDS: "120",
+    TAURUSDB_SQL_CREDENTIAL_IDLE_TTL_MINUTES: "15",
+    TAURUSDB_SQL_CREDENTIAL_MAX_TTL_MINUTES: "240",
     TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_ENABLED: "true",
     TAURUSDB_SLOW_SQL_SOURCE_TAURUS_API_ENDPOINT:
       "https://gaussdb.cn-north-4.myhuaweicloud.com",
@@ -165,11 +167,12 @@ test("config maps env vars into typed fields", () => {
   assert.equal(config.audit.includeRawSql, true);
   assert.equal(config.audit.maxBytes, 4096);
   assert.equal(config.audit.maxFiles, 3);
-  assert.equal(config.security.mutationsEnabled, true);
   assert.equal(config.security.dynamicTargetsEnabled, true);
   assert.equal(config.security.requireTls, false);
   assert.equal(config.security.approvalSecretPath, `${os.homedir()}/approval-secret`);
   assert.equal(config.security.approvalTtlSeconds, 120);
+  assert.equal(config.security.credentialIdleTtlMinutes, 15);
+  assert.equal(config.security.credentialMaxTtlMinutes, 240);
   assert.equal(config.slowSqlSource.taurusApi.enabled, true);
   assert.equal(
     config.slowSqlSource.taurusApi.endpoint,
@@ -358,6 +361,17 @@ test("config throws when integer env value is invalid", () => {
   );
 });
 
+test("config prevents session credential lifetimes above the security ceiling", () => {
+  assert.throws(
+    () => createConfigFromEnv({ TAURUSDB_SQL_CREDENTIAL_IDLE_TTL_MINUTES: "31" }),
+    /credentialIdleTtlMinutes/,
+  );
+  assert.throws(
+    () => createConfigFromEnv({ TAURUSDB_SQL_CREDENTIAL_MAX_TTL_MINUTES: "481" }),
+    /credentialMaxTtlMinutes/,
+  );
+});
+
 test("redactConfigForLog redacts sensitive keys recursively", () => {
   const redacted = redactConfigForLog({
     defaultDatasource: "a",
@@ -374,7 +388,6 @@ test("redactConfigForLog redacts sensitive keys recursively", () => {
     limits: { maxRows: 1, maxColumns: 1, maxStatementMs: 1, maxFieldChars: 1 },
     audit: { logPath: "/tmp/audit.jsonl", includeRawSql: false },
     security: {
-      mutationsEnabled: false,
       dynamicTargetsEnabled: false,
       approvalTtlSeconds: 300,
     },

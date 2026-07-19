@@ -10,8 +10,8 @@ import {
 } from "taurusdb-core";
 import type { ServerDeps } from "../server.js";
 import {
+  analyzeMutationSqlTool,
   executeReadonlySqlTool,
-  executeSqlTool,
   explainSqlTool,
 } from "./query.js";
 import {
@@ -35,7 +35,7 @@ import { listCloudTaurusInstancesTool } from "./taurus/cloud-instances.js";
 import { diagnosticToolDefinitions } from "./taurus/diagnostics.js";
 import { explainSqlEnhancedTool } from "./taurus/explain.js";
 import { flashbackQueryTool } from "./taurus/flashback.js";
-import { listRecycleBinTool, restoreRecycleBinTableTool } from "./taurus/recycle-bin.js";
+import { listRecycleBinTool } from "./taurus/recycle-bin.js";
 import {
   ErrorCode,
   formatError,
@@ -107,12 +107,25 @@ function registerOneTool(
       const invokeContext: ToolInvokeContext = { taskId };
       logger.info({ tool: tool.name }, "Tool invocation started");
       try {
+        let credentialActivityDatasource: string | undefined;
+        if (deps.credentialSessions && SQL_CREDENTIAL_ACTIVITY_TOOLS.has(tool.name)) {
+          credentialActivityDatasource =
+            typeof rawInput.datasource === "string"
+              ? rawInput.datasource
+              : await deps.engine.getDefaultDataSource();
+          if (credentialActivityDatasource) {
+            await deps.credentialSessions.ensureFresh(credentialActivityDatasource);
+          }
+        }
         const invoke = () => tool.handler(rawInput, deps, invokeContext);
         const response = deps.sessionCoordinator
           ? SESSION_MUTATION_TOOLS.has(tool.name)
             ? await deps.sessionCoordinator.runExclusive(invoke)
             : await deps.sessionCoordinator.runShared(invoke)
           : await invoke();
+        if (response.ok && credentialActivityDatasource) {
+          deps.credentialSessions?.touch(credentialActivityDatasource);
+        }
         try {
           await writeAuditEvent(
             deps,
@@ -203,20 +216,32 @@ const SESSION_MUTATION_TOOLS = new Set([
 
 const PRIVILEGED_TOOL_NAMES = new Set([
   ...SESSION_MUTATION_TOOLS,
-  "execute_sql",
-  "restore_recycle_bin_table",
 ]);
 
-const DATABASE_MUTATION_TOOLS = new Set([
-  "execute_sql",
-  "restore_recycle_bin_table",
-]);
+const DATABASE_MUTATION_TOOLS = new Set<string>();
 
 const IDEMPOTENT_SESSION_MUTATION_TOOLS = new Set([
   "set_cloud_region",
   "clear_sql_credentials",
   "set_default_database",
   "select_cloud_taurus_instance",
+]);
+
+const SQL_CREDENTIAL_ACTIVITY_TOOLS = new Set([
+  "list_databases",
+  "list_tables",
+  "describe_table",
+  "show_processlist",
+  "execute_readonly_sql",
+  "explain_sql",
+  "analyze_mutation_sql",
+  "get_kernel_info",
+  "list_taurus_features",
+  "set_default_database",
+  "explain_sql_enhanced",
+  "flashback_query",
+  "list_recycle_bin",
+  ...diagnosticToolDefinitions.map((tool) => tool.name),
 ]);
 
 const TOOL_OUTPUT_SHAPE = {
@@ -299,6 +324,7 @@ export const commonToolDefinitions: ToolDefinition[] = [
   showProcesslistTool,
   executeReadonlySqlTool,
   explainSqlTool,
+  analyzeMutationSqlTool,
 ];
 
 export const capabilityToolDefinitions: ToolDefinition[] = [
@@ -322,11 +348,6 @@ export const taurusToolDefinitions: ToolDefinition[] = [
   listRecycleBinTool,
 ];
 
-export const mutationToolDefinitions: ToolDefinition[] = [
-  executeSqlTool,
-  restoreRecycleBinTableTool,
-];
-
 function buildDefaultToolDefinitions(config: Config): ToolDefinition[] {
   return [
     ...commonToolDefinitions,
@@ -334,7 +355,6 @@ function buildDefaultToolDefinitions(config: Config): ToolDefinition[] {
     ...(config.security.dynamicTargetsEnabled ? dynamicTargetToolDefinitions : []),
     ...diagnosticToolDefinitions,
     ...taurusToolDefinitions,
-    ...(config.security.mutationsEnabled ? mutationToolDefinitions : []),
   ];
 }
 

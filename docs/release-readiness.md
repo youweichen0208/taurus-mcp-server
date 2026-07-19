@@ -9,7 +9,7 @@ green for the exact commit being tagged.
 - `npm ci`
 - `npm run check`
 - `npm test`
-- local MySQL MCP integration harness with separate read-only and mutation users
+- local MySQL MCP integration harness proving mutation advice leaves rows unchanged
 - `npm audit --omit=dev --audit-level=high`
 - `npm run pack:check`
 - installation and CLI smoke test from the generated `taurusdb-core` and
@@ -48,13 +48,13 @@ The validator must prove:
 - explain and capability probing work
 - slow SQL, service-latency, and replication diagnostics return a valid
   evidence-backed or explicitly `not_applicable` result
-- no secret, raw SQL, approval token, or customer identifier appears in stdout
+- no secret, raw SQL, credential, or customer identifier appears in stdout
   or stderr
-
-Mutation RC testing is separate and must use a disposable database, a dedicated
-mutation user, a mode-`0600` approval secret, and an identified operator. Verify
-approval binding, one-time use, target mismatch rejection, audit actor, and
-database side effects.
+- `analyze_mutation_sql` returns `execution_status: not_executed`, schema/plan
+  evidence where available, no sampled business rows, and leaves the target table
+  unchanged
+- the published tool list contains no database mutation or recycle-bin restore tool,
+  including when legacy mutation environment variables are present
 
 ## Operational acceptance
 
@@ -64,16 +64,15 @@ database side effects.
 - Mount secret and audit paths from the host; do not place secrets in tool
   arguments.
 - Ship audit logs to append-only centralized storage and alert on
-  `AUDIT_FAILED`, repeated approval denial, queue saturation, and TLS failures.
+  `AUDIT_FAILED`, queue saturation, and TLS failures.
 - Validate audit rotation, collector checkpoint/retry, centralized retention,
   disk-space alerts, and the single-process trust boundary in
   `docs/customer-deployment.md`.
-- Document read-only and mutation database grants for the customer.
+- Document the read-only database grants and the external human execution boundary.
 - Retain the package integrity/provenance output and the RC validation log with
   the release record.
 
 ## Rollback
 
 Rollback means pinning the previous known-good npm version in the MCP client or
-harness configuration and restarting the MCP process. Do not reuse pending
-approval requests across a restart or rollback.
+harness configuration and restarting the MCP process.

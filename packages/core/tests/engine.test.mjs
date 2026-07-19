@@ -2043,14 +2043,6 @@ test("engine delegates context, schema, guardrail, and executor methods", async 
     ),
     expectedReadonly,
   );
-  assert.equal(
-    await engine.executeMutation(
-      "UPDATE users SET x = 1",
-      makeContext({ limits: { ...ctx.limits, readonly: false } }),
-      { timeoutMs: 2000 },
-    ),
-    expectedMutation,
-  );
   assert.equal(await engine.getQueryStatus("qry_2"), expectedStatus);
   assert.equal(await engine.cancelQuery("qry_2"), expectedCancel);
   assert.deepEqual(
@@ -2064,7 +2056,7 @@ test("engine delegates context, schema, guardrail, and executor methods", async 
     expectedEnhancedExplain,
   );
 
-  assert.equal(calls.length, 17);
+  assert.equal(calls.length, 16);
   assert.deepEqual(calls[0], [
     "resolveContext",
     { datasource: "local_mysql" },

@@ -67,7 +67,7 @@
 
 - `README.md`
 - `docs/architecture.md`
-- `docs/taurusdb-mcp-implementation-plan.md`
+- `docs/archive/pre-readonly-taurusdb-mcp-implementation-plan.md`
 - `docs/testing.md`
 - `docs/manual-smoke-test.md`
 - `docs/cloud-taurusdb-testing.md`
@@ -353,7 +353,7 @@
 可继续做：
 
 - 补更多真实数据库 e2e 场景
-- 继续同步 `docs/taurusdb-mcp-implementation-plan.md` 的“当前完成度”
+- 历史实施进度已归档到 `docs/archive/pre-readonly-taurusdb-mcp-implementation-plan.md`
 - 继续把剩余 diagnostics 从 contract 层推进到 collector / analyzer 层
 - 后续阶段再评估 history/binlog 类能力
 

@@ -25,11 +25,12 @@ const AuditSchema = z
 
 const SecuritySchema = z
   .object({
-    mutationsEnabled: z.boolean().default(false),
     dynamicTargetsEnabled: z.boolean().default(false),
     requireTls: z.boolean().default(true),
     approvalSecretPath: z.string().min(1).optional(),
     approvalTtlSeconds: z.number().int().positive().max(3600).default(300),
+    credentialIdleTtlMinutes: z.number().int().positive().max(30).default(30),
+    credentialMaxTtlMinutes: z.number().int().positive().max(480).default(480),
   })
   .default({});
 

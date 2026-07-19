@@ -88,7 +88,7 @@ export function validateToolScope(toolName: string, cls: SqlClassification): Val
         ["T001"],
         [
           `Tool execute_readonly_sql only allows SELECT/SHOW/EXPLAIN/DESCRIBE, got ${cls.statementType}.`,
-          "Use execute_sql for controlled mutations.",
+          "Use analyze_mutation_sql to generate non-executing SQL Advice.",
         ],
       );
     }

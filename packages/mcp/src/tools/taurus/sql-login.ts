@@ -4,6 +4,72 @@ import { formatSuccess, type ToolResponse } from "../../utils/formatter.js";
 import { metadata } from "../common.js";
 import { formatToolError, ToolInputError } from "../error-handling.js";
 import type { ToolDefinition } from "../registry.js";
+import {
+  SqlCredentialValidationError,
+  type CredentialValidationFailure,
+} from "../../security/local-credential-login.js";
+
+const AUTH_ERROR_CODES = new Set([
+  "ER_ACCESS_DENIED_ERROR",
+  "ER_ACCESS_DENIED_NO_PASSWORD_ERROR",
+  "ER_DBACCESS_DENIED_ERROR",
+]);
+const TIMEOUT_ERROR_CODES = new Set([
+  "ETIMEDOUT",
+  "PROTOCOL_SEQUENCE_TIMEOUT",
+  "POOL_QUEUE_TIMEOUT",
+]);
+
+function errorCodes(error: unknown): string[] {
+  const codes: string[] = [];
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const record = current as { code?: unknown; cause?: unknown };
+    if (typeof record.code === "string") {
+      codes.push(record.code.toUpperCase());
+    }
+    current = record.cause;
+  }
+  return codes;
+}
+
+function classifyValidationFailure(error: unknown): CredentialValidationFailure {
+  const codes = errorCodes(error);
+  if (codes.some((code) => AUTH_ERROR_CODES.has(code))) {
+    return "credentials";
+  }
+  if (codes.some((code) => TIMEOUT_ERROR_CODES.has(code))) {
+    return "timeout";
+  }
+  if (codes.some((code) => code.includes("TLS") || code.includes("CERT") || code.includes("SIGNATURE"))) {
+    return "tls";
+  }
+  return "connectivity";
+}
+
+async function expireCredentials(
+  deps: Parameters<ToolDefinition["handler"]>[1],
+  datasource: string,
+): Promise<void> {
+  const expire = async () => {
+    deps.profileLoader.clearRuntimeUser(datasource);
+    const previousEngine = deps.engine;
+    if (previousEngine?.close) {
+      await previousEngine.close();
+    }
+    deps.engine = await TaurusDBEngine.create({
+      config: deps.config,
+      profileLoader: deps.profileLoader,
+    });
+  };
+  if (deps.sessionCoordinator) {
+    await deps.sessionCoordinator.runExclusive(expire);
+  } else {
+    await expire();
+  }
+}
 
 export const beginSqlLoginTool: ToolDefinition = {
   name: "begin_sql_login",
@@ -31,12 +97,34 @@ export const beginSqlLoginTool: ToolDefinition = {
       if (!profile) {
         throw new ToolInputError(`Datasource "${datasource}" was not found.`);
       }
+      if (!profile.host) {
+        throw new ToolInputError(
+          `Datasource "${datasource}" does not define a database host. Select a TaurusDB instance before beginning SQL login.`,
+        );
+      }
+      const runtimeTarget = deps.profileLoader.getRuntimeTarget(datasource);
 
       const issued = await deps.credentialLogin.issueSqlLogin({
         datasource,
+        target: {
+          datasource,
+          instanceId:
+            runtimeTarget?.instanceId ??
+            profile.instanceId ??
+            deps.config.cloud.instanceId,
+          region: deps.config.cloud.region,
+          credentialIdleTtlMinutes: deps.config.security.credentialIdleTtlMinutes,
+          credentialMaxTtlMinutes: deps.config.security.credentialMaxTtlMinutes,
+        },
         bind: async ({ username, password }) => {
           const bindCredentials = async () => {
             const currentTarget = deps.profileLoader.getRuntimeTarget(datasource);
+            const restoreTarget = () => {
+              deps.profileLoader.clearRuntimeTarget(datasource);
+              if (currentTarget) {
+                deps.profileLoader.setRuntimeTarget(datasource, currentTarget);
+              }
+            };
             deps.profileLoader.setRuntimeTarget(datasource, {
               host: currentTarget?.host ?? profile.host,
               port: currentTarget?.port ?? profile.port,
@@ -49,25 +137,54 @@ export const beginSqlLoginTool: ToolDefinition = {
               },
             });
 
-            let nextEngine: TaurusDBEngine;
+            let nextEngine: TaurusDBEngine | undefined;
             try {
               nextEngine = await TaurusDBEngine.create({
                 config: deps.config,
                 profileLoader: deps.profileLoader,
               });
-            } catch (error) {
-              if (currentTarget) {
-                deps.profileLoader.setRuntimeTarget(datasource, currentTarget);
+              const validationTaskId = `credential_validation_${Date.now()}`;
+              if (deps.sqlCredentialValidator) {
+                await deps.sqlCredentialValidator(nextEngine, datasource, validationTaskId);
               } else {
-                deps.profileLoader.clearRuntimeTarget(datasource);
+                const validationContext = await nextEngine.resolveContext(
+                  { datasource, readonly: true },
+                  validationTaskId,
+                );
+                await nextEngine.executeReadonly("SELECT 1 AS ok", validationContext, {
+                  timeoutMs: Math.min(deps.config.limits.maxStatementMs, 10_000),
+                  maxRows: 1,
+                  maxColumns: 1,
+                  maxFieldChars: 16,
+                });
               }
-              throw error;
+            } catch (error) {
+              await nextEngine?.close().catch(() => undefined);
+              restoreTarget();
+              throw new SqlCredentialValidationError(classifyValidationFailure(error));
             }
             const previousEngine = deps.engine;
-            deps.engine = nextEngine;
-            if (previousEngine?.close) {
-              await previousEngine.close();
+            try {
+              if (previousEngine?.close) {
+                await previousEngine.close();
+              }
+            } catch (error) {
+              await nextEngine.close().catch(() => undefined);
+              restoreTarget();
+              try {
+                deps.engine = await TaurusDBEngine.create({
+                  config: deps.config,
+                  profileLoader: deps.profileLoader,
+                });
+              } catch {
+                deps.engine = previousEngine;
+              }
+              throw new SqlCredentialValidationError(classifyValidationFailure(error));
             }
+            deps.engine = nextEngine;
+            deps.credentialSessions?.activate(datasource, () =>
+              expireCredentials(deps, datasource),
+            );
           };
           if (deps.sessionCoordinator) {
             await deps.sessionCoordinator.runExclusive(bindCredentials);

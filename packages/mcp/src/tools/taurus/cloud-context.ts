@@ -155,6 +155,7 @@ export const setCloudRegionTool: ToolDefinition = {
         );
         clearCloudSelection(nextConfig, deps);
       });
+      deps.credentialSessions?.clearAll();
 
       return formatSuccess(
         {
@@ -224,6 +225,15 @@ export const setDefaultDatabaseTool: ToolDefinition = {
           `Database "${database}" was not found on datasource "${datasource}". Run list_databases first and choose one of the returned names.`,
         );
       }
+      const databaseContext = await deps.engine.resolveContext(
+        {
+          datasource,
+          database,
+          readonly: true,
+        },
+        context.taskId,
+      );
+      await deps.engine.listTables(databaseContext, database);
 
       const profile = await deps.profileLoader.get(datasource);
       if (!profile) {
@@ -290,6 +300,7 @@ export const clearSqlCredentialsTool: ToolDefinition = {
       await updateSessionState(deps, () => {
         deps.profileLoader.clearRuntimeUser(datasource);
       });
+      deps.credentialSessions?.clear(datasource);
 
       return formatSuccess(
         {
@@ -434,6 +445,9 @@ export const selectCloudTaurusInstanceTool: ToolDefinition = {
           });
         }
       });
+      if (boundDatasource) {
+        deps.credentialSessions?.clear(boundDatasource);
+      }
 
       return formatSuccess(
         {

@@ -8,7 +8,6 @@ import { fileURLToPath } from "node:url";
 import mysql from "mysql2/promise";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { signApprovalRequest } from "taurusdb-core";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
@@ -19,7 +18,6 @@ const runLocalMysqlTests = ["1", "true"].includes(
   process.env.TAURUSDB_RUN_LOCAL_MYSQL_TESTS?.trim().toLowerCase(),
 );
 const localMysqlTest = runLocalMysqlTests ? test : test.skip;
-const approvalSecret = "local-mysql-approval-secret-that-is-at-least-32-bytes";
 
 function requiredEnv(name) {
   const value = process.env[name];
@@ -87,15 +85,12 @@ async function prepareDatabase() {
 async function createProfilesFile() {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "taurusdb-local-mysql-"));
   const profilesPath = path.join(tempDir, "profiles.json");
-  const approvalSecretPath = path.join(tempDir, "approval-secret");
 
   const host = requiredEnv("TAURUSDB_TEST_MYSQL_HOST");
   const port = parseInteger(process.env.TAURUSDB_TEST_MYSQL_PORT, 3306);
   const database = requiredEnv("TAURUSDB_TEST_MYSQL_DATABASE");
   const user = requiredEnv("TAURUSDB_TEST_MYSQL_USER");
   const password = requiredEnv("TAURUSDB_TEST_MYSQL_PASSWORD");
-  const mutationUser = requiredEnv("TAURUSDB_TEST_MYSQL_MUTATION_USER");
-  const mutationPassword = requiredEnv("TAURUSDB_TEST_MYSQL_MUTATION_PASSWORD");
 
   const profile = {
     defaultDatasource: "local_mysql_e2e",
@@ -109,18 +104,13 @@ async function createProfilesFile() {
           username: user,
           password: password,
         },
-        mutationUser: {
-          username: mutationUser,
-          password: mutationPassword,
-        },
         poolSize: 4,
       },
     },
   };
 
   await writeFile(profilesPath, `${JSON.stringify(profile, null, 2)}\n`, "utf8");
-  await writeFile(approvalSecretPath, `${approvalSecret}\n`, { encoding: "utf8", mode: 0o600 });
-  return { profilesPath, approvalSecretPath };
+  return { profilesPath };
 }
 
 function mysqlConnectionConfig({ mutation = false } = {}) {
@@ -235,7 +225,7 @@ async function withClient(run, options = {}) {
   if (options.skipPrepareDatabase !== true) {
     await prepareDatabase();
   }
-  const { profilesPath, approvalSecretPath } = await createProfilesFile();
+  const { profilesPath } = await createProfilesFile();
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [serverEntrypoint],
@@ -249,9 +239,7 @@ async function withClient(run, options = {}) {
         os.tmpdir(),
         `taurusdb-mcp-local-audit-${process.pid}.jsonl`,
       ),
-      TAURUSDB_ENABLE_MUTATIONS: "true",
       TAURUSDB_REQUIRE_TLS: "false",
-      TAURUSDB_MUTATION_APPROVAL_SECRET_FILE: approvalSecretPath,
       ...options.env,
     },
   });
@@ -272,7 +260,8 @@ async function withClient(run, options = {}) {
 localMysqlTest("local mysql MCP covers discovery, readonly query, and explain", async () => {
   await withClient(async ({ client, stderr }) => {
     const tools = await client.listTools();
-    assert.equal(tools.tools.some((tool) => tool.name === "execute_sql"), true);
+    assert.equal(tools.tools.some((tool) => tool.name === "execute_sql"), false);
+    assert.equal(tools.tools.some((tool) => tool.name === "analyze_mutation_sql"), true);
 
     const dataSources = await client.callTool({
       name: "list_data_sources",
@@ -342,49 +331,80 @@ localMysqlTest("local mysql MCP covers discovery, readonly query, and explain", 
   });
 });
 
-localMysqlTest("local mysql MCP covers mutation confirmation flow", async () => {
+localMysqlTest("local SQL login validates credentials before binding them", async () => {
   await withClient(async ({ client }) => {
-    const confirm = await client.callTool({
-      name: "execute_sql",
-      arguments: {
-        sql: "UPDATE orders SET status = 'cancelled' WHERE order_no = 'ORD-1002'",
-      },
+    const issued = await client.callTool({
+      name: "begin_sql_login",
+      arguments: { datasource: "local_mysql_e2e" },
     });
-    assert.equal(confirm.isError, true);
-    assert.equal(confirm.structuredContent.error.code, "CONFIRMATION_REQUIRED");
-    const request = confirm.structuredContent.data.approval_request;
-    const token = signApprovalRequest(request, "local-test-operator", approvalSecret);
-    assert.match(token, /^ctok_/);
+    assert.equal(issued.isError, false);
+    const loginUrl = issued.structuredContent.data.login_url;
+    assert.match(loginUrl, /^http:\/\/127\.0\.0\.1:\d+\/sql-login\//);
 
-    const execute = await client.callTool({
-      name: "execute_sql",
-      arguments: {
-        sql: "UPDATE orders SET status = 'cancelled' WHERE order_no = 'ORD-1002'",
-        approval_token: token,
-      },
+    const invalid = await fetch(loginUrl, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        username: requiredEnv("TAURUSDB_TEST_MYSQL_USER"),
+        password: "incorrect-password",
+      }),
     });
-    assert.equal(execute.isError, false);
-    assert.equal(execute.structuredContent.data.affected_rows, 1);
-    assert.equal(execute.structuredContent.metadata.statement_type, "update");
+    assert.equal(invalid.status, 401);
 
-    const reuse = await client.callTool({
-      name: "execute_sql",
-      arguments: {
-        sql: "UPDATE orders SET status = 'cancelled' WHERE order_no = 'ORD-1002'",
-        approval_token: token,
+    const valid = await fetch(loginUrl, {
+      method: "POST",
+      headers: {
+        "accept-language": "zh-CN",
+        "content-type": "application/x-www-form-urlencoded",
       },
+      body: new URLSearchParams({
+        username: requiredEnv("TAURUSDB_TEST_MYSQL_USER"),
+        password: requiredEnv("TAURUSDB_TEST_MYSQL_PASSWORD"),
+      }),
     });
-    assert.equal(reuse.isError, true);
-    assert.equal(reuse.structuredContent.error.code, "CONFIRMATION_INVALID");
+    assert.equal(valid.status, 200);
+    assert.match(await valid.text(), /账号验证成功/);
 
-    const verify = await client.callTool({
+    const readonly = await client.callTool({
+      name: "execute_readonly_sql",
+      arguments: { sql: "SELECT 1 AS ok" },
+    });
+    assert.equal(readonly.isError, false);
+    assert.equal(readonly.structuredContent.data.rows[0][0], 1);
+  }, {
+    env: { TAURUSDB_ENABLE_DYNAMIC_TARGETS: "true" },
+  });
+});
+
+localMysqlTest("local mysql MCP analyzes a mutation without changing database state", async () => {
+  await withClient(async ({ client }) => {
+    const before = await client.callTool({
       name: "execute_readonly_sql",
       arguments: {
         sql: "SELECT status FROM orders WHERE order_no = 'ORD-1002' LIMIT 1",
       },
     });
-    assert.equal(verify.isError, false);
-    assert.equal(verify.structuredContent.data.rows[0][0], "cancelled");
+    const initialStatus = before.structuredContent.data.rows[0][0];
+
+    const advice = await client.callTool({
+      name: "analyze_mutation_sql",
+      arguments: {
+        sql: "UPDATE orders SET status = 'cancelled' WHERE order_no = 'ORD-1002'",
+      },
+    });
+    assert.equal(advice.isError, false);
+    assert.equal(advice.structuredContent.data.execution_status, "not_executed");
+    assert.equal(advice.structuredContent.data.human_review_required, true);
+    assert.equal(Number(advice.structuredContent.data.impact_analysis.matched_row_count), 1);
+
+    const after = await client.callTool({
+      name: "execute_readonly_sql",
+      arguments: {
+        sql: "SELECT status FROM orders WHERE order_no = 'ORD-1002' LIMIT 1",
+      },
+    });
+    assert.equal(after.isError, false);
+    assert.equal(after.structuredContent.data.rows[0][0], initialStatus);
   });
 });
 

@@ -36,8 +36,6 @@ import {
   createSqlExecutor,
   type CancelResult,
   type ExplainResult,
-  type MutationOptions,
-  type MutationResult,
   type QueryResult,
   type QueryStatus,
   type ReadonlyOptions,
@@ -67,9 +65,6 @@ import { createMySqlSchemaAdapter } from "./schema/adapters/mysql.js";
 import {
   type FlashbackInput,
 } from "./taurus/flashback.js";
-import {
-  type RestoreRecycleBinTableInput,
-} from "./taurus/recycle-bin.js";
 import {
   type DbHotspotResult,
   type DiagnoseDbHotspotInput,
@@ -119,7 +114,6 @@ import {
 import {
   cancelQuery,
   close,
-  executeMutation,
   executeReadonly,
   explain,
   explainEnhanced,
@@ -128,7 +122,6 @@ import {
   handleConfirmation,
   issueConfirmation,
   listRecycleBin,
-  restoreRecycleBinTable,
   validateConfirmation,
 } from "./engine/runtime.js";
 import type {
@@ -271,11 +264,6 @@ export class TaurusDBEngine {
     let approvalSecret: string | undefined;
     if (config.security.approvalSecretPath) {
       approvalSecret = await readMutationApprovalSecret(config.security.approvalSecretPath);
-    }
-    if (config.security.mutationsEnabled && !approvalSecret && !options.confirmationStore) {
-      throw new Error(
-        "Mutations require TAURUSDB_MUTATION_APPROVAL_SECRET_FILE with at least 32 bytes.",
-      );
     }
     const confirmationStore =
       options.confirmationStore ??
@@ -521,14 +509,6 @@ export class TaurusDBEngine {
     return executeReadonly(this, sql, ctx, opts);
   }
 
-  async executeMutation(
-    sql: string,
-    ctx: SessionContext,
-    opts?: MutationOptions,
-  ): Promise<MutationResult> {
-    return executeMutation(this, sql, ctx, opts);
-  }
-
   async flashbackQuery(
     input: FlashbackInput,
     ctx: SessionContext,
@@ -542,14 +522,6 @@ export class TaurusDBEngine {
     opts?: ReadonlyOptions,
   ): Promise<QueryResult> {
     return listRecycleBin(this, ctx, opts);
-  }
-
-  async restoreRecycleBinTable(
-    input: RestoreRecycleBinTableInput,
-    ctx: SessionContext,
-    opts?: MutationOptions,
-  ): Promise<MutationResult> {
-    return restoreRecycleBinTable(this, input, ctx, opts);
   }
 
   async getQueryStatus(queryId: string): Promise<QueryStatus> {

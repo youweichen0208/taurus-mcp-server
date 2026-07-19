@@ -88,28 +88,14 @@ npx taurusdb-mcp credentials check
 - Huawei DEW CSMS is recommended when the database password should be stored and retrieved from Huawei Cloud
 - macOS Keychain, Linux Secret Service, or Windows Credential Manager cloud identity is enabled with `TAURUSDB_CLOUD_KEYCHAIN_SERVICE`
 - SQL TLS with certificate verification is required by default
-- Mutation and dynamic-target tools are disabled by default
-- Mutation tools require a dedicated `TAURUSDB_SQL_MUTATION_USER` /
-  `TAURUSDB_SQL_MUTATION_PASSWORD` pair and an external operator-signed approval
+- Database mutation tools do not exist; the MCP remains read-only regardless of database account privileges
+- `analyze_mutation_sql` returns evidence-backed SQL Advice with `execution_status: not_executed`
+- Local SQL login validates the connection before binding credentials, allows at most three attempts per five-minute link, and never sends the password through Agent-visible tool arguments
+- Session SQL credentials expire after 30 idle minutes and eight absolute hours; administrators may shorten these limits with `TAURUSDB_SQL_CREDENTIAL_IDLE_TTL_MINUTES` and `TAURUSDB_SQL_CREDENTIAL_MAX_TTL_MINUTES`
 - MCP audit events are written to `~/.taurusdb-mcp/audit.jsonl` by default, with
   configurable size rotation for collection into centralized immutable storage
 - Run one stdio process per customer/client trust boundary; this package is not
   a shared multi-tenant HTTP service
 
-Enable mutations only when required:
-
-```bash
-export TAURUSDB_ENABLE_MUTATIONS=true
-export TAURUSDB_SQL_MUTATION_USER='<dedicated-writer>'
-export TAURUSDB_SQL_MUTATION_PASSWORD='hw-csms:<writer-secret-name>'
-export TAURUSDB_MUTATION_APPROVAL_SECRET_FILE='/run/secrets/taurusdb-approval'
-```
-
-Sign a returned `approval_request` outside the MCP client:
-
-```bash
-npx taurusdb-mcp approve \
-  --request '<approval_request>' \
-  --actor '<operator-identity>' \
-  --secret-file /run/secrets/taurusdb-approval
-```
+Customers execute reviewed `advised_sql` through their own controlled change process;
+the MCP never executes database state changes.

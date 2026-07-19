@@ -49,6 +49,7 @@ test("tool registry registers default MCP tools through legacy tool API", async 
       "show_processlist",
       "execute_readonly_sql",
       "explain_sql",
+      "analyze_mutation_sql",
       "get_kernel_info",
       "list_taurus_features",
       "get_session_binding",
@@ -89,7 +90,7 @@ test("tool registry hides mutations and dynamic targets by default", () => {
   assert.equal(recorder.calls.some((call) => call.name === "begin_sql_login"), false);
 });
 
-test("tool registry exposes privileged tools only with explicit server flags", () => {
+test("tool registry never exposes database mutation tools, even with legacy flags", () => {
   const recorder = createLegacyToolServerRecorder();
   registerTools(
     recorder.server,
@@ -99,8 +100,9 @@ test("tool registry exposes privileged tools only with explicit server flags", (
       TAURUSDB_ENABLE_DYNAMIC_TARGETS: "true",
     }),
   );
-  assert.equal(recorder.calls.some((call) => call.name === "execute_sql"), true);
-  assert.equal(recorder.calls.some((call) => call.name === "restore_recycle_bin_table"), true);
+  assert.equal(recorder.calls.some((call) => call.name === "execute_sql"), false);
+  assert.equal(recorder.calls.some((call) => call.name === "restore_recycle_bin_table"), false);
+  assert.equal(recorder.calls.some((call) => call.name === "analyze_mutation_sql"), true);
   assert.equal(recorder.calls.some((call) => call.name === "set_cloud_region"), true);
   assert.equal(recorder.calls.some((call) => call.name === "begin_sql_login"), true);
 });
@@ -178,6 +180,15 @@ test("tool registry registers tools through registerTool API when available", as
   assert.match(result.structuredContent.metadata.task_id, /^task_/);
 });
 
+test("SQL Advice is registered as readonly and non-destructive", () => {
+  const recorder = createModernToolServerRecorder();
+  registerTools(recorder.server, {}, createConfigFromEnv({}));
+  const advice = recorder.calls.find((call) => call.name === "analyze_mutation_sql");
+  assert.ok(advice);
+  assert.equal(advice.config.annotations.readOnlyHint, true);
+  assert.equal(advice.config.annotations.destructiveHint, false);
+});
+
 test("tool registry writes actor and target context to the audit sink", async () => {
   const { server, calls } = createModernToolServerRecorder();
   const events = [];
@@ -211,8 +222,8 @@ test("tool registry writes actor and target context to the audit sink", async ()
     },
     config,
     [{
-      name: "execute_sql",
-      description: "mutation",
+      name: "select_cloud_taurus_instance",
+      description: "session mutation",
       inputSchema: {},
       async handler(_input, _deps, context) {
         context.approvalActor = "operator@example.com";
@@ -231,7 +242,7 @@ test("tool registry writes actor and target context to the audit sink", async ()
   const result = await calls[0].handler({});
   assert.equal(result.isError, false);
   assert.equal(calls[0].config.annotations.readOnlyHint, false);
-  assert.equal(calls[0].config.annotations.destructiveHint, true);
+  assert.equal(calls[0].config.annotations.destructiveHint, false);
   assert.equal(events.length, 1);
   assert.equal(events[0].actor, "operator@example.com");
   assert.equal(events[0].host, "10.0.0.8");

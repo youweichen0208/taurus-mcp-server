@@ -83,6 +83,8 @@ export type {
 } from "./safety/confirmation-store.js";
 
 export { createGuardrail } from "./safety/guardrail.js";
+export { createSqlParser } from "./safety/parser/index.js";
+export type { SqlAst, StatementType as ParsedStatementType } from "./safety/parser/index.js";
 export type {
   Guardrail,
   GuardrailDecision,

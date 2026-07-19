@@ -1,6 +1,6 @@
 # 客户部署与运行边界
 
-本文定义 TaurusDB MCP 0.4.x 的受支持生产部署形态。客户验收和安全评审应以
+本文定义 TaurusDB MCP 0.5.x 的受支持生产部署形态。客户验收和安全评审应以
 这里的边界为准，而不是把本地开发模式扩展成共享服务。
 
 ## 支持的生产形态
@@ -10,8 +10,8 @@
 - 进程使用独立的操作系统身份、datasource profile、审计目录和 secret mount。
 - MCP 与 TaurusDB 位于同 VPC 或通过受控 VPN/专线访问，默认使用私网地址和
   验证服务端证书的 TLS。
-- 默认只配置数据库只读账号；mutation 账号、工具开关和外部审批密钥按需独立
-  提供。
+- 只配置数据库最小权限只读账号。MCP 永不执行数据库状态变更，也不存在可将写
+  工具重新启用的环境变量或审批 token。
 
 这种形态适用于单团队、单客户或单自动化会话的企业 Harness。进程隔离就是租户
 隔离边界，不能在多个互不信任的用户之间复用同一个进程。
@@ -25,7 +25,7 @@
 - 跨客户的连接池、凭据或会话复用；
 - 控制面管理 API、高可用编排和水平扩缩容。
 
-客户若要求上述能力，应作为后续集中式服务版本立项。0.4.x 不应宣称支持集中式
+客户若要求上述能力，应作为后续集中式服务版本立项。0.5.x 不应宣称支持集中式
 多租户部署。
 
 ## 凭据与最小权限
@@ -35,10 +35,9 @@
 2. 数据库密码使用 `hw-csms:`、`hw-kms-file:`、系统 secret store 或只读
    secret file 引用；不得写入 Git、MCP tool 参数或 Agent 对话。
 3. datasource `user` 只授予查询和所需诊断权限。
-4. 只有启用 mutation 时才配置 `mutationUser`，并把权限限定到 disposable 或
-   明确批准的目标库。
-5. mutation approval secret 至少 32 bytes、权限为 `0600`，审批 operator 与
-   发起 MCP 调用的 Agent 分离。
+4. 不配置写账号。需要变更时，使用 `analyze_mutation_sql` 获取 SQL Advice，由客户
+   在 MCP 外部的变更审批、备份与执行流程中操作。
+5. SQL Advice 不是正确性保证；业务规则、权限语义和应用副作用必须人工验证。
 
 ## 审计采集与保留
 
@@ -59,11 +58,11 @@ TAURUSDB_MCP_AUDIT_MAX_FILES=10
   轮转文件，发送到具有 WORM/对象锁/append-only 策略的集中存储。
 - 集中存储负责合规保留期；本地轮转仅用于限制磁盘占用，不能作为最终留存。
 - 在投产前验证断网重传、采集 checkpoint、重复事件处理和时钟同步。
-- 对 `AUDIT_FAILED`、approval denial、`SERVER_BUSY`、TLS 失败、磁盘空间不足和
+- 对 `AUDIT_FAILED`、`SERVER_BUSY`、TLS 失败、磁盘空间不足和
   采集延迟建立告警。
 
-审计写入失败时，MCP 返回 `AUDIT_FAILED`，调用方必须先核对数据库状态，不能盲目
-重试 mutation。
+审计写入失败时，MCP 返回 `AUDIT_FAILED`；调用方应先恢复审计持久化，再重试只读
+操作。
 
 ## 容量与资源预算
 
