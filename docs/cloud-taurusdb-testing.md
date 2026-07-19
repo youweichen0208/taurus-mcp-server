@@ -99,18 +99,25 @@ secret 或生成的 `approval_token` 写入测试报告。
 
 这些配置不是启动 MCP 的必需项，但会影响 `find_top_slow_sql`、`diagnose_slow_query`、`diagnose_service_latency`、`diagnose_connection_spike`、`diagnose_storage_pressure` 的云侧证据质量。
 
-优先使用高层 cloud resolver 配置，而不是直接手填 DAS / CES 全量字段。当前默认主路径已经收敛到 `region + AK/SK`：
+优先使用高层 cloud resolver 配置，而不是直接手填 DAS / CES 全量字段。人工
+联调先把 AK/SK 保存到系统凭据库，再向 MCP 进程提供非敏感的 region 和 service：
 
 ```bash
+npx taurusdb-mcp credentials configure
 export TAURUSDB_CLOUD_REGION='<region>'
-export TAURUSDB_CLOUD_ACCESS_KEY_ID='<access-key-id>'
-export TAURUSDB_CLOUD_SECRET_ACCESS_KEY='<secret-access-key>'
+export TAURUSDB_CLOUD_KEYCHAIN_SERVICE='taurusdb-mcp/huaweicloud'
+export TAURUSDB_CLOUD_KEYCHAIN_ACCOUNT='default'
+npx taurusdb-mcp credentials check
 ```
 
-可选补充：
+临时 AK/SK 在 `credentials configure --with-security-token` 的安全输入流程中同时
+保存 Security Token。CI 或容器可由 secret injection 提供
+`TAURUSDB_CLOUD_ACCESS_KEY_ID` / `TAURUSDB_CLOUD_SECRET_ACCESS_KEY` /
+`TAURUSDB_CLOUD_SECURITY_TOKEN`，但不得写入仓库或测试报告。
+
+可选功能开关：
 
 ```bash
-export TAURUSDB_CLOUD_SECURITY_TOKEN='<session-token>'
 export TAURUSDB_CLOUD_ENABLE_TAURUS_API=true
 ```
 
@@ -160,20 +167,16 @@ export TAURUSDB_METRICS_SOURCE_CES_AUTH_TOKEN='<iam-token>'
 
 ### 3.1 推荐控制面配置方式
 
-默认推荐先在启动 MCP Server 的进程环境里通过 `export` 注入 `region + AK/SK`，再在 MCP 客户端里调用 `list_cloud_taurus_instances` 验证控制面是否连通。这样更符合最终用户的实际使用方式，也避免把会话内临时调试配置当成默认主路径。
+默认推荐先配置系统凭据库，再在 MCP 客户端里调用
+`list_cloud_taurus_instances` 验证控制面是否连通。不要把 AK/SK 写进 MCP 客户端
+配置。
 
 最小控制面配置：
 
 ```bash
 export TAURUSDB_CLOUD_REGION='<region>'
-export TAURUSDB_CLOUD_ACCESS_KEY_ID='<access-key-id>'
-export TAURUSDB_CLOUD_SECRET_ACCESS_KEY='<secret-access-key>'
-```
-
-如果使用临时 AK/SK，再补：
-
-```bash
-export TAURUSDB_CLOUD_SECURITY_TOKEN='<session-token>'
+export TAURUSDB_CLOUD_KEYCHAIN_SERVICE='taurusdb-mcp/huaweicloud'
+export TAURUSDB_CLOUD_KEYCHAIN_ACCOUNT='default'
 ```
 
 然后在 MCP 客户端里调用：

@@ -938,15 +938,14 @@ Guardrail 要把决策落成执行参数：
 
 ##### 精简后的记录字段
 
-每次调用记录:
+每次调用记录：
 
 - `task_id`
-- `datasource`、`database`
-- `statement_type`、`risk_level`、`decision`
-- `sql_hash`(**不记 SQL 原文**,原文追溯走全量 SQL)
-- `duration_ms`、`rows_affected` 或 `row_count`
-- `frontend`:标识是 `mcp` 还是 `cli`
-- `tool_category`:标识是通用 Tool / TaurusDB 专属 Tool / 数据安全 Tool
+- `tool`、`actor`
+- `datasource`、`database`、`host`、`port`
+- `project_id`、`instance_id`、`node_id`
+- `sql_hash`（默认不记 SQL 原文，原文追溯走数据库审计）
+- `decision`、`outcome`、`error_code`、`duration_ms`
 
 ##### 默认策略
 
@@ -1506,21 +1505,20 @@ const server = new McpServer({
 ```bash
 # 数据源
 TAURUSDB_DEFAULT_DATASOURCE=prod_orders
-TAURUSDB_PROFILES_PATH=/path/to/profiles.json
+TAURUSDB_SQL_PROFILES=/path/to/profiles.json
 
 # 开关
 TAURUSDB_ENABLE_MUTATIONS=false
 
 # 运行时限制
-TAURUSDB_MAX_ROWS=200
-TAURUSDB_MAX_COLUMNS=50
-TAURUSDB_MAX_STATEMENT_MS=15000
+TAURUSDB_MCP_MAX_ROWS=200
+TAURUSDB_MCP_MAX_COLUMNS=50
+TAURUSDB_MCP_MAX_STATEMENT_MS=15000
 
 # 审计
-TAURUSDB_AUDIT_LOG_PATH=~/.taurusdb/audit.jsonl
-
-# TaurusDB 专属能力
-TAURUSDB_DISABLE_TAURUS_TOOLS=false       # 紧急开关,强制关闭所有专属 Tool
+TAURUSDB_MCP_AUDIT_LOG_PATH=~/.taurusdb-mcp/audit.jsonl
+TAURUSDB_MCP_AUDIT_MAX_BYTES=104857600
+TAURUSDB_MCP_AUDIT_MAX_FILES=10
 ```
 
 ### 6.4 部署建议

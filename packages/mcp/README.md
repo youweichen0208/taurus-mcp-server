@@ -28,14 +28,23 @@ Use this command in MCP client configs:
 }
 ```
 
+Configure Huawei Cloud identity through the operating-system credential store
+before adding the server. AK/SK values should not be copied into MCP client
+configuration:
+
+```bash
+npx -y taurusdb-mcp credentials configure
+TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
+  npx -y taurusdb-mcp credentials check
+```
+
 Claude Code:
 
 ```bash
 claude mcp add huaweicloud-taurusdb \
   --transport stdio \
   -e TAURUSDB_CLOUD_REGION=<your-region> \
-  -e TAURUSDB_CLOUD_ACCESS_KEY_ID=<your-ak> \
-  -e TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk> \
+  -e TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
   -e TAURUSDB_ENABLE_DYNAMIC_TARGETS=true \
   -e TAURUSDB_SQL_DATABASE=<your-database> \
   -e TAURUSDB_SQL_USER=<your-readonly-user> \
@@ -48,8 +57,7 @@ Codex:
 ```bash
 codex mcp add huaweicloud-taurusdb \
   --env TAURUSDB_CLOUD_REGION=<your-region> \
-  --env TAURUSDB_CLOUD_ACCESS_KEY_ID=<your-ak> \
-  --env TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk> \
+  --env TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
   --env TAURUSDB_ENABLE_DYNAMIC_TARGETS=true \
   --env TAURUSDB_SQL_DATABASE=<your-database> \
   --env TAURUSDB_SQL_USER=<your-readonly-user> \
@@ -83,14 +91,17 @@ npx taurusdb-mcp credentials check
 - Mutation and dynamic-target tools are disabled by default
 - Mutation tools require a dedicated `TAURUSDB_SQL_MUTATION_USER` /
   `TAURUSDB_SQL_MUTATION_PASSWORD` pair and an external operator-signed approval
-- MCP audit events are written to `~/.taurusdb-mcp/audit.jsonl` by default
+- MCP audit events are written to `~/.taurusdb-mcp/audit.jsonl` by default, with
+  configurable size rotation for collection into centralized immutable storage
+- Run one stdio process per customer/client trust boundary; this package is not
+  a shared multi-tenant HTTP service
 
 Enable mutations only when required:
 
 ```bash
 export TAURUSDB_ENABLE_MUTATIONS=true
 export TAURUSDB_SQL_MUTATION_USER='<dedicated-writer>'
-export TAURUSDB_SQL_MUTATION_PASSWORD='hw-csms://<writer-secret-name>'
+export TAURUSDB_SQL_MUTATION_PASSWORD='hw-csms:<writer-secret-name>'
 export TAURUSDB_MUTATION_APPROVAL_SECRET_FILE='/run/secrets/taurusdb-approval'
 ```
 

@@ -14,6 +14,8 @@ green for the exact commit being tagged.
 - `npm run pack:check`
 - installation and CLI smoke test from the generated `taurusdb-core` and
   `taurusdb-mcp` tarballs
+- concurrency, queue saturation, large-result byte limits, audit rotation, and
+  MySQL pressure fixtures described in `docs/scale-validation.md`
 
 GitHub Actions runs the unit/contract matrix on Node.js 20 and 22 and runs the
 local MySQL harness in a separate job. The release workflow repeats the release
@@ -63,6 +65,9 @@ database side effects.
   arguments.
 - Ship audit logs to append-only centralized storage and alert on
   `AUDIT_FAILED`, repeated approval denial, queue saturation, and TLS failures.
+- Validate audit rotation, collector checkpoint/retry, centralized retention,
+  disk-space alerts, and the single-process trust boundary in
+  `docs/customer-deployment.md`.
 - Document read-only and mutation database grants for the customer.
 - Retain the package integrity/provenance output and the RC validation log with
   the release record.

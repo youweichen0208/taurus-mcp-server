@@ -1,6 +1,6 @@
 # TaurusDB MCP Server
 
-当前对外发布的 npm 包：
+本仓库发布两个 npm 包：
 
 - `taurusdb-core`
 - `taurusdb-mcp`
@@ -10,7 +10,7 @@
 - Node.js `>= 20`
 - npm
 
-## Use From npm
+## 从 npm 使用
 
 普通用户不需要 clone 或 build 当前仓库，直接通过 npm 启动 MCP server：
 
@@ -34,7 +34,16 @@ MCP 客户端里的启动命令统一使用：
 }
 ```
 
-最小云控制面环境变量：
+生产环境推荐先通过安全输入把华为云身份保存到操作系统凭据库：
+
+```bash
+npx -y taurusdb-mcp credentials configure
+TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
+  npx -y taurusdb-mcp credentials check
+```
+
+AK/SK 不会进入命令参数、shell history 或 MCP 客户端配置。只有在容器 secret
+injection 等受控部署中，才使用下面的环境变量方式：
 
 ```bash
 TAURUSDB_CLOUD_REGION=<your-region>
@@ -48,19 +57,18 @@ TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk>
 TAURUSDB_CLOUD_SECURITY_TOKEN=<your-session-token>
 ```
 
-## MCP Client Setup
+## MCP 客户端配置
 
 ### Claude Code
 
-推荐把云控制面凭证直接写进 MCP 配置，避免依赖外部 shell 的 `export`：
+先完成上面的系统凭据库配置，再把非敏感的 region 和功能开关写入 MCP 配置：
 
 ```bash
 claude mcp add huaweicloud-taurusdb \
   --transport stdio \
   -s local \
   -e TAURUSDB_CLOUD_REGION=<your-region> \
-  -e TAURUSDB_CLOUD_ACCESS_KEY_ID=<your-ak> \
-  -e TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk> \
+  -e TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
   -e TAURUSDB_ENABLE_DYNAMIC_TARGETS=true \
   -- npx -y taurusdb-mcp
 ```
@@ -79,8 +87,7 @@ Codex 支持通过 CLI 添加 stdio MCP server，也可以直接写 `~/.codex/co
 ```bash
 codex mcp add huaweicloud-taurusdb \
   --env TAURUSDB_CLOUD_REGION=<your-region> \
-  --env TAURUSDB_CLOUD_ACCESS_KEY_ID=<your-ak> \
-  --env TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk> \
+  --env TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
   --env TAURUSDB_ENABLE_DYNAMIC_TARGETS=true \
   -- npx -y taurusdb-mcp
 ```
@@ -101,8 +108,7 @@ enabled = true
 
 [mcp_servers.huaweicloud-taurusdb.env]
 TAURUSDB_CLOUD_REGION = "<your-region>"
-TAURUSDB_CLOUD_ACCESS_KEY_ID = "<your-ak>"
-TAURUSDB_CLOUD_SECRET_ACCESS_KEY = "<your-sk>"
+TAURUSDB_CLOUD_KEYCHAIN_SERVICE = "taurusdb-mcp/huaweicloud"
 TAURUSDB_ENABLE_DYNAMIC_TARGETS = "true"
 ```
 
@@ -118,8 +124,7 @@ TAURUSDB_ENABLE_DYNAMIC_TARGETS = "true"
       "args": ["-y", "taurusdb-mcp"],
       "env": {
         "TAURUSDB_CLOUD_REGION": "<your-region>",
-        "TAURUSDB_CLOUD_ACCESS_KEY_ID": "<your-ak>",
-        "TAURUSDB_CLOUD_SECRET_ACCESS_KEY": "<your-sk>",
+        "TAURUSDB_CLOUD_KEYCHAIN_SERVICE": "taurusdb-mcp/huaweicloud",
         "TAURUSDB_ENABLE_DYNAMIC_TARGETS": "true"
       }
     }
@@ -136,7 +141,7 @@ TAURUSDB_ENABLE_DYNAMIC_TARGETS = "true"
 - `get_session_binding`
 - `execute_readonly_sql` with `SELECT 1 AS ok`
 
-### Generated Client Config
+### 生成客户端配置
 
 `taurusdb-mcp` 也提供初始化命令，可生成 Claude Desktop、Cursor、VS Code 的基础 MCP 配置：
 
@@ -148,11 +153,11 @@ npx -y taurusdb-mcp init --client vscode
 
 生成后按需把上面的 `env` 补进对应配置文件。
 
-## Available Tools
+## 可用工具
 
 当前 `0.4.0` 默认只注册只读、发现、能力探测和诊断 tools。
 
-### Common Tools
+### 通用工具
 
 - `ping`
 - `list_data_sources`
@@ -163,20 +168,20 @@ npx -y taurusdb-mcp init --client vscode
 - `execute_readonly_sql`
 - `explain_sql`
 
-### Cloud Session And Capability Tools
+### 云会话与能力工具
 
 - `get_kernel_info`
 - `list_taurus_features`
 - `list_cloud_taurus_instances`
 - `get_session_binding`
 
-### TaurusDB-Specific Tools
+### TaurusDB 专属工具
 
 - `explain_sql_enhanced`
 - `flashback_query`
 - `list_recycle_bin`
 
-### Diagnostic Tools
+### 诊断工具
 
 - `find_top_slow_sql`
 - `diagnose_service_latency`
@@ -199,7 +204,7 @@ npx -y taurusdb-mcp init --client vscode
   `TAURUSDB_ENABLE_DYNAMIC_TARGETS=true` 时才注册。
 - mutation 必须同时配置独立写账号和外部审批密钥，不会回退复用只读账号。
 
-## Production Security Baseline
+## 生产安全基线
 
 生产环境默认开启并强制执行以下边界：
 
@@ -221,6 +226,8 @@ npx -y taurusdb-mcp init --client vscode
 TAURUSDB_REQUIRE_TLS=true
 TAURUSDB_MCP_AUDIT_LOG_PATH=/var/log/taurusdb-mcp/audit.jsonl
 TAURUSDB_MCP_AUDIT_INCLUDE_RAW_SQL=false
+TAURUSDB_MCP_AUDIT_MAX_BYTES=104857600
+TAURUSDB_MCP_AUDIT_MAX_FILES=10
 TAURUSDB_MCP_MAX_CONCURRENT_QUERIES=8
 TAURUSDB_MCP_MAX_QUEUED_QUERIES=32
 TAURUSDB_MCP_QUEUE_TIMEOUT_MS=5000
@@ -253,7 +260,10 @@ npx taurusdb-mcp approve \
 正式发版前必须完成 [release readiness](docs/release-readiness.md) 中的自动化
 门禁和真实 TaurusDB release-candidate 验证。
 
-## Local Development
+支持的单会话部署边界、集中审计接入和容量预算见
+[客户部署与运行边界](docs/customer-deployment.md)。
+
+## 本地开发
 
 如果你要开发当前仓库，再使用下面的本地流程。
 
@@ -294,31 +304,20 @@ npm run test --workspace taurusdb-mcp
 npx taurusdb-mcp --version
 ```
 
-## npm Publish
+## npm 发布
 
-发布前建议先检查包名是否可用：
-
-```bash
-npm view taurusdb-core name
-npm view taurusdb-mcp name
-```
-
-本地检查打包内容：
+维护者先在本地执行完整发布检查：
 
 ```bash
-npm run build
-npm_config_cache=/private/tmp/taurus-npm-cache npm pack --workspace taurusdb-core --dry-run
-npm_config_cache=/private/tmp/taurus-npm-cache npm pack --workspace taurusdb-mcp --dry-run
+npm run release:check
 ```
 
-发布顺序：
+真实 TaurusDB RC 门禁通过后，从已验收的 `main` SHA 创建受保护的
+`v<version>` tag。GitHub release workflow 会重新执行门禁、生成 SBOM，并按
+`taurusdb-core` → `taurusdb-mcp` 的顺序使用 npm provenance 发布。不要从开发机
+手工执行 `npm publish`。
 
-```bash
-npm login
-npm run build
-npm publish --workspace taurusdb-core
-npm publish --workspace taurusdb-mcp
-```
+发布配置和回滚要求见 [发布就绪门禁](docs/release-readiness.md)。
 
 安装和运行已发布包：
 
@@ -327,45 +326,42 @@ npm install taurusdb-mcp
 npx taurusdb-mcp --version
 ```
 
-## Claude Code Setup From Source
+## 从源码配置 Claude Code
 
 下面是从本地源码构建并接入 Claude Code 的开发路径。普通用户优先使用上面的 npm 配置。
 
-### 1. Build
+### 1. 构建
 
 ```bash
-cd /Users/youweichen/projects/taurus-mcp-server
+cd /path/to/taurus-mcp-server
 npm run build
 ```
 
-### 2. Add The Local MCP Server
+### 2. 添加本地 MCP Server
 
 如果你只想先验证本地 MCP 能否启动：
 
 ```bash
 claude mcp add huaweicloud-taurusdb \
   --transport stdio \
-  -- node /Users/youweichen/projects/taurus-mcp-server/packages/mcp/dist/index.js
+  -- node "$(pwd)/packages/mcp/dist/index.js"
 ```
 
-如果你希望 Claude Code 直接带着华为云控制面配置启动，推荐一次性把 `region + AK/SK` 写进 MCP 配置，而不是依赖外部 shell 的 `export`：
+如果希望 Claude Code 带着云控制面配置启动，先用 `credentials configure`
+保存身份，再只传入非敏感配置：
 
 ```bash
 claude mcp add huaweicloud-taurusdb \
   --transport stdio \
   -e TAURUSDB_CLOUD_REGION=<your-region> \
-  -e TAURUSDB_CLOUD_ACCESS_KEY_ID=<your-ak> \
-  -e TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk> \
-  -- node /Users/youweichen/projects/taurus-mcp-server/packages/mcp/dist/index.js
+  -e TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
+  -- node "$(pwd)/packages/mcp/dist/index.js"
 ```
 
-如果你使用的是临时凭证，再补：
+如果使用临时凭证，在 `credentials configure` 的安全输入流程中同时保存
+Security Token。
 
-```bash
--e TAURUSDB_CLOUD_SECURITY_TOKEN=<your-session-token>
-```
-
-### 3. Verify The MCP Registration
+### 3. 验证 MCP 注册
 
 ```bash
 claude mcp list
@@ -378,7 +374,7 @@ claude mcp get huaweicloud-taurusdb
 - `claude mcp get huaweicloud-taurusdb` 能看到正确的 `command`
 - 如果你通过 `-e` 写入了云配置，`env` 不应为空
 
-### 4. Verify Cloud Control Plane
+### 4. 验证云控制面
 
 在 Claude Code 里直接调用：
 
@@ -390,7 +386,7 @@ claude mcp get huaweicloud-taurusdb
 
 说明当前 MCP 会话已经能使用这组凭证访问华为云控制面，并且能看见实例列表。
 
-### 5. Verify Database Data Plane
+### 5. 验证数据库数据面
 
 控制面通过后，先确保 datasource 已配置数据库密码引用，再验证数据面：
 
@@ -402,7 +398,7 @@ claude mcp get huaweicloud-taurusdb
 
 如果 `SELECT 1` 成功，说明数据库数据面也已连通。
 
-## Cloud Datasource Template
+## 云数据源模板
 
 当前版本已经支持一种更适合云上多实例切换的用法：
 
@@ -434,7 +430,7 @@ claude mcp get huaweicloud-taurusdb
    - `set_default_database`
    - `get_session_binding`
 
-### Minimal Template
+### 最小模板
 
 当前版本已经把这几个默认值内置好了：
 
@@ -451,7 +447,7 @@ export TAURUSDB_SQL_PASSWORD='hw-kms-file:~/.taurusdb-mcp/production-password.ci
 
 MCP 不提供本地页面或 Tool 参数输入数据库密码的入口。密码可以使用 `env:`、`file:`、`hw-csms:`、`hw-kms:` 或 `hw-kms-file:` 引用；正式环境优先推荐 DEW CSMS。
 
-### Credential Modes
+### 凭据模式
 
 | 模式 | 推荐场景 | 本地保存内容 |
 | --- | --- | --- |
@@ -463,7 +459,7 @@ MCP 不提供本地页面或 Tool 参数输入数据库密码的入口。密码�
 
 推荐按部署环境选择模式，而不是强制所有客户使用 KMS。无论选择哪种模式，数据库密码都不会作为 MCP Tool 参数进入 Agent 对话。
 
-## System Credential Store Cloud Identity
+## 系统凭据库存储云身份
 
 在客户电脑上，可以将调用华为云 API 所需的 AK/SK 保存到系统凭据库。MCP 配置中只保留非敏感的 service/account 名称，不再保存 AK/SK。
 
@@ -521,7 +517,7 @@ export TAURUSDB_CLOUD_KEYCHAIN_ACCOUNT='default'
 
 系统凭据库身份适用于 CSMS、KMS、TaurusDB 实例发现、DAS 和 CES 请求。凭据在首次请求时读取并缓存在当前 MCP 进程内存中。
 
-### Verify The Credential Chain
+### 验证凭据链
 
 配置完成后运行：
 
@@ -543,7 +539,7 @@ npm run credentials:check
 
 检查过程不会连接数据库，也不会打印 AK/SK、Token、数据库密码、CSMS 凭据名称或 KMS 密文。
 
-## Huawei Cloud DEW CSMS Database Password
+## 使用华为云 DEW CSMS 保存数据库密码
 
 DEW CSMS 直接保存并返回数据库密码，适合作为正式环境的默认模式。MCP 只保存凭据名称，不在本地保存数据库密码或 KMS 密文。
 
@@ -579,7 +575,7 @@ GET /v1/{project_id}/secrets/{secret_name}/versions/latest
 
 数据库密码只会短暂进入 MCP 进程内存，并用于创建数据库连接。CSMS 凭据更新后，重启 MCP 或重建连接池即可读取最新版本。
 
-## Huawei Cloud DEW/KMS Database Password
+## 使用华为云 DEW/KMS 保存数据库密码
 
 华为云 DEW/KMS 是正式环境的推荐选项，但不是 MCP 的强制要求。开发和简单部署可使用 `env:` 或 `file:`；需要云端访问控制和审计时使用 `hw-kms:` 或 `hw-kms-file:`。
 
@@ -596,7 +592,7 @@ GET /v1/{project_id}/secrets/{secret_name}/versions/latest
 
 KMS 负责加密、解密和访问控制，不负责创建、修改或自动轮换 TaurusDB 数据库账号密码。
 
-### 1. Prerequisites
+### 1. 前置条件
 
 准备以下信息：
 
@@ -619,7 +615,7 @@ https://kms.<region>.myhuaweicloud.com
 https://kms.cn-north-4.myhuaweicloud.com
 ```
 
-### 2. Create The KMS Key
+### 2. 创建 KMS 密钥
 
 在华为云控制台进入：
 
@@ -637,7 +633,7 @@ https://kms.cn-north-4.myhuaweicloud.com
 
 创建后记录密钥 ID。不要把密钥 ID 和数据库实例 ID 混淆。
 
-### 3. Configure IAM Permissions
+### 3. 配置 IAM 权限
 
 建议使用两个不同的 IAM 身份：
 
@@ -654,7 +650,7 @@ MCP 运行身份通常还需要：
 
 优先使用 IAM 委托或临时凭证；如果使用长期 AK/SK，应由客户自行保管并定期轮换。
 
-### 4. Generate The Ciphertext
+### 4. 生成密文
 
 生成密文属于部署或密码轮换操作，不应由日常运行的 MCP 自动完成。
 
@@ -718,7 +714,7 @@ stat -f '%Sp %N' ~/.taurusdb-mcp/production-password.ciphertext 2>/dev/null \
 
 密文文件中只保存 KMS 返回的 `cipher_text`。它不是明文密码，但仍应按敏感配置管理。
 
-### 5. Configure The Datasource
+### 5. 配置数据源
 
 推荐使用 profile 文件保存 datasource，并通过 `hw-kms-file:` 引用密文：
 
@@ -769,7 +765,7 @@ export TAURUSDB_SQL_PASSWORD='hw-kms-file:~/.taurusdb-mcp/production-password.ci
 - `hw-kms-file:<path>`：从文件读取 `cipher_text`，推荐用于生产环境
 - `hw-kms:<cipher_text>`：直接在配置中保存密文，不推荐用于较长密文
 
-### 6. Configure The MCP Runtime Identity
+### 6. 配置 MCP 运行身份
 
 MCP 使用下面两种方式之一调用 KMS `decrypt-data` API。
 
@@ -838,7 +834,7 @@ TAURUSDB_DEFAULT_DATASOURCE = "production"
 
 如果使用临时 AK/SK，还必须把 `TAURUSDB_CLOUD_SECURITY_TOKEN` 加入同一份 MCP 客户端配置。
 
-### 7. Start And Verify
+### 7. 启动并验证
 
 启动 MCP 后，按顺序验证：
 
@@ -862,7 +858,7 @@ POST /v1.0/{project_id}/kms/decrypt-data
 - 数据库账号密码正确
 - MCP 到 TaurusDB 的网络和 TLS 连接正常
 
-### 8. Rotate The Database Password
+### 8. 轮换数据库密码
 
 推荐轮换流程：
 
@@ -875,7 +871,7 @@ POST /v1.0/{project_id}/kms/decrypt-data
 
 不要在确认新密文可用前删除或禁用旧 KMS 密钥。如果需要轮换 KMS 主密钥，应先使用 KMS 重加密能力生成新密文，再更新 MCP 配置。
 
-### 9. Troubleshooting
+### 9. 故障排查
 
 | Error or symptom | Check |
 | --- | --- |
@@ -888,7 +884,7 @@ POST /v1.0/{project_id}/kms/decrypt-data
 | 密文文件读取失败 | 检查路径、文件权限和 MCP 运行用户 |
 | 修改密文后仍使用旧密码 | 重启 MCP，清理旧数据库连接池 |
 
-### 10. Security Boundary
+### 10. 安全边界
 
 - 数据库明文密码不会进入 Agent 对话或 MCP Tool 参数。
 - 密文文件只包含 `cipher_text`，不包含数据库明文密码。
@@ -897,7 +893,7 @@ POST /v1.0/{project_id}/kms/decrypt-data
 - 推荐在客户 VPC 内运行 MCP，并通过私网和 TLS 访问 TaurusDB。
 - 推荐使用专用只读数据库账号、最小 IAM 权限和短期云凭证。
 
-## Connectivity And Session Workflow
+## 连接与会话流程
 
 这里的关键点是：
 
@@ -907,18 +903,19 @@ POST /v1.0/{project_id}/kms/decrypt-data
 - `engine` 默认按 `mysql` 处理，因为 TaurusDB for MySQL 走的是 MySQL 协议
 - `datasource` 默认使用 `taurus_mcp`
 
-### Connectivity Options
+### 连接方式
 
 在执行下面的推荐流程之前，先确认你的客户端是通过公网还是私网访问 TaurusDB。
 
-#### Option A: No ECS and Not in the Same VPC
+#### 方式 A：无同 VPC ECS
 
 如果本机不在和 TaurusDB 相同的 VPC 内，也没有可用的 ECS / VPN / 专线中转，通常需要通过数据库的读写公网地址访问实例。
 
 建议配置：
 
 - 为 TaurusDB 实例开通读写公网地址
-- 在实例对应的安全组里放通你当前本机公网出口 IP，例如 `124.70.231.48/32`
+- 在实例对应的安全组里只放通当前公网出口 IP，例如
+  `<your-public-egress-ip>/32`
 - 优先只放通数据库端口 `3306`
 
 可以先在本机终端获取当前公网出口 IP：
@@ -927,11 +924,8 @@ POST /v1.0/{project_id}/kms/decrypt-data
 curl ifconfig.me; echo
 ```
 
-例如返回：
-
-```text
-124.70.231.48
-```
+例如返回 `<your-public-egress-ip>`，对应安全组 CIDR 为
+`<your-public-egress-ip>/32`。不要把个人或办公网络的真实公网 IP 提交到仓库。
 
 下图展示了一个将本机公网 IP 加入安全组规则的示例：
 
@@ -943,7 +937,7 @@ curl ifconfig.me; echo
 - 本机公网 IP 变化后，需要同步更新安全组规则
 - 这种方式适合本地开发、临时调试或从办公室网络直连云上数据库
 
-#### Option B: Use ECS in the Same VPC
+#### 方式 B：使用同 VPC ECS
 
 如果你有和 TaurusDB 位于同一 VPC 内的 ECS，或已经通过 VPN / 专线打通到该私网，优先使用读写内网地址连接实例，不必依赖公网地址。
 
@@ -959,7 +953,7 @@ curl ifconfig.me; echo
 - 一般不需要为数据库额外购买读写公网地址
 - 适合生产环境、固定云上开发机和长期运行的自动化任务
 
-### Recommended Flow
+### 推荐流程
 
 完成上面的网络打通后，推荐的实际使用顺序：
 
@@ -980,7 +974,7 @@ curl ifconfig.me; echo
 
 ![Claude Code 中的 TaurusDB MCP 调用示例](image.png)
 
-### Session Binding Model
+### 会话绑定模型
 
 当前版本里，实例和默认库可以按会话维度绑定；数据库账号和密码引用由 datasource 配置统一管理。
 
@@ -1010,7 +1004,7 @@ curl ifconfig.me; echo
 
 绑定到当前 datasource 模板，然后重建 engine，避免连接池继续复用旧实例。
 
-### DBA-Friendly Model
+### DBA 友好模型
 
 这套模型更适合 DBA 统一兜底：
 
@@ -1026,7 +1020,7 @@ curl ifconfig.me; echo
 - `TAURUSDB_SQL_DATASOURCE`
 - `TAURUSDB_DEFAULT_DATASOURCE`
 
-## Common Issues
+## 常见问题
 
 ### `list_cloud_taurus_instances` returns `INVALID_INPUT`
 
@@ -1046,7 +1040,7 @@ curl ifconfig.me; echo
 - 你修改了环境变量，但没有重启 Claude Code 会话
 - `claude mcp add` 时没有把 `-e` 写进 MCP 配置
 
-### How To Fix Missing Cloud Env
+### 修复缺失的云配置
 
 先检查当前配置：
 
