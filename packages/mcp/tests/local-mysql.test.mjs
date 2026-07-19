@@ -13,9 +13,8 @@ import { signApprovalRequest } from "taurusdb-core";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
 const serverEntrypoint = path.resolve(__dirname, "../dist/index.js");
-const schemaSqlPath = path.resolve(repoRoot, "testdata/mysql/local-mysql-schema.sql");
-const seedSqlPath = path.resolve(repoRoot, "testdata/mysql/local-mysql-seed.sql");
-const usersSqlPath = path.resolve(repoRoot, "testdata/mysql/local-mysql-users.sql");
+const schemaSqlPath = path.resolve(__dirname, "fixtures/mysql/schema.sql");
+const seedSqlPath = path.resolve(__dirname, "fixtures/mysql/seed.sql");
 const runLocalMysqlTests = ["1", "true"].includes(
   process.env.TAURUSDB_RUN_LOCAL_MYSQL_TESTS?.trim().toLowerCase(),
 );
@@ -71,17 +70,15 @@ async function prepareDatabase() {
     return;
   }
 
-  const [schemaSql, seedSql, usersSql] = await Promise.all([
+  const [schemaSql, seedSql] = await Promise.all([
     readFile(schemaSqlPath, "utf8"),
     readFile(seedSqlPath, "utf8"),
-    readFile(usersSqlPath, "utf8"),
   ]);
 
   const connection = await mysql.createConnection(parseBootstrapDsn(bootstrapDsn));
   try {
     await connection.query(schemaSql);
     await connection.query(seedSql);
-    await connection.query(usersSql);
   } finally {
     await connection.end();
   }
