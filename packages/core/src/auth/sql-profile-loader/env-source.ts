@@ -15,7 +15,8 @@ export function parseEngineFromDsnProtocol(protocol: string): DatabaseEngine {
 export function parseEnvProfile(env: NodeJS.ProcessEnv): DataSourceProfile | undefined {
   const dsn = asString(env.TAURUSDB_SQL_DSN);
   const explicitHost = asString(env.TAURUSDB_SQL_HOST);
-  const profileName = asString(env.TAURUSDB_SQL_DATASOURCE) ?? "taurus_mcp";
+  const explicitProfileName = asString(env.TAURUSDB_SQL_DATASOURCE);
+  const profileName = explicitProfileName ?? "taurus_mcp";
 
   let engine: DatabaseEngine;
   let host: string | undefined;
@@ -46,6 +47,7 @@ export function parseEnvProfile(env: NodeJS.ProcessEnv): DataSourceProfile | und
   if (
     !dsn &&
     !explicitHost &&
+    !explicitProfileName &&
     !asString(env.TAURUSDB_SQL_USER) &&
     !asString(env.TAURUSDB_SQL_PASSWORD) &&
     !database
@@ -58,30 +60,15 @@ export function parseEnvProfile(env: NodeJS.ProcessEnv): DataSourceProfile | und
   }
 
   username = username ?? asString(env.TAURUSDB_SQL_USER);
-  if (!username) {
-    throw new Error("Missing SQL username in environment. Set TAURUSDB_SQL_USER or include it in DSN.");
-  }
-
   passwordRef =
     passwordRef ??
     (Object.hasOwn(env, "TAURUSDB_SQL_PASSWORD")
       ? parseCredentialRef(env.TAURUSDB_SQL_PASSWORD, "TAURUSDB_SQL_PASSWORD")
       : undefined);
 
-  if (!passwordRef) {
-    throw new Error("Missing SQL password in environment. Set TAURUSDB_SQL_PASSWORD or include it in DSN.");
-  }
-
-  const mutationUsername = asString(env.TAURUSDB_SQL_MUTATION_USER);
-  const mutationPasswordRef = Object.hasOwn(env, "TAURUSDB_SQL_MUTATION_PASSWORD")
-    ? parseCredentialRef(
-        env.TAURUSDB_SQL_MUTATION_PASSWORD,
-        "TAURUSDB_SQL_MUTATION_PASSWORD",
-      )
-    : undefined;
-  if ((mutationUsername && !mutationPasswordRef) || (!mutationUsername && mutationPasswordRef)) {
+  if ((username && !passwordRef) || (!username && passwordRef)) {
     throw new Error(
-      "Mutation credentials require both TAURUSDB_SQL_MUTATION_USER and TAURUSDB_SQL_MUTATION_PASSWORD.",
+      "SQL credentials require both username and password. Omit both to use the local database login page.",
     );
   }
 
@@ -96,14 +83,7 @@ export function parseEnvProfile(env: NodeJS.ProcessEnv): DataSourceProfile | und
     host,
     port,
     database,
-    user: {
-      username,
-      password: passwordRef,
-    },
-    mutationUser:
-      mutationUsername && mutationPasswordRef
-        ? { username: mutationUsername, password: mutationPasswordRef }
-        : undefined,
+    user: username && passwordRef ? { username, password: passwordRef } : undefined,
     poolSize,
   });
 }

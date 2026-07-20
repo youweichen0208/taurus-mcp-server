@@ -224,22 +224,15 @@ export function parseProfileRecord(name: string, value: unknown, context: string
     throw new Error(`Invalid datasource profile ${name} in ${context}: poolSize must be positive.`);
   }
 
-  // `user` is the read-only credential. Keep older read-only aliases for compatibility.
+  // `user` is the session credential. Keep older read-only aliases for compatibility.
   const userRaw =
     value.user ??
     value.readonlyUser ??
     value.readonly ??
     value.readOnlyUser;
-  if (userRaw === undefined) {
-    throw new Error(`Invalid datasource profile ${name} in ${context}: missing user.`);
-  }
-  const user = parseUserCredential(userRaw, `${context}.${name}.user`);
-
-  const mutationUserRaw = value.mutationUser ?? value.writeUser ?? value.rwUser;
-  const mutationUser =
-    mutationUserRaw === undefined
-      ? undefined
-      : parseUserCredential(mutationUserRaw, `${context}.${name}.mutationUser`);
+  const user = userRaw === undefined
+    ? undefined
+    : parseUserCredential(userRaw, `${context}.${name}.user`);
 
   const tls = parseTlsOptions(value.tls, `${context}.${name}.tls`);
 
@@ -252,7 +245,6 @@ export function parseProfileRecord(name: string, value: unknown, context: string
     instanceId,
     nodeId,
     user,
-    mutationUser,
     tls,
     poolSize,
   });

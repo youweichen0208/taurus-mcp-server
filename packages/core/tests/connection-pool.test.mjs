@@ -11,10 +11,6 @@ function makeProfile({
   port = 3306,
   database = "demo",
   user = { username: "app", password: { type: "plain", value: "app_pwd" } },
-  mutationUser = {
-    username: "writer",
-    password: { type: "plain", value: "writer_pwd" },
-  },
 } = {}) {
   return {
     name,
@@ -23,7 +19,6 @@ function makeProfile({
     port,
     database,
     user,
-    mutationUser,
     toString() {
       return JSON.stringify({ name, engine, host, port, database, user });
     },
@@ -106,7 +101,7 @@ function makeMockAdapter() {
   return { adapter, state };
 }
 
-test("connection pool acquires readonly sessions and reuses underlying pool", async () => {
+test("connection pool uses plaintext transport by default and reuses underlying pool", async () => {
   const profile = makeProfile();
   const profiles = new Map([[profile.name, profile]]);
   const { adapter, state } = makeMockAdapter();
@@ -129,20 +124,44 @@ test("connection pool acquires readonly sessions and reuses underlying pool", as
   assert.equal(state.createPoolCalls.length, 1);
   assert.equal(state.acquireCalls, 2);
   assert.equal(state.releaseCalls, 2);
+  assert.equal(state.createPoolCalls[0].tls, undefined);
+});
+
+test("connection pool permits explicit strict TLS certificate verification", async () => {
+  const profile = makeProfile();
+  profile.tls = {
+    enabled: true,
+    rejectUnauthorized: true,
+    servername: "db.example.com",
+    ca: { type: "file", path: "/run/secrets/ca.pem" },
+  };
+  const profiles = new Map([[profile.name, profile]]);
+  const { adapter, state } = makeMockAdapter();
+  const manager = new ConnectionPoolManager({
+    config: createConfigFromEnv({}),
+    profileLoader: makeProfileLoader(profiles),
+    secretResolver: makeSecretResolver(),
+    adapters: { mysql: adapter },
+  });
+
+  const session = await manager.acquire(profile.name, "ro");
+  await session.close();
+
   assert.deepEqual(state.createPoolCalls[0].tls, {
     enabled: true,
     rejectUnauthorized: true,
-    servername: undefined,
+    servername: "db.example.com",
+    ca: "file-/run/secrets/ca.pem",
   });
 });
 
-test("connection pool rejects insecure TLS overrides under the default policy", async () => {
+test("connection pool rejects disabling TLS when the operator explicitly requires it", async () => {
   const profile = makeProfile();
   profile.tls = { enabled: false };
   const profiles = new Map([[profile.name, profile]]);
   const { adapter, state } = makeMockAdapter();
   const manager = new ConnectionPoolManager({
-    config: createConfigFromEnv({}),
+    config: createConfigFromEnv({ TAURUSDB_REQUIRE_TLS: "true" }),
     profileLoader: makeProfileLoader(profiles),
     secretResolver: makeSecretResolver(),
     adapters: { mysql: adapter },
@@ -155,13 +174,13 @@ test("connection pool rejects insecure TLS overrides under the default policy", 
   assert.equal(state.createPoolCalls.length, 0);
 });
 
-test("connection pool permits an explicit local TLS opt-out only when server policy allows it", async () => {
+test("connection pool permits an explicit TLS opt-out under the default policy", async () => {
   const profile = makeProfile();
   profile.tls = { enabled: false };
   const profiles = new Map([[profile.name, profile]]);
   const { adapter, state } = makeMockAdapter();
   const manager = new ConnectionPoolManager({
-    config: createConfigFromEnv({ TAURUSDB_REQUIRE_TLS: "false" }),
+    config: createConfigFromEnv({}),
     profileLoader: makeProfileLoader(profiles),
     secretResolver: makeSecretResolver(),
     adapters: { mysql: adapter },
@@ -193,7 +212,7 @@ test("connection pool resolves credentials before creating pool", async () => {
   assert.equal(state.createPoolCalls[0].password, "env-DB_PWD");
 });
 
-test("connection pool acquires rw sessions with the dedicated mutation user", async () => {
+test("connection pool uses the active session credential for controlled recovery", async () => {
   const profile = makeProfile();
   const profiles = new Map([[profile.name, profile]]);
   const { adapter, state } = makeMockAdapter();
@@ -209,12 +228,12 @@ test("connection pool acquires rw sessions with the dedicated mutation user", as
   await session.close();
 
   assert.equal(state.createPoolCalls.length, 1);
-  assert.equal(state.createPoolCalls[0].username, "writer");
+  assert.equal(state.createPoolCalls[0].username, "app");
 });
 
-test("connection pool rejects rw sessions without dedicated mutation credentials", async () => {
+test("connection pool rejects recovery when no SQL credential session exists", async () => {
   const profile = makeProfile();
-  delete profile.mutationUser;
+  delete profile.user;
   const profiles = new Map([[profile.name, profile]]);
   const { adapter, state } = makeMockAdapter();
 
@@ -227,7 +246,7 @@ test("connection pool rejects rw sessions without dedicated mutation credentials
 
   await assert.rejects(
     () => manager.acquire(profile.name, "rw"),
-    /does not define mutation SQL credentials/,
+    /has no active SQL credential session/,
   );
   assert.equal(state.createPoolCalls.length, 0);
 });
@@ -252,7 +271,7 @@ test("connection pool isolates pools by effective database", async () => {
   assert.deepEqual(state.createPoolCalls.map((call) => call.database), ["tenant_a", "tenant_b"]);
 });
 
-test("connection pool health check returns readonly and mutation results", async () => {
+test("connection pool health check returns readonly and recovery results", async () => {
   const profile = makeProfile();
   const profiles = new Map([[profile.name, profile]]);
   const { adapter } = makeMockAdapter();
@@ -310,7 +329,7 @@ test("connection pool reports missing adapter as connection failure", async () =
   );
 });
 
-test("connection pool requests configured SQL credentials when datasource user is absent", async () => {
+test("connection pool directs users to local login when datasource credentials are absent", async () => {
   const profile = makeProfile();
   delete profile.user;
   const profiles = new Map([[profile.name, profile]]);
@@ -325,6 +344,6 @@ test("connection pool requests configured SQL credentials when datasource user i
 
   await assert.rejects(
     async () => manager.acquire(profile.name, "ro"),
-    /does not define read-only SQL credentials/,
+    /open the returned local login URL/,
   );
 });

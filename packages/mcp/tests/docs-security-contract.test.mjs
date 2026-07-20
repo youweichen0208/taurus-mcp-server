@@ -82,6 +82,23 @@ test("release documentation describes the non-executing SQL Advice boundary", as
     assert.ok(rootReadme.includes(required), `root README must document ${required}`);
   }
 
-  assert.match(architecture, /永不执行会改变数据库状态的语句/);
+  assert.match(architecture, /Agent 日常操作面永不执行任意 DML/);
   assert.match(cloudGuide, /记录未变化/);
+});
+
+test("customer documentation describes the narrow human-gated recovery exception", async () => {
+  const documents = await Promise.all(
+    canonicalDocs.map(async (url) => readFile(url, "utf8")),
+  );
+  const joined = documents.join("\n");
+  for (const required of [
+    "prepare_recycle_bin_restore",
+    "get_recycle_bin_restore_status",
+  ]) {
+    assert.ok(joined.includes(required), `customer documentation must describe ${required}`);
+  }
+  assert.match(joined, /唯一受控例外/);
+  assert.match(joined, /Agent 不能直接/);
+  assert.doesNotMatch(joined, /TAURUSDB_SQL_RECOVERY_(?:USER|PASSWORD)/);
+  assert.doesNotMatch(joined, /TAURUSDB_RECOVERY_APPROVAL_SECRET_FILE/);
 });

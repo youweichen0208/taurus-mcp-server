@@ -149,15 +149,12 @@ async function resolveTls(
       "TLS is required by server policy and cannot be disabled for this datasource.",
     );
   }
-  if (requireTls && tls?.rejectUnauthorized === false) {
-    throw new ConnectionPoolError(
-      "TLS certificate verification is required by server policy.",
-    );
-  }
-
   const resolved: DriverPoolCreateInput["tls"] = {
     enabled: tls?.enabled ?? true,
-    rejectUnauthorized: tls?.rejectUnauthorized ?? true,
+    // Dynamic cloud targets are commonly bound by public IP while the server
+    // certificate is issued to a DNS name. When TLS is explicitly enabled,
+    // make CA/hostname verification a separate profile opt-in.
+    rejectUnauthorized: tls?.rejectUnauthorized ?? false,
     servername: tls?.servername ?? (isIP(host) === 0 ? host : undefined),
   };
 
@@ -176,13 +173,12 @@ async function resolveTls(
 
 function selectCredential(
   profile: DataSourceProfile,
-  mode: PoolMode,
+  _mode: PoolMode,
 ) {
-  const credential = mode === "rw" ? profile.mutationUser : profile.user;
+  const credential = profile.user;
   if (!credential) {
-    const credentialKind = mode === "rw" ? "mutation" : "read-only";
     throw new ConnectionPoolError(
-      `Datasource "${profile.name}" does not define ${credentialKind} SQL credentials. Configure a dedicated ${credentialKind} database username and password reference.`,
+      `Datasource "${profile.name}" has no active SQL credential session. Select a TaurusDB instance and open the returned local login URL, or call begin_sql_login.`,
     );
   }
   return credential;

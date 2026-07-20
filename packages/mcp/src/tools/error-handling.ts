@@ -13,6 +13,7 @@ import {
   type ResponseMetadata,
   type ToolResponse,
 } from "../utils/formatter.js";
+import { DatabaseEndpointPreflightError } from "../security/database-endpoint-preflight.js";
 
 export class ToolInputError extends Error {
   constructor(message: string) {
@@ -49,6 +50,34 @@ function detailsOf(error: unknown): Record<string, unknown> | undefined {
 }
 
 export function formatToolError(error: unknown, context: ToolErrorContext): ToolResponse {
+  if (error instanceof DatabaseEndpointPreflightError) {
+    const refused = error.kind === "refused";
+    return formatError({
+      code: refused
+        ? ErrorCode.DB_CONNECTION_REFUSED
+        : ErrorCode.DB_ENDPOINT_UNREACHABLE,
+      message: refused
+        ? `The TaurusDB public endpoint ${error.host}:${error.port} is reachable, but the database port refused the connection. Verify the instance status and database port.`
+        : `The TaurusDB public endpoint ${error.host}:${error.port} is unreachable from this MCP client. In the instance security group's inbound rules, allow TCP port ${error.port} from the client's current public egress IP/32, then verify network ACL, VPN, and outbound firewall rules.`,
+      summary: refused
+        ? "The TaurusDB public database port refused the connection."
+        : "The TaurusDB public endpoint is unreachable from this MCP client.",
+      metadata: context.metadata,
+      retryable: true,
+      details: {
+        endpoint: `${error.host}:${error.port}`,
+        likely_causes: refused
+          ? ["incorrect_database_port", "database_service_unavailable"]
+          : [
+              "security_group_inbound_rule",
+              "network_acl",
+              "vpn_or_proxy_egress_change",
+              "client_outbound_firewall",
+            ],
+      },
+    });
+  }
+
   if (error instanceof ToolInputError) {
     return formatError({
       code: ErrorCode.INVALID_INPUT,

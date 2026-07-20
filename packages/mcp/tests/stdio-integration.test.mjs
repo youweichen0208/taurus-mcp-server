@@ -63,6 +63,11 @@ test("stdio transport exposes expected tools and keeps logs on stderr", async ()
       "list_taurus_features",
       "get_session_binding",
       "list_cloud_taurus_instances",
+      "set_cloud_region",
+      "begin_sql_login",
+      "clear_sql_credentials",
+      "set_default_database",
+      "select_cloud_taurus_instance",
       "diagnose_service_latency",
       "diagnose_db_hotspot",
       "find_top_slow_sql",
@@ -74,6 +79,8 @@ test("stdio transport exposes expected tools and keeps logs on stderr", async ()
       "explain_sql_enhanced",
       "flashback_query",
       "list_recycle_bin",
+      "prepare_recycle_bin_restore",
+      "get_recycle_bin_restore_status",
     ]);
 
     const ping = await client.callTool({
@@ -140,6 +147,31 @@ test("legacy mutation environment flags cannot re-enable database writes", async
     assert.equal(tools.tools.some((tool) => tool.name === "execute_sql"), false);
     assert.equal(tools.tools.some((tool) => tool.name === "restore_recycle_bin_table"), false);
     assert.equal(tools.tools.some((tool) => tool.name === "analyze_mutation_sql"), true);
+  } finally {
+    await transport.close();
+  }
+});
+
+test("controlled recovery exposes request and status tools but no direct restore tool", async () => {
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [serverEntrypoint],
+    cwd: path.resolve(__dirname, "../../.."),
+    stderr: "pipe",
+    env: {
+      TAURUSDB_MCP_LOG_LEVEL: "error",
+      TAURUSDB_MCP_AUDIT_LOG_PATH: auditLogPath,
+      TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE: "true",
+    },
+  });
+  const client = new Client({ name: "taurusdb-mcp-stdio-test-recovery", version: "1.0.0" });
+  try {
+    await client.connect(transport);
+    const tools = await client.listTools();
+    assert.equal(tools.tools.some((tool) => tool.name === "prepare_recycle_bin_restore"), true);
+    assert.equal(tools.tools.some((tool) => tool.name === "get_recycle_bin_restore_status"), true);
+    assert.equal(tools.tools.some((tool) => tool.name === "restore_recycle_bin_table"), false);
+    assert.equal(tools.tools.some((tool) => tool.name === "execute_sql"), false);
   } finally {
     await transport.close();
   }

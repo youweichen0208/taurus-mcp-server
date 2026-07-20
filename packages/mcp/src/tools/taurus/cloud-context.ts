@@ -9,6 +9,7 @@ import { formatSuccess, type ToolResponse } from "../../utils/formatter.js";
 import { formatToolError, ToolInputError } from "../error-handling.js";
 import type { ToolDefinition, ToolDeps } from "../registry.js";
 import { metadata } from "../common.js";
+import { issueSqlLoginForDatasource } from "./sql-login.js";
 
 function buildHuaweiCloudEndpoint(service: string, region: string, domainSuffix: string): string {
   return `https://${service}.${region}.${domainSuffix}`;
@@ -90,12 +91,8 @@ async function resolveBindingDatasource(
   return deps.engine.getDefaultDataSource();
 }
 
-function selectInstanceAddress(input: {
-  publicIps: string[];
-  privateIps: string[];
-  hostnames: string[];
-}): string | undefined {
-  return input.privateIps[0] ?? input.hostnames[0] ?? input.publicIps[0];
+function selectInstanceAddress(input: { publicIps: string[] }): string | undefined {
+  return input.publicIps[0];
 }
 
 function normalizePort(port: string | number | undefined): number | undefined {
@@ -156,6 +153,7 @@ export const setCloudRegionTool: ToolDefinition = {
         clearCloudSelection(nextConfig, deps);
       });
       deps.credentialSessions?.clearAll();
+      deps.operatorSessions?.clear();
 
       return formatSuccess(
         {
@@ -301,6 +299,7 @@ export const clearSqlCredentialsTool: ToolDefinition = {
         deps.profileLoader.clearRuntimeUser(datasource);
       });
       deps.credentialSessions?.clear(datasource);
+      deps.operatorSessions?.revokeDatasource(datasource);
 
       return formatSuccess(
         {
@@ -423,7 +422,18 @@ export const selectCloudTaurusInstanceTool: ToolDefinition = {
         typeof input.datasource === "string" ? input.datasource : undefined,
       );
       const selectedHost = selectInstanceAddress(matched);
-      const selectedPort = normalizePort(matched.port);
+      const selectedPort = normalizePort(matched.port) ?? 3306;
+      if (!boundDatasource) {
+        throw new ToolInputError(
+          "No datasource template is available for SQL login. Configure TAURUSDB_DEFAULT_DATASOURCE or pass datasource explicitly.",
+        );
+      }
+      if (!selectedHost) {
+        throw new ToolInputError(
+          `Cloud instance ${matched.id} does not have a public database IP. Enable a read/write public IP and restrict port ${selectedPort ?? 3306} to the MCP client's egress IP before using local SQL login.`,
+        );
+      }
+      await deps.endpointPreflight?.(selectedHost, selectedPort);
       await updateSessionState(deps, (nextConfig) => {
         nextConfig.cloud.projectId = projectId;
         nextConfig.cloud.instanceId = matched.id;
@@ -436,18 +446,16 @@ export const selectCloudTaurusInstanceTool: ToolDefinition = {
         nextConfig.metricsSource.ces.projectId = projectId;
         nextConfig.metricsSource.ces.instanceId = matched.id;
         nextConfig.metricsSource.ces.nodeId = matched.primaryNodeId;
-        if (boundDatasource && selectedHost) {
-          deps.profileLoader.setRuntimeTarget(boundDatasource, {
-            host: selectedHost,
-            port: selectedPort,
-            instanceId: matched.id,
-            nodeId: matched.primaryNodeId,
-          });
-        }
+        deps.profileLoader.setRuntimeTarget(boundDatasource, {
+          host: selectedHost,
+          port: selectedPort,
+          instanceId: matched.id,
+          nodeId: matched.primaryNodeId,
+        });
       });
-      if (boundDatasource) {
-        deps.credentialSessions?.clear(boundDatasource);
-      }
+      deps.credentialSessions?.clear(boundDatasource);
+      deps.operatorSessions?.revokeDatasource(boundDatasource);
+      const login = await issueSqlLoginForDatasource(deps, boundDatasource);
 
       return formatSuccess(
         {
@@ -462,9 +470,11 @@ export const selectCloudTaurusInstanceTool: ToolDefinition = {
           bound_datasource: boundDatasource,
           bound_host: selectedHost,
           bound_port: selectedPort,
+          login_url: login.loginUrl,
+          login_expires_at: login.expiresAt,
         },
         {
-          summary: `Selected cloud instance ${matched.name} (${matched.id}).`,
+          summary: `Selected cloud instance ${matched.name} (${matched.id}) and created a local SQL login link.`,
           metadata: metadata(context.taskId),
         },
       );

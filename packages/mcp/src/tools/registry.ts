@@ -35,7 +35,11 @@ import { listCloudTaurusInstancesTool } from "./taurus/cloud-instances.js";
 import { diagnosticToolDefinitions } from "./taurus/diagnostics.js";
 import { explainSqlEnhancedTool } from "./taurus/explain.js";
 import { flashbackQueryTool } from "./taurus/flashback.js";
-import { listRecycleBinTool } from "./taurus/recycle-bin.js";
+import {
+  getRecycleBinRestoreStatusTool,
+  listRecycleBinTool,
+  prepareRecycleBinRestoreTool,
+} from "./taurus/recycle-bin.js";
 import {
   ErrorCode,
   formatError,
@@ -241,6 +245,7 @@ const SQL_CREDENTIAL_ACTIVITY_TOOLS = new Set([
   "explain_sql_enhanced",
   "flashback_query",
   "list_recycle_bin",
+  "prepare_recycle_bin_restore",
   ...diagnosticToolDefinitions.map((tool) => tool.name),
 ]);
 
@@ -348,6 +353,11 @@ export const taurusToolDefinitions: ToolDefinition[] = [
   listRecycleBinTool,
 ];
 
+export const controlledRecoveryToolDefinitions: ToolDefinition[] = [
+  prepareRecycleBinRestoreTool,
+  getRecycleBinRestoreStatusTool,
+];
+
 function buildDefaultToolDefinitions(config: Config): ToolDefinition[] {
   return [
     ...commonToolDefinitions,
@@ -355,6 +365,9 @@ function buildDefaultToolDefinitions(config: Config): ToolDefinition[] {
     ...(config.security.dynamicTargetsEnabled ? dynamicTargetToolDefinitions : []),
     ...diagnosticToolDefinitions,
     ...taurusToolDefinitions,
+    ...(config.security.recycleBinRestoreEnabled
+      ? controlledRecoveryToolDefinitions
+      : []),
   ];
 }
 

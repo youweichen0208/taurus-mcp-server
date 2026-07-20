@@ -42,8 +42,9 @@ test("config uses documented defaults when env is empty", () => {
   assert.equal(config.audit.logPath, "~/.taurusdb-mcp/audit.jsonl");
   assert.equal(config.audit.maxBytes, 104857600);
   assert.equal(config.audit.maxFiles, 10);
-  assert.equal(config.security.dynamicTargetsEnabled, false);
-  assert.equal(config.security.requireTls, true);
+  assert.equal(config.security.dynamicTargetsEnabled, true);
+  assert.equal(config.security.recycleBinRestoreEnabled, true);
+  assert.equal(config.security.requireTls, false);
   assert.equal(config.security.approvalSecretPath, undefined);
   assert.equal(config.security.approvalTtlSeconds, 300);
   assert.equal(config.security.credentialIdleTtlMinutes, 30);
@@ -89,7 +90,8 @@ test("config maps env vars into typed fields", () => {
     TAURUSDB_MCP_AUDIT_MAX_BYTES: "4096",
     TAURUSDB_MCP_AUDIT_MAX_FILES: "3",
     TAURUSDB_ENABLE_DYNAMIC_TARGETS: "true",
-    TAURUSDB_REQUIRE_TLS: "false",
+    TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE: "true",
+    TAURUSDB_REQUIRE_TLS: "true",
     TAURUSDB_MUTATION_APPROVAL_SECRET_FILE: "~/approval-secret",
     TAURUSDB_MUTATION_APPROVAL_TTL_SECONDS: "120",
     TAURUSDB_SQL_CREDENTIAL_IDLE_TTL_MINUTES: "15",
@@ -168,7 +170,8 @@ test("config maps env vars into typed fields", () => {
   assert.equal(config.audit.maxBytes, 4096);
   assert.equal(config.audit.maxFiles, 3);
   assert.equal(config.security.dynamicTargetsEnabled, true);
-  assert.equal(config.security.requireTls, false);
+  assert.equal(config.security.recycleBinRestoreEnabled, true);
+  assert.equal(config.security.requireTls, true);
   assert.equal(config.security.approvalSecretPath, `${os.homedir()}/approval-secret`);
   assert.equal(config.security.approvalTtlSeconds, 120);
   assert.equal(config.security.credentialIdleTtlMinutes, 15);

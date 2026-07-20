@@ -54,6 +54,11 @@ test("tool registry registers default MCP tools through legacy tool API", async 
       "list_taurus_features",
       "get_session_binding",
       "list_cloud_taurus_instances",
+      "set_cloud_region",
+      "begin_sql_login",
+      "clear_sql_credentials",
+      "set_default_database",
+      "select_cloud_taurus_instance",
       "diagnose_service_latency",
       "diagnose_db_hotspot",
       "find_top_slow_sql",
@@ -65,6 +70,8 @@ test("tool registry registers default MCP tools through legacy tool API", async 
       "explain_sql_enhanced",
       "flashback_query",
       "list_recycle_bin",
+      "prepare_recycle_bin_restore",
+      "get_recycle_bin_restore_status",
     ],
   );
 
@@ -81,13 +88,29 @@ test("tool registry registers default MCP tools through legacy tool API", async 
   assert.match(result.structuredContent.metadata.task_id, /^task_/);
 });
 
-test("tool registry hides mutations and dynamic targets by default", () => {
+test("tool registry exposes interactive instance selection and human-gated recovery by default", () => {
   const recorder = createLegacyToolServerRecorder();
   registerTools(recorder.server, { pingResponse: "pong" }, createConfigFromEnv({}));
   assert.equal(recorder.calls.some((call) => call.name === "execute_sql"), false);
   assert.equal(recorder.calls.some((call) => call.name === "restore_recycle_bin_table"), false);
-  assert.equal(recorder.calls.some((call) => call.name === "set_cloud_region"), false);
-  assert.equal(recorder.calls.some((call) => call.name === "begin_sql_login"), false);
+  assert.equal(recorder.calls.some((call) => call.name === "prepare_recycle_bin_restore"), true);
+  assert.equal(recorder.calls.some((call) => call.name === "set_cloud_region"), true);
+  assert.equal(recorder.calls.some((call) => call.name === "begin_sql_login"), true);
+});
+
+test("tool registry can explicitly disable controlled recovery tools", () => {
+  const recorder = createModernToolServerRecorder();
+  registerTools(
+    recorder.server,
+    {},
+    createConfigFromEnv({ TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE: "false" }),
+  );
+  const prepare = recorder.calls.find((call) => call.name === "prepare_recycle_bin_restore");
+  const status = recorder.calls.find((call) => call.name === "get_recycle_bin_restore_status");
+  assert.equal(prepare, undefined);
+  assert.equal(status, undefined);
+  assert.equal(recorder.calls.some((call) => call.name === "restore_recycle_bin_table"), false);
+  assert.equal(recorder.calls.some((call) => call.name === "execute_sql"), false);
 });
 
 test("tool registry never exposes database mutation tools, even with legacy flags", () => {
@@ -116,9 +139,13 @@ test("tool registry registers diagnostics tools by default", () => {
   );
 });
 
-test("tool registry keeps cloud discovery readonly and gates instance selection", () => {
+test("tool registry allows administrators to disable dynamic instance selection", () => {
   const disabled = createLegacyToolServerRecorder();
-  registerTools(disabled.server, { pingResponse: "pong" }, createConfigFromEnv({}));
+  registerTools(
+    disabled.server,
+    { pingResponse: "pong" },
+    createConfigFromEnv({ TAURUSDB_ENABLE_DYNAMIC_TARGETS: "false" }),
+  );
   assert.equal(
     disabled.calls.some((call) => call.name === "list_cloud_taurus_instances"),
     true,

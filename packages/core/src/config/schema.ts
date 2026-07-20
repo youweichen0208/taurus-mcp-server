@@ -25,8 +25,9 @@ const AuditSchema = z
 
 const SecuritySchema = z
   .object({
-    dynamicTargetsEnabled: z.boolean().default(false),
-    requireTls: z.boolean().default(true),
+    dynamicTargetsEnabled: z.boolean().default(true),
+    recycleBinRestoreEnabled: z.boolean().default(true),
+    requireTls: z.boolean().default(false),
     approvalSecretPath: z.string().min(1).optional(),
     approvalTtlSeconds: z.number().int().positive().max(3600).default(300),
     credentialIdleTtlMinutes: z.number().int().positive().max(30).default(30),

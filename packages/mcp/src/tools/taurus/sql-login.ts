@@ -14,8 +14,7 @@ const AUTH_ERROR_CODES = new Set([
   "ER_ACCESS_DENIED_NO_PASSWORD_ERROR",
   "ER_DBACCESS_DENIED_ERROR",
 ]);
-const TIMEOUT_ERROR_CODES = new Set([
-  "ETIMEDOUT",
+const VALIDATION_TIMEOUT_ERROR_CODES = new Set([
   "PROTOCOL_SEQUENCE_TIMEOUT",
   "POOL_QUEUE_TIMEOUT",
 ]);
@@ -40,10 +39,16 @@ function classifyValidationFailure(error: unknown): CredentialValidationFailure 
   if (codes.some((code) => AUTH_ERROR_CODES.has(code))) {
     return "credentials";
   }
-  if (codes.some((code) => TIMEOUT_ERROR_CODES.has(code))) {
+  if (codes.includes("ECONNREFUSED")) {
+    return "refused";
+  }
+  if (codes.includes("ETIMEDOUT") || codes.includes("EHOSTUNREACH") || codes.includes("ENETUNREACH")) {
+    return "unreachable";
+  }
+  if (codes.some((code) => VALIDATION_TIMEOUT_ERROR_CODES.has(code))) {
     return "timeout";
   }
-  if (codes.some((code) => code.includes("TLS") || code.includes("CERT") || code.includes("SIGNATURE"))) {
+  if (codes.some((code) => code.includes("TLS") || code.includes("SSL") || code.includes("CERT") || code.includes("SIGNATURE"))) {
     return "tls";
   }
   return "connectivity";
@@ -55,6 +60,7 @@ async function expireCredentials(
 ): Promise<void> {
   const expire = async () => {
     deps.profileLoader.clearRuntimeUser(datasource);
+    deps.operatorSessions?.revokeDatasource(datasource);
     const previousEngine = deps.engine;
     if (previousEngine?.close) {
       await previousEngine.close();
@@ -69,6 +75,112 @@ async function expireCredentials(
   } else {
     await expire();
   }
+}
+
+export async function issueSqlLoginForDatasource(
+  deps: Parameters<ToolDefinition["handler"]>[1],
+  datasource: string,
+) {
+  const profile = await deps.profileLoader.get(datasource);
+  if (!profile) {
+    throw new ToolInputError(`Datasource "${datasource}" was not found.`);
+  }
+  if (!profile.host) {
+    throw new ToolInputError(
+      `Datasource "${datasource}" does not define a database host. Select a TaurusDB instance before beginning SQL login.`,
+    );
+  }
+  const runtimeTarget = deps.profileLoader.getRuntimeTarget(datasource);
+
+  return deps.credentialLogin.issueSqlLogin({
+    datasource,
+    target: {
+      datasource,
+      instanceId:
+        runtimeTarget?.instanceId ??
+        profile.instanceId ??
+        deps.config.cloud.instanceId,
+      region: deps.config.cloud.region,
+      credentialIdleTtlMinutes: deps.config.security.credentialIdleTtlMinutes,
+      credentialMaxTtlMinutes: deps.config.security.credentialMaxTtlMinutes,
+    },
+    bind: async ({ username, password }) => {
+      const bindCredentials = async () => {
+        const currentTarget = deps.profileLoader.getRuntimeTarget(datasource);
+        const restoreTarget = () => {
+          deps.profileLoader.clearRuntimeTarget(datasource);
+          if (currentTarget) {
+            deps.profileLoader.setRuntimeTarget(datasource, currentTarget);
+          }
+        };
+        deps.profileLoader.setRuntimeTarget(datasource, {
+          host: currentTarget?.host ?? profile.host,
+          port: currentTarget?.port ?? profile.port,
+          database: currentTarget?.database ?? profile.database,
+          instanceId: currentTarget?.instanceId,
+          nodeId: currentTarget?.nodeId,
+          user: {
+            username,
+            password: { type: "plain", value: password },
+          },
+        });
+
+        let nextEngine: TaurusDBEngine | undefined;
+        try {
+          nextEngine = await TaurusDBEngine.create({
+            config: deps.config,
+            profileLoader: deps.profileLoader,
+          });
+          const validationTaskId = `credential_validation_${Date.now()}`;
+          if (deps.sqlCredentialValidator) {
+            await deps.sqlCredentialValidator(nextEngine, datasource, validationTaskId);
+          } else {
+            const validationContext = await nextEngine.resolveContext(
+              { datasource, readonly: true },
+              validationTaskId,
+            );
+            await nextEngine.executeReadonly("SELECT 1 AS ok", validationContext, {
+              timeoutMs: Math.min(deps.config.limits.maxStatementMs, 10_000),
+              maxRows: 1,
+              maxColumns: 1,
+              maxFieldChars: 16,
+            });
+          }
+        } catch (error) {
+          await nextEngine?.close().catch(() => undefined);
+          restoreTarget();
+          throw new SqlCredentialValidationError(classifyValidationFailure(error));
+        }
+        const previousEngine = deps.engine;
+        try {
+          if (previousEngine?.close) {
+            await previousEngine.close();
+          }
+        } catch (error) {
+          await nextEngine.close().catch(() => undefined);
+          restoreTarget();
+          try {
+            deps.engine = await TaurusDBEngine.create({
+              config: deps.config,
+              profileLoader: deps.profileLoader,
+            });
+          } catch {
+            deps.engine = previousEngine;
+          }
+          throw new SqlCredentialValidationError(classifyValidationFailure(error));
+        }
+        deps.engine = nextEngine;
+        deps.credentialSessions?.activate(datasource, () =>
+          expireCredentials(deps, datasource),
+        );
+      };
+      if (deps.sessionCoordinator) {
+        await deps.sessionCoordinator.runExclusive(bindCredentials);
+      } else {
+        await bindCredentials();
+      }
+    },
+  });
 }
 
 export const beginSqlLoginTool: ToolDefinition = {
@@ -93,106 +205,7 @@ export const beginSqlLoginTool: ToolDefinition = {
         );
       }
 
-      const profile = await deps.profileLoader.get(datasource);
-      if (!profile) {
-        throw new ToolInputError(`Datasource "${datasource}" was not found.`);
-      }
-      if (!profile.host) {
-        throw new ToolInputError(
-          `Datasource "${datasource}" does not define a database host. Select a TaurusDB instance before beginning SQL login.`,
-        );
-      }
-      const runtimeTarget = deps.profileLoader.getRuntimeTarget(datasource);
-
-      const issued = await deps.credentialLogin.issueSqlLogin({
-        datasource,
-        target: {
-          datasource,
-          instanceId:
-            runtimeTarget?.instanceId ??
-            profile.instanceId ??
-            deps.config.cloud.instanceId,
-          region: deps.config.cloud.region,
-          credentialIdleTtlMinutes: deps.config.security.credentialIdleTtlMinutes,
-          credentialMaxTtlMinutes: deps.config.security.credentialMaxTtlMinutes,
-        },
-        bind: async ({ username, password }) => {
-          const bindCredentials = async () => {
-            const currentTarget = deps.profileLoader.getRuntimeTarget(datasource);
-            const restoreTarget = () => {
-              deps.profileLoader.clearRuntimeTarget(datasource);
-              if (currentTarget) {
-                deps.profileLoader.setRuntimeTarget(datasource, currentTarget);
-              }
-            };
-            deps.profileLoader.setRuntimeTarget(datasource, {
-              host: currentTarget?.host ?? profile.host,
-              port: currentTarget?.port ?? profile.port,
-              database: currentTarget?.database ?? profile.database,
-              instanceId: currentTarget?.instanceId,
-              nodeId: currentTarget?.nodeId,
-              user: {
-                username,
-                password: { type: "plain", value: password },
-              },
-            });
-
-            let nextEngine: TaurusDBEngine | undefined;
-            try {
-              nextEngine = await TaurusDBEngine.create({
-                config: deps.config,
-                profileLoader: deps.profileLoader,
-              });
-              const validationTaskId = `credential_validation_${Date.now()}`;
-              if (deps.sqlCredentialValidator) {
-                await deps.sqlCredentialValidator(nextEngine, datasource, validationTaskId);
-              } else {
-                const validationContext = await nextEngine.resolveContext(
-                  { datasource, readonly: true },
-                  validationTaskId,
-                );
-                await nextEngine.executeReadonly("SELECT 1 AS ok", validationContext, {
-                  timeoutMs: Math.min(deps.config.limits.maxStatementMs, 10_000),
-                  maxRows: 1,
-                  maxColumns: 1,
-                  maxFieldChars: 16,
-                });
-              }
-            } catch (error) {
-              await nextEngine?.close().catch(() => undefined);
-              restoreTarget();
-              throw new SqlCredentialValidationError(classifyValidationFailure(error));
-            }
-            const previousEngine = deps.engine;
-            try {
-              if (previousEngine?.close) {
-                await previousEngine.close();
-              }
-            } catch (error) {
-              await nextEngine.close().catch(() => undefined);
-              restoreTarget();
-              try {
-                deps.engine = await TaurusDBEngine.create({
-                  config: deps.config,
-                  profileLoader: deps.profileLoader,
-                });
-              } catch {
-                deps.engine = previousEngine;
-              }
-              throw new SqlCredentialValidationError(classifyValidationFailure(error));
-            }
-            deps.engine = nextEngine;
-            deps.credentialSessions?.activate(datasource, () =>
-              expireCredentials(deps, datasource),
-            );
-          };
-          if (deps.sessionCoordinator) {
-            await deps.sessionCoordinator.runExclusive(bindCredentials);
-          } else {
-            await bindCredentials();
-          }
-        },
-      });
+      const issued = await issueSqlLoginForDatasource(deps, datasource);
 
       return formatSuccess(
         {

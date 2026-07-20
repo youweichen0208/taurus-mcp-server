@@ -269,6 +269,10 @@ export function buildRawConfigFromEnv(
         env.TAURUSDB_ENABLE_DYNAMIC_TARGETS,
         "TAURUSDB_ENABLE_DYNAMIC_TARGETS",
       ),
+      recycleBinRestoreEnabled: parseBoolean(
+        env.TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE,
+        "TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE",
+      ),
       requireTls: parseBoolean(
         env.TAURUSDB_REQUIRE_TLS,
         "TAURUSDB_REQUIRE_TLS",

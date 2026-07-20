@@ -21,7 +21,7 @@ npx -y taurusdb-mcp --version
 也可以先安装到项目里：
 
 ```bash
-npm install taurusdb-mcp
+npm install taurusdb-mcp@latest
 npx taurusdb-mcp --version
 ```
 
@@ -69,7 +69,6 @@ claude mcp add huaweicloud-taurusdb \
   -s local \
   -e TAURUSDB_CLOUD_REGION=<your-region> \
   -e TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
-  -e TAURUSDB_ENABLE_DYNAMIC_TARGETS=true \
   -- npx -y taurusdb-mcp
 ```
 
@@ -88,7 +87,6 @@ Codex 支持通过 CLI 添加 stdio MCP server，也可以直接写 `~/.codex/co
 codex mcp add huaweicloud-taurusdb \
   --env TAURUSDB_CLOUD_REGION=<your-region> \
   --env TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
-  --env TAURUSDB_ENABLE_DYNAMIC_TARGETS=true \
   -- npx -y taurusdb-mcp
 ```
 
@@ -109,7 +107,6 @@ enabled = true
 [mcp_servers.huaweicloud-taurusdb.env]
 TAURUSDB_CLOUD_REGION = "<your-region>"
 TAURUSDB_CLOUD_KEYCHAIN_SERVICE = "taurusdb-mcp/huaweicloud"
-TAURUSDB_ENABLE_DYNAMIC_TARGETS = "true"
 ```
 
 ### Cursor
@@ -125,7 +122,6 @@ TAURUSDB_ENABLE_DYNAMIC_TARGETS = "true"
       "env": {
         "TAURUSDB_CLOUD_REGION": "<your-region>",
         "TAURUSDB_CLOUD_KEYCHAIN_SERVICE": "taurusdb-mcp/huaweicloud",
-        "TAURUSDB_ENABLE_DYNAMIC_TARGETS": "true"
       }
     }
   }
@@ -136,6 +132,7 @@ TAURUSDB_ENABLE_DYNAMIC_TARGETS = "true"
 
 - `list_cloud_taurus_instances`
 - `select_cloud_taurus_instance`
+- 浏览器打开返回的 `login_url`，输入数据库账号密码并完成连接验证
 - `list_databases`
 - `set_default_database`
 - `get_session_binding`
@@ -155,7 +152,9 @@ npx -y taurusdb-mcp init --client vscode
 
 ## 可用工具
 
-当前 `0.5.0-rc.3` 默认只注册只读、发现、能力探测和诊断 tools。
+当前 `0.5.0-rc.9` 默认注册只读、发现、实例选择、本机登录、能力探测、诊断以及受控
+恢复申请/状态 tools。
+Agent 工具面仍不存在通用写入或直接恢复执行能力。
 
 ### 通用工具
 
@@ -182,6 +181,11 @@ npx -y taurusdb-mcp init --client vscode
 - `flashback_query`
 - `list_recycle_bin`
 
+### 受控恢复工具（默认可见，执行需同浏览器人工确认）
+
+- `prepare_recycle_bin_restore`：只读预检并生成一次性本机审批页面；Agent 不能执行恢复
+- `get_recycle_bin_restore_status`：查询审批、执行和只读验证结果
+
 ### 诊断工具
 
 - `find_top_slow_sql`
@@ -197,12 +201,13 @@ npx -y taurusdb-mcp init --client vscode
 
 - TaurusDB 专属 tools 在 `tools/list` 中默认可见。
 - 如果当前实例不是 TaurusDB，或者某项能力未开启，调用时会返回结构化 unsupported-feature 错误，而不是直接把 tool 隐藏掉。
-- MCP 永不注册数据库写入或回收站恢复工具；账号权限、环境变量和审批 token
-  都不能改变这条边界。
-- `set_cloud_region`、`select_cloud_taurus_instance`、
-  `set_default_database`、`begin_sql_login` 和
-  `clear_sql_credentials` 默认隐藏；只有
-  `TAURUSDB_ENABLE_DYNAMIC_TARGETS=true` 时才注册。
+- MCP 永不注册通用数据库写入工具，也不向 Agent 暴露直接恢复工具。普通 SQL 的账号
+  权限、环境变量和审批 token 都不能改变这条边界。
+- 回收站恢复是唯一受控例外：申请和状态工具默认可见，只允许恢复一个明确对象到一个
+  不存在的明确目标，并由本机操作人在 Agent 工具调用之外确认后直接执行。
+- `set_cloud_region`、`select_cloud_taurus_instance`、`set_default_database`、
+  `begin_sql_login` 和 `clear_sql_credentials` 默认可见，确保选择实例后可以直接返回
+  本机登录链接；固定静态部署可以设置 `TAURUSDB_ENABLE_DYNAMIC_TARGETS=false` 隐藏它们。
 - `analyze_mutation_sql` 可以使用只读元数据、`EXPLAIN` 和安全派生的
   `COUNT(*)` 生成 SQL Advice；返回结果始终标记 `not_executed` 和
   `human_review_required`。
@@ -211,12 +216,15 @@ npx -y taurusdb-mcp init --client vscode
 
 生产环境默认开启并强制执行以下边界：
 
-- SQL 连接启用 TLS 并验证服务端证书；仅本地 disposable harness 可显式设置
-  `TAURUSDB_REQUIRE_TLS=false`。
-- datasource 只配置最小权限只读账号；即使误配为可写账号，MCP 也没有数据库
-  状态变更工具。
+- SQL 连接默认不启用 TLS，以兼容直接使用公网 IP 的交互式实例选择。该默认值仅适合
+  演示或可信隔离网络；生产环境应设置 `TAURUSDB_REQUIRE_TLS=true`，并在 datasource
+  profile 中配置可信 CA、`servername` 和 `rejectUnauthorized: true`。
+- datasource 会话账号优先使用最小权限只读账号；即使该账号拥有恢复权限，Agent 也没有
+  通用数据库状态变更工具。
 - INSERT、UPDATE、DELETE、DDL、DCL 和管理语句只可进入 SQL Advice，必须由客户
   在 MCP 之外人工复核和执行。
+- 如需回收站恢复，为同一个会话登录账号授予 TaurusDB 原生恢复所需权限；不需要在
+  MCP 配置中增加 recovery 用户名、密码或审批密钥文件。
 - datasource/database 会绑定到实际连接池，跨数据库 SQL 会被阻断。
 - 云 API 只允许 HTTPS 和华为云域名；私有 endpoint 必须由 operator
   在静态配置中显式列出。
@@ -241,10 +249,22 @@ TAURUSDB_SQL_CREDENTIAL_IDLE_TTL_MINUTES=30
 TAURUSDB_SQL_CREDENTIAL_MAX_TTL_MINUTES=480
 ```
 
-通过 `begin_sql_login` 绑定的数据库凭据在空闲 30 分钟后自动清除，且无论是否活跃都不会超过 8 小时。管理员可以缩短这两个值，但不能超过默认安全上限。
+申请和状态工具默认注册。数据库登录成功时，本机页面会建立短期、HttpOnly 的浏览器
+操作员会话；Agent 只能调用 `prepare_recycle_bin_restore` 获取只读预检结果和一次性
+`http://127.0.0.1:...` 审批地址。操作人必须核对 datasource、回收站对象和目标表，
+并在完成数据库登录的同一浏览器中输入身份和精确确认短语。浏览器会话 Cookie 不进入
+tool 返回、页面脚本或 Agent 配置；没有该浏览器会话时恢复会 fail closed。
+审批链接五分钟失效且只能使用一次；恢复前拒绝
+目标冲突，恢复后通过只读元数据验证目标，并记录操作人审计事件。当前仅支持原生
+`native_restore`，不支持 `insert_select` 或覆盖现有表。
 
-本产品没有“开启写能力”的配置。客户需要落库时，应复制经过人工复核的
-`advised_sql`，在其受控数据库变更流程中自行执行；MCP 不参与执行或授权。
+通过实例选择返回的 `login_url` 或 `begin_sql_login` 绑定的数据库凭据，在空闲 30 分钟
+后自动清除，且无论是否活跃都不会超过 8 小时。管理员可以缩短这两个值，但不能超过
+默认安全上限。
+
+本产品没有“开启通用写能力”的配置。客户需要执行普通 DML、DDL、DCL 或管理语句时，
+应复制经过人工复核的 `advised_sql`，在其受控数据库变更流程中自行执行；MCP 不参与
+执行或授权。回收站恢复仅按上述人工审批例外处理。
 
 正式发版前必须完成 [release readiness](docs/release-readiness.md) 中的自动化
 门禁和真实 TaurusDB release-candidate 验证。
@@ -377,13 +397,14 @@ claude mcp get huaweicloud-taurusdb
 
 ### 5. 验证数据库数据面
 
-控制面通过后，先确保 datasource 已配置数据库密码引用，再验证数据面：
+控制面通过后，实例选择会直接创建本机数据库登录链接：
 
 1. `select_cloud_taurus_instance`
-2. `list_databases`
-3. `set_default_database`
-4. `get_session_binding`
-5. `execute_readonly_sql` with `SELECT 1 AS ok`
+2. 浏览器打开返回的 `login_url`，输入数据库账号和密码并完成连接验证
+3. `list_databases`
+4. `set_default_database`
+5. `get_session_binding`
+6. `execute_readonly_sql` with `SELECT 1 AS ok`
 
 如果 `SELECT 1` 成功，说明数据库数据面也已连通。
 
@@ -394,8 +415,8 @@ claude mcp get huaweicloud-taurusdb
 - 只把 datasource 当作模板
 - 不要求模板里预先写死 `host`
 - 不要求模板里预先写死 `database`
-- 模板必须预先配置数据库用户名和密码引用
 - 通过 `select_cloud_taurus_instance` 在运行时把当前实例的 `host/port` 绑定到这个模板
+- `select_cloud_taurus_instance` 同时返回短时本机 `login_url`，账号密码由用户在页面输入
 - 通过 `set_default_database` 在运行时把默认库绑定到当前会话
 
 这意味着客户不需要每切一个实例就重新改一遍：
@@ -415,11 +436,12 @@ claude mcp get huaweicloud-taurusdb
 3. 每次会话内按顺序调用：
    - `list_cloud_taurus_instances`
    - `select_cloud_taurus_instance`
+   - 浏览器打开返回的 `login_url` 完成数据库登录
    - `list_databases`
    - `set_default_database`
    - `get_session_binding`
 
-### 最小模板
+### 交互式登录的最小模板
 
 当前版本已经把这几个默认值内置好了：
 
@@ -427,16 +449,25 @@ claude mcp get huaweicloud-taurusdb
 - 默认 `datasource = taurus_mcp`
 - 只要检测到最小 SQL 模板输入，就会自动把 `taurus_mcp` 作为默认 datasource
 
-所以如果你希望预置一个长期可复用的 SQL 模板，环境变量最小只需要：
+交互式客户场景不需要预置 SQL 用户名、密码、host 或 database。未提供 SQL profile 时，
+MCP 会自动创建名为 `taurus_mcp` 的无凭据 datasource 模板；选择实例后返回本机
+`login_url`，由用户直接在浏览器输入数据库账号密码。
+
+如果需要自定义 datasource 名称，只需配置非敏感名称：
 
 ```bash
-export TAURUSDB_SQL_USER=<database-user>
-export TAURUSDB_SQL_PASSWORD='hw-kms-file:~/.taurusdb-mcp/production-password.ciphertext'
+export TAURUSDB_SQL_DATASOURCE=production
+export TAURUSDB_DEFAULT_DATASOURCE=production
 ```
 
-MCP 不提供本地页面或 Tool 参数输入数据库密码的入口。密码可以使用 `env:`、`file:`、`hw-csms:`、`hw-kms:` 或 `hw-kms-file:` 引用；正式环境优先推荐 DEW CSMS。
+数据库密码通过 loopback 本机页面直达 MCP 内存，不进入 Agent 对话或 Tool 参数，也不会
+由 MCP 持久化保存。登录成功还会在同一浏览器建立短期 HttpOnly 操作员会话，用于受控
+回收站恢复的人工确认。
 
-### 凭据模式
+### 无人值守静态凭据模式（可选）
+
+只有不具备浏览器交互条件的固定部署才需要预配数据库凭据引用。支持 `env:`、`file:`、
+`hw-csms:`、`hw-kms:` 和 `hw-kms-file:`；交互式客户流程不需要这些配置。
 
 | 模式 | 推荐场景 | 本地保存内容 |
 | --- | --- | --- |
@@ -446,7 +477,8 @@ MCP 不提供本地页面或 Tool 参数输入数据库密码的入口。密码�
 | 系统凭据库 + DEW CSMS | macOS/Linux/Windows 客户电脑长期运行，推荐 | 系统凭据库中的云身份；数据库密码由 CSMS 管理 |
 | IAM 委托 + DEW CSMS | ECS/CCE 企业部署，规划接入 | 无长期本地敏感凭据 |
 
-推荐按部署环境选择模式，而不是强制所有客户使用 KMS。无论选择哪种模式，数据库密码都不会作为 MCP Tool 参数进入 Agent 对话。
+推荐交互式客户优先使用本机登录页面，无人值守部署再按环境选择静态 secret 模式。
+无论选择哪种模式，数据库密码都不会作为 MCP Tool 参数进入 Agent 对话。
 
 ## 系统凭据库存储云身份
 
@@ -825,9 +857,10 @@ TAURUSDB_DEFAULT_DATASOURCE = "production"
 
 1. `list_cloud_taurus_instances`
 2. `select_cloud_taurus_instance`
-3. `list_databases`
-4. `set_default_database`
-5. `execute_readonly_sql`，执行 `SELECT 1 AS ok`
+3. 浏览器打开返回的 `login_url` 完成数据库登录
+4. `list_databases`
+5. `set_default_database`
+6. `execute_readonly_sql`，执行 `SELECT 1 AS ok`
 
 首次建立数据库连接时，MCP 会读取密文并调用：
 
@@ -885,7 +918,7 @@ POST /v1.0/{project_id}/kms/decrypt-data
 这里的关键点是：
 
 - `host / port` 来自当前选中的云实例
-- `user / password` 必须来自模板，正式环境优先建议密码使用 DEW CSMS 引用
+- `user / password` 默认来自实例选择后返回的本机登录页面，只保存在 MCP 会话内存
 - `database` 可以来自模板，也可以来自 `set_default_database`
 - `engine` 默认按 `mysql` 处理，因为 TaurusDB for MySQL 走的是 MySQL 协议
 - `datasource` 默认使用 `taurus_mcp`
@@ -928,6 +961,10 @@ curl ifconfig.me; echo
 
 如果你有和 TaurusDB 位于同一 VPC 内的 ECS，或已经通过 VPN / 专线打通到该私网，优先使用读写内网地址连接实例，不必依赖公网地址。
 
+这不是标准的本机交互式实例选择流程：`select_cloud_taurus_instance` 只绑定公网地址。
+私网部署应由管理员通过静态 datasource profile 显式配置内网 host，并在同 VPC 的运行
+环境中启动 MCP。
+
 建议配置：
 
 - 在 ECS 或已打通私网的运行环境中部署 Claude Code / MCP Server / 业务程序
@@ -946,10 +983,11 @@ curl ifconfig.me; echo
 
 1. 在 Claude Code 里调用 `list_cloud_taurus_instances`
 2. 调用 `select_cloud_taurus_instance`
-3. 调用 `list_databases`
-4. 调用 `set_default_database`
-5. 调用 `get_session_binding`
-6. 再调用 `execute_readonly_sql`，例如：
+3. 浏览器打开返回的 `login_url`，输入数据库账号密码并完成连接验证
+4. 调用 `list_databases`
+5. 调用 `set_default_database`
+6. 调用 `get_session_binding`
+7. 再调用 `execute_readonly_sql`，例如：
 
 ```json
 {
@@ -963,7 +1001,8 @@ curl ifconfig.me; echo
 
 ### 会话绑定模型
 
-当前版本里，实例和默认库可以按会话维度绑定；数据库账号和密码引用由 datasource 配置统一管理。
+当前版本里，实例、数据库凭据和默认库都按会话维度绑定；账号密码通过本机页面提交，
+不要求写入 MCP 配置。
 
 相关 tool：
 
@@ -974,6 +1013,8 @@ curl ifconfig.me; echo
 其中：
 
 - `select_cloud_taurus_instance` 负责绑定实例地址
+- `select_cloud_taurus_instance` 在签发登录链接前执行一次不携带凭据的 TCP 端口预检
+- `select_cloud_taurus_instance` 同时签发一次性本机数据库登录链接
 - `set_default_database` 负责绑定默认库
 - `get_session_binding` 负责把当前绑定状态显式返回出来
 
@@ -983,23 +1024,33 @@ curl ifconfig.me; echo
 - `instance_id`
 - `node_id`
 
-它现在还会尝试把当前实例的：
+它现在会把当前实例的：
 
-- `private_ips[0]`
-- 或 `hostnames[0]`
+- `public_ips[0]`
 - 以及 `port`
 
-绑定到当前 datasource 模板，然后重建 engine，避免连接池继续复用旧实例。
+绑定到当前 datasource 模板，然后重建 engine，避免连接池继续复用旧实例。标准交互式
+MCP 运行在客户本机，因此实例必须先开通读写公网地址；没有公网地址时选择工具会立即
+失败，不会回退到本机不可达的 VPC 私网地址并等待连接超时。
+
+如果公网地址存在但端口不可达，实例选择会在用户输入数据库密码之前返回
+`DB_ENDPOINT_UNREACHABLE`，并提示检查实例安全组入方向规则、当前公网出口 IP、网络
+ACL、VPN 和本机出口防火墙。端口明确拒绝连接时返回 `DB_CONNECTION_REFUSED`。
+
+数据库登录页面会直接显示账号、端点、TLS 和验证超时等结构化错误码及处理建议。
+这些可恢复错误不会再以 401/502/503/504 状态交给内嵌浏览器处理，因此客户不需要打开
+开发者工具才能看到失败原因。非法跨站请求仍会以 403 fail-closed。
 
 ### DBA 友好模型
 
 这套模型更适合 DBA 统一兜底：
 
-- DBA 维护模板中的 `tls / datasource / engine / 数据库账号 / 密码引用`
-- 用户在会话里选择实例和数据库
+- DBA 维护模板中的 `tls / datasource / engine`
+- 用户在会话里选择实例，通过返回的本机页面登录数据库，再选择数据库
 - MCP 自动把实例地址和默认库绑定到当前会话
 
-如果不同实例共用同一套数据库账号和默认库名，可以统一预写 `TAURUSDB_SQL_USER`、密码引用格式的 `TAURUSDB_SQL_PASSWORD` 和默认库名。
+对于无人值守的静态部署，仍可由管理员预配数据库 secret 引用；交互式客户流程不需要
+在 MCP 客户端配置中写数据库用户名或密码。
 
 如果你需要覆盖默认值，仍然可以显式设置：
 

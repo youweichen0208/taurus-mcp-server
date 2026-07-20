@@ -53,14 +53,20 @@ The validator must prove:
 - `analyze_mutation_sql` returns `execution_status: not_executed`, schema/plan
   evidence where available, no sampled business rows, and leaves the target table
   unchanged
-- the published tool list contains no database mutation or recycle-bin restore tool,
-  including when legacy mutation environment variables are present
+- the default published tool list contains no general mutation or direct restore tool;
+  its only recovery surface is `prepare_recycle_bin_restore` and
+  `get_recycle_bin_restore_status`, including when legacy mutation variables are present
+- with a browser operator session established by database login, the disposable
+  TaurusDB gate proves target collision blocking, single-use local approval,
+  Agent-invisible HttpOnly browser session, active session credentials, operator audit,
+  and readonly post-verification
 
 ## Operational acceptance
 
 - Use a private TaurusDB address by default.
 - Run one MCP process per customer/session trust boundary.
-- Keep dynamic-target tools disabled for static customer harnesses.
+- Dynamic-target tools are enabled by default for interactive customer login;
+  explicitly disable them for fixed static harnesses.
 - Mount secret and audit paths from the host; do not place secrets in tool
   arguments.
 - Ship audit logs to append-only centralized storage and alert on
@@ -68,7 +74,8 @@ The validator must prove:
 - Validate audit rotation, collector checkpoint/retry, centralized retention,
   disk-space alerts, and the single-process trust boundary in
   `docs/customer-deployment.md`.
-- Document the read-only database grants and the external human execution boundary.
+- Document read-only grants, optional recovery privilege on the session account, the external human
+  execution boundary, and the controlled recycle-bin recovery exception.
 - Retain the package integrity/provenance output and the RC validation log with
   the release record.
 

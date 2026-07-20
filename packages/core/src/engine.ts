@@ -36,6 +36,8 @@ import {
   createSqlExecutor,
   type CancelResult,
   type ExplainResult,
+  type MutationOptions,
+  type MutationResult,
   type QueryResult,
   type QueryStatus,
   type ReadonlyOptions,
@@ -65,6 +67,7 @@ import { createMySqlSchemaAdapter } from "./schema/adapters/mysql.js";
 import {
   type FlashbackInput,
 } from "./taurus/flashback.js";
+import type { RestoreRecycleBinTableInput } from "./taurus/recycle-bin.js";
 import {
   type DbHotspotResult,
   type DiagnoseDbHotspotInput,
@@ -122,6 +125,7 @@ import {
   handleConfirmation,
   issueConfirmation,
   listRecycleBin,
+  restoreRecycleBinTable,
   validateConfirmation,
 } from "./engine/runtime.js";
 import type {
@@ -522,6 +526,14 @@ export class TaurusDBEngine {
     opts?: ReadonlyOptions,
   ): Promise<QueryResult> {
     return listRecycleBin(this, ctx, opts);
+  }
+
+  async restoreRecycleBinTable(
+    input: RestoreRecycleBinTableInput,
+    ctx: SessionContext,
+    opts?: MutationOptions,
+  ): Promise<MutationResult> {
+    return restoreRecycleBinTable(this, input, ctx, opts);
   }
 
   async getQueryStatus(queryId: string): Promise<QueryStatus> {

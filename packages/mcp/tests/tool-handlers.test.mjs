@@ -36,7 +36,12 @@ import {
   setDefaultDatabaseTool,
 } from "../dist/tools/taurus/cloud-context.js";
 import { beginSqlLoginTool } from "../dist/tools/taurus/sql-login.js";
-import { listRecycleBinTool } from "../dist/tools/taurus/recycle-bin.js";
+import { DatabaseEndpointPreflightError } from "../dist/security/database-endpoint-preflight.js";
+import {
+  getRecycleBinRestoreStatusTool,
+  listRecycleBinTool,
+  prepareRecycleBinRestoreTool,
+} from "../dist/tools/taurus/recycle-bin.js";
 
 function createDeps(engineOverrides = {}) {
   const runtimeTargets = new Map();
@@ -102,6 +107,7 @@ function createDeps(engineOverrides = {}) {
       },
     },
     pingResponse: "pong",
+    endpointPreflight: async () => {},
     credentialLogin: {
       async issueSqlLogin() {
         return {
@@ -1052,6 +1058,179 @@ test("list_recycle_bin returns parameter hint when TaurusDB feature is disabled"
   assert.equal(result.error.details.parameter_hint, "rds_recycle_bin_mode=ON");
 });
 
+test("prepare_recycle_bin_restore performs readonly preflight and cannot execute from the Agent tool call", async () => {
+  const deps = createDeps();
+  deps.config = createConfigFromEnv({
+    TAURUSDB_CLOUD_REGION: "cn-north-4",
+    TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE: "true",
+  });
+  let issuedRequest;
+  let restoreCalls = 0;
+  const auditEvents = [];
+  deps.recoveryApproval = {
+    async issue(request) {
+      issuedRequest = request;
+      return {
+        requestId: "rrq_restore_1",
+        approvalUrl: "http://127.0.0.1:12345/recovery/token",
+        expiresAt: "2026-07-20T06:00:00.000Z",
+      };
+    },
+    getStatus() { return undefined; },
+    async close() {},
+  };
+  deps.engine.listTables = async () => restoreCalls === 0
+    ? []
+    : [{ name: "orders_restored" }];
+  deps.engine.restoreRecycleBinTable = async () => {
+    restoreCalls += 1;
+    return { queryId: "qry_restore_1", affectedRows: 1, durationMs: 4 };
+  };
+  deps.auditWriter = {
+    async write(event) { auditEvents.push(event); },
+    async close() {},
+  };
+
+  const prepared = await prepareRecycleBinRestoreTool.handler({
+    datasource: "taurus_mcp",
+    recycle_table: "orders@123",
+    destination_database: "app",
+    destination_table: "orders_restored",
+  }, deps, { taskId: "task_prepare_restore" });
+
+  assert.equal(prepared.ok, true);
+  assert.equal(prepared.data.status, "pending");
+  assert.equal(prepared.data.agent_can_execute, false);
+  assert.equal("confirmation_text" in prepared.data, false);
+  assert.equal(restoreCalls, 0);
+  assert.ok(issuedRequest);
+
+  const executed = await issuedRequest.execute("operator@example.com", "rrq_restore_1");
+  assert.equal(restoreCalls, 1);
+  assert.equal(executed.verified, true);
+  assert.deepEqual(auditEvents.map((event) => event.tool), [
+    "approve_recycle_bin_restore",
+    "restore_recycle_bin_table",
+  ]);
+  assert.equal(auditEvents[1].actor, "operator@example.com");
+});
+
+test("prepare_recycle_bin_restore fails closed on destination collision", async () => {
+  const deps = createDeps();
+  deps.config = createConfigFromEnv({ TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE: "true" });
+  let issued = false;
+  deps.recoveryApproval = {
+    async issue() { issued = true; throw new Error("must not issue"); },
+    getStatus() { return undefined; },
+    async close() {},
+  };
+  deps.auditWriter = { async write() {}, async close() {} };
+  deps.engine.listTables = async () => [{ name: "orders_restored" }];
+  const result = await prepareRecycleBinRestoreTool.handler({
+    datasource: "taurus_mcp",
+    recycle_table: "orders@123",
+    destination_database: "app",
+    destination_table: "orders_restored",
+  }, deps, { taskId: "task_collision" });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, ErrorCode.INVALID_INPUT);
+  assert.match(result.error.message, /already exists/);
+  assert.equal(issued, false);
+});
+
+test("approved recycle-bin recovery fails closed when the datasource target changes", async () => {
+  const deps = createDeps();
+  deps.config = createConfigFromEnv({ TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE: "true" });
+  let issuedRequest;
+  let restoreCalls = 0;
+  const auditEvents = [];
+  deps.recoveryApproval = {
+    async issue(request) {
+      issuedRequest = request;
+      return {
+        requestId: "rrq_target_change",
+        approvalUrl: "http://127.0.0.1:12345/recovery/token",
+        expiresAt: "2026-07-20T06:00:00.000Z",
+      };
+    },
+    getStatus() { return undefined; },
+    async close() {},
+  };
+  deps.auditWriter = {
+    async write(event) { auditEvents.push(event); },
+    async close() {},
+  };
+  deps.engine.listTables = async () => [];
+  deps.engine.restoreRecycleBinTable = async () => {
+    restoreCalls += 1;
+    return { queryId: "must_not_run", affectedRows: 1, durationMs: 1 };
+  };
+  const prepared = await prepareRecycleBinRestoreTool.handler({
+    datasource: "taurus_mcp",
+    recycle_table: "orders@123",
+    destination_database: "app",
+    destination_table: "orders_restored",
+  }, deps, { taskId: "task_prepare_target" });
+  assert.equal(prepared.ok, true);
+
+  deps.engine.resolveContext = async (input, taskId) => ({
+    task_id: taskId,
+    datasource: input.datasource ?? "taurus_mcp",
+    engine: "mysql",
+    database: input.database,
+    host: "changed.example.internal",
+    port: 3306,
+    limits: {
+      readonly: input.readonly ?? true,
+      timeoutMs: input.timeout_ms ?? 30_000,
+      maxRows: 100,
+      maxColumns: 50,
+      maxFieldChars: 256,
+    },
+  });
+  await assert.rejects(
+    () => issuedRequest.execute("operator@example.com", "rrq_target_change"),
+    /target changed/,
+  );
+  assert.equal(restoreCalls, 0);
+  assert.equal(auditEvents.at(-1).tool, "approve_recycle_bin_restore");
+  assert.equal(auditEvents.at(-1).outcome, "error");
+});
+
+test("get_recycle_bin_restore_status returns operator-attributed verified result", async () => {
+  const deps = createDeps();
+  deps.recoveryApproval = {
+    async issue() { throw new Error("not used"); },
+    getStatus() {
+      return {
+        requestId: "rrq_1",
+        status: "succeeded",
+        target: {
+          datasource: "taurus_mcp",
+          recycleTable: "orders@123",
+          destinationDatabase: "app",
+          destinationTable: "orders_restored",
+        },
+        createdAt: "2026-07-20T05:00:00.000Z",
+        expiresAt: "2026-07-20T05:05:00.000Z",
+        operator: "operator@example.com",
+        completedAt: "2026-07-20T05:01:00.000Z",
+        result: { queryId: "qry_restore", affectedRows: 1, verified: true },
+      };
+    },
+    async close() {},
+  };
+  const result = await getRecycleBinRestoreStatusTool.handler(
+    { request_id: "rrq_1" },
+    deps,
+    { taskId: "task_status" },
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.data.status, "succeeded");
+  assert.equal(result.data.operator, "operator@example.com");
+  assert.equal(result.data.result.verified, true);
+});
+
 test("set_default_database binds a session-scoped default database after instance selection", async () => {
   let schemaProbe;
   const deps = createDeps({
@@ -1346,11 +1525,25 @@ test("list_cloud_taurus_instances returns structured cloud instance list", async
   }
 });
 
-test("select_cloud_taurus_instance prefers private host when binding runtime datasource", async () => {
+test("select_cloud_taurus_instance binds the public host for local MCP login", async () => {
   const deps = createDeps({
     getDefaultDataSource: async () => "taurus_mcp",
     close: async () => {},
   });
+  let loginRequest;
+  const revokedOperatorSessions = [];
+  const preflightCalls = [];
+  deps.endpointPreflight = async (host, port) => { preflightCalls.push({ host, port }); };
+  deps.operatorSessions = {
+    revokeDatasource(datasource) { revokedOperatorSessions.push(datasource); },
+  };
+  deps.credentialLogin.issueSqlLogin = async (request) => {
+    loginRequest = request;
+    return {
+      loginUrl: "http://127.0.0.1:12345/sql-login/token",
+      expiresAt: "2026-06-07T01:00:00.000Z",
+    };
+  };
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
     const target = String(url);
@@ -1388,13 +1581,98 @@ test("select_cloud_taurus_instance prefers private host when binding runtime dat
 
     assert.equal(result.ok, true);
     assert.equal(result.data.bound_datasource, "taurus_mcp");
-    assert.equal(result.data.bound_host, "10.0.0.8");
+    assert.equal(result.data.bound_host, "1.2.3.4");
+    assert.equal(result.data.login_url, "http://127.0.0.1:12345/sql-login/token");
+    assert.equal(result.data.login_expires_at, "2026-06-07T01:00:00.000Z");
+    assert.equal(loginRequest.datasource, "taurus_mcp");
+    assert.equal(loginRequest.target.instanceId, "instance-1");
+    assert.deepEqual(preflightCalls, [{ host: "1.2.3.4", port: 3306 }]);
+    assert.deepEqual(revokedOperatorSessions, ["taurus_mcp"]);
     assert.deepEqual(deps.profileLoader.getRuntimeTarget("taurus_mcp"), {
-      host: "10.0.0.8",
+      host: "1.2.3.4",
       port: 3306,
       instanceId: "instance-1",
       nodeId: "node-1",
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("select_cloud_taurus_instance reports an actionable endpoint preflight failure", async () => {
+  const deps = createDeps({
+    getDefaultDataSource: async () => "taurus_mcp",
+    close: async () => {},
+  });
+  deps.endpointPreflight = async (host, port) => {
+    throw new DatabaseEndpointPreflightError("unreachable", host, port);
+  };
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/v3/auth/projects")) {
+      return new Response(JSON.stringify({
+        projects: [{ id: "project-1", name: "cn-north-4" }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({
+      instances: [{
+        id: "instance-1",
+        name: "prod-taurus",
+        public_ips: ["1.2.3.4"],
+        port: "3306",
+      }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  try {
+    const result = await selectCloudTaurusInstanceTool.handler(
+      { instance_id: "instance-1" },
+      deps,
+      context,
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, ErrorCode.DB_ENDPOINT_UNREACHABLE);
+    assert.match(result.error.message, /security group's inbound rules/i);
+    assert.match(result.error.message, /public egress IP\/32/i);
+    assert.equal(deps.profileLoader.getRuntimeTarget("taurus_mcp"), undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("select_cloud_taurus_instance fails immediately when no public IP exists", async () => {
+  const deps = createDeps({
+    getDefaultDataSource: async () => "taurus_mcp",
+    close: async () => {},
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/v3/auth/projects")) {
+      return new Response(JSON.stringify({
+        projects: [{ id: "project-1", name: "cn-north-4" }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({
+      instances: [{
+        id: "instance-private-only",
+        name: "private-taurus",
+        private_ips: ["10.0.0.8"],
+        public_ips: [],
+        port: "3306",
+      }],
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  try {
+    const result = await selectCloudTaurusInstanceTool.handler(
+      { instance_id: "instance-private-only" },
+      deps,
+      context,
+    );
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, ErrorCode.INVALID_INPUT);
+    assert.match(result.error.message, /does not have a public database IP/i);
+    assert.match(result.error.message, /egress IP/i);
   } finally {
     globalThis.fetch = originalFetch;
   }

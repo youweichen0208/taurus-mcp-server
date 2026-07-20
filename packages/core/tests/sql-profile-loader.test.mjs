@@ -87,34 +87,43 @@ test("profile loader uses env profile when file is absent", async () => {
   assert.equal(await loader.getDefault(), "taurus_mcp");
 });
 
-test("profile loader keeps read-only and mutation credentials separate", async () => {
+test("profile loader allows a target template without configured SQL credentials", async () => {
   const loader = new SqlProfileLoader({
     config: makeConfig({ profilesPath: "/path/that/does/not/exist.json" }),
     env: {
       TAURUSDB_SQL_HOST: "localhost",
-      TAURUSDB_SQL_USER: "reader",
-      TAURUSDB_SQL_PASSWORD: "env:MYSQL_RO_PASSWORD",
-      TAURUSDB_SQL_MUTATION_USER: "writer",
-      TAURUSDB_SQL_MUTATION_PASSWORD: "env:MYSQL_RW_PASSWORD",
     },
   });
   const profile = await loader.get("taurus_mcp");
-  assert.equal(profile.user.username, "reader");
-  assert.equal(profile.mutationUser.username, "writer");
-  assert.equal(profile.mutationUser.password.key, "MYSQL_RW_PASSWORD");
+  assert.equal(profile.host, "localhost");
+  assert.equal(profile.user, undefined);
 });
 
-test("profile loader rejects partial mutation credentials", async () => {
+test("profile loader creates a named credentialless datasource for interactive login", async () => {
+  const loader = new SqlProfileLoader({
+    config: makeConfig({
+      profilesPath: "/path/that/does/not/exist.json",
+      defaultDatasource: "customer_instance",
+    }),
+    env: {
+      TAURUSDB_SQL_DATASOURCE: "customer_instance",
+    },
+  });
+  const profile = await loader.get("customer_instance");
+  assert.ok(profile);
+  assert.equal(profile.user, undefined);
+  assert.equal(profile.host, undefined);
+});
+
+test("profile loader rejects partial configured SQL credentials", async () => {
   const loader = new SqlProfileLoader({
     config: makeConfig({ profilesPath: "/path/that/does/not/exist.json" }),
     env: {
       TAURUSDB_SQL_HOST: "localhost",
       TAURUSDB_SQL_USER: "reader",
-      TAURUSDB_SQL_PASSWORD: "reader-password",
-      TAURUSDB_SQL_MUTATION_USER: "writer",
     },
   });
-  await assert.rejects(() => loader.load(), /Mutation credentials require both/);
+  await assert.rejects(() => loader.load(), /require both username and password/);
 });
 
 test("profile loader preserves Huawei KMS password references as URI credentials", async () => {

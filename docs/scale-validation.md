@@ -1,6 +1,6 @@
 # 审计与规模边界验证手册
 
-本文说明如何验证 TaurusDB MCP 0.4.x 的两类生产保护能力：
+本文说明如何验证 TaurusDB MCP 0.5.x 的生产保护能力：
 
 1. 审计日志容量限制、安全轮转、私有文件权限和并发写入完整性；
 2. 查询并发、等待队列、大结果集字节限制和 MySQL 真实协议链路。
@@ -187,7 +187,7 @@ node --test packages/mcp/tests/local-mysql.test.mjs
 - 输出中的 MySQL 用例实际执行，不能显示 `SKIP`；
 - 数百行、每行约 4 KiB 的查询结果在配置为 8192 bytes 时，MCP 返回
   `byte_truncated=true`、`row_truncated=true` 且 `returned_bytes <= 8192`；
-- discovery、只读查询、EXPLAIN、mutation 审批、诊断链路均通过；
+- discovery、只读查询、EXPLAIN、SQL Advice 和诊断链路均通过；
 - 测试完成后大结果临时表被清理。
 
 仅看到 `local-mysql` job 为绿色还不够；验收人应展开日志，确认测试汇总中的
