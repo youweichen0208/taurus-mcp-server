@@ -151,7 +151,7 @@ export function formatToolError(error: unknown, context: ToolErrorContext): Tool
 
   if (error instanceof FlashbackNoViewError) {
     return formatError({
-      code: ErrorCode.CONNECTION_FAILED,
+      code: ErrorCode.FLASHBACK_VIEW_UNAVAILABLE,
       message: error.message,
       summary:
         "No historical flashback view was available for the requested timestamp.",

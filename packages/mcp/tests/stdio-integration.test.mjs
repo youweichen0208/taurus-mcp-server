@@ -79,8 +79,7 @@ test("stdio transport exposes expected tools and keeps logs on stderr", async ()
       "explain_sql_enhanced",
       "flashback_query",
       "list_recycle_bin",
-      "prepare_recycle_bin_restore",
-      "get_recycle_bin_restore_status",
+      "restore_recycle_bin_table",
     ]);
 
     const ping = await client.callTool({
@@ -101,7 +100,7 @@ test("stdio transport exposes expected tools and keeps logs on stderr", async ()
   }
 });
 
-test("stdio transport never exposes database mutation tools", async () => {
+test("stdio transport exposes only the target-bound recovery mutation", async () => {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [serverEntrypoint],
@@ -121,7 +120,7 @@ test("stdio transport never exposes database mutation tools", async () => {
     await client.connect(transport);
     const tools = await client.listTools();
     assert.equal(tools.tools.some((tool) => tool.name === "execute_sql"), false);
-    assert.equal(tools.tools.some((tool) => tool.name === "restore_recycle_bin_table"), false);
+    assert.equal(tools.tools.some((tool) => tool.name === "restore_recycle_bin_table"), true);
     assert.equal(tools.tools.some((tool) => tool.name === "analyze_mutation_sql"), true);
   } finally {
     await transport.close();
@@ -145,14 +144,14 @@ test("legacy mutation environment flags cannot re-enable database writes", async
     await client.connect(transport);
     const tools = await client.listTools();
     assert.equal(tools.tools.some((tool) => tool.name === "execute_sql"), false);
-    assert.equal(tools.tools.some((tool) => tool.name === "restore_recycle_bin_table"), false);
+    assert.equal(tools.tools.some((tool) => tool.name === "restore_recycle_bin_table"), true);
     assert.equal(tools.tools.some((tool) => tool.name === "analyze_mutation_sql"), true);
   } finally {
     await transport.close();
   }
 });
 
-test("controlled recovery exposes request and status tools but no direct restore tool", async () => {
+test("controlled recovery exposes the direct target-bound restore tool", async () => {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [serverEntrypoint],
@@ -168,9 +167,9 @@ test("controlled recovery exposes request and status tools but no direct restore
   try {
     await client.connect(transport);
     const tools = await client.listTools();
-    assert.equal(tools.tools.some((tool) => tool.name === "prepare_recycle_bin_restore"), true);
-    assert.equal(tools.tools.some((tool) => tool.name === "get_recycle_bin_restore_status"), true);
-    assert.equal(tools.tools.some((tool) => tool.name === "restore_recycle_bin_table"), false);
+    assert.equal(tools.tools.some((tool) => tool.name === "prepare_recycle_bin_restore"), false);
+    assert.equal(tools.tools.some((tool) => tool.name === "get_recycle_bin_restore_status"), false);
+    assert.equal(tools.tools.some((tool) => tool.name === "restore_recycle_bin_table"), true);
     assert.equal(tools.tools.some((tool) => tool.name === "execute_sql"), false);
   } finally {
     await transport.close();

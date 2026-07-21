@@ -25,7 +25,6 @@ test("canonical documentation does not advertise obsolete mutation security", as
 
   const forbiddenClaims = [
     "execute_sql",
-    "restore_recycle_bin_table",
     "TAURUSDB_ENABLE_MUTATIONS",
     "TAURUSDB_SQL_MUTATION_USER",
     "mutationUser",
@@ -86,19 +85,16 @@ test("release documentation describes the non-executing SQL Advice boundary", as
   assert.match(cloudGuide, /记录未变化/);
 });
 
-test("customer documentation describes the narrow human-gated recovery exception", async () => {
+test("customer documentation describes the narrow target-bound recovery exception", async () => {
   const documents = await Promise.all(
     canonicalDocs.map(async (url) => readFile(url, "utf8")),
   );
   const joined = documents.join("\n");
-  for (const required of [
-    "prepare_recycle_bin_restore",
-    "get_recycle_bin_restore_status",
-  ]) {
+  for (const required of ["restore_recycle_bin_table"]) {
     assert.ok(joined.includes(required), `customer documentation must describe ${required}`);
   }
   assert.match(joined, /唯一受控例外/);
-  assert.match(joined, /Agent 不能直接/);
+  assert.match(joined, /精确/);
   assert.doesNotMatch(joined, /TAURUSDB_SQL_RECOVERY_(?:USER|PASSWORD)/);
   assert.doesNotMatch(joined, /TAURUSDB_RECOVERY_APPROVAL_SECRET_FILE/);
 });

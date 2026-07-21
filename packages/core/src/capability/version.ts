@@ -49,11 +49,8 @@ export function extractKernelVersion(input: string | undefined): string | undefi
     return undefined;
   }
 
-  const exact = input.match(/\b\d+\.\d+\.\d+\.\d+\b/);
-  if (exact) {
-    return exact[0];
-  }
-
-  const fallback = input.match(/\b\d+\.\d+\.\d+\b/);
-  return fallback?.[0];
+  // TaurusDB kernel releases use a four-component 2.x.x.x version. Do not
+  // fall back to VERSION()'s MySQL compatibility value (for example 8.0.22),
+  // because feature gates are defined against the TaurusDB kernel version.
+  return input.match(/\b2\.\d+\.\d+\.\d+\b/)?.[0];
 }

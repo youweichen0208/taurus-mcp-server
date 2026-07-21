@@ -53,13 +53,10 @@ The validator must prove:
 - `analyze_mutation_sql` returns `execution_status: not_executed`, schema/plan
   evidence where available, no sampled business rows, and leaves the target table
   unchanged
-- the default published tool list contains no general mutation or direct restore tool;
-  its only recovery surface is `prepare_recycle_bin_restore` and
-  `get_recycle_bin_restore_status`, including when legacy mutation variables are present
-- with a browser operator session established by database login, the disposable
-  TaurusDB gate proves target collision blocking, single-use local approval,
-  Agent-invisible HttpOnly browser session, active session credentials, operator audit,
-  and readonly post-verification
+- the default published tool list contains no general mutation tool; its only database-state
+  mutation is `restore_recycle_bin_table`, including when legacy mutation variables are present
+- the disposable TaurusDB gate proves exact-object matching, target collision blocking,
+  active session credentials, audit evidence, and readonly post-verification
 
 ## Operational acceptance
 

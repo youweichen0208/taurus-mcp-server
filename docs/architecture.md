@@ -7,7 +7,7 @@
 
 TaurusDB MCP 的 Agent 日常操作面永不执行任意 DML、DDL、DCL 或管理命令。该边界
 不依赖账号权限、旧 mutation 环境变量、审批 token 或 Agent 行为：注册表中不存在
-通用数据库 mutation tool，也不存在 Agent 可直接调用的恢复执行工具。
+通用数据库 mutation tool；唯一直接写入工具是精确目标绑定的回收站恢复。
 
 ```text
 Agent / MCP client
@@ -20,11 +20,7 @@ Agent / MCP client
                                                    |
                                                    +--> human review and external execution
 
-        +--> prepare_recycle_bin_restore --> readonly preflight --> local approval URL
-                                                               |
-                                      local Recovery Operator --+
-                                                               |
-                                  active Session Binding --> native restore
+        +--> restore_recycle_bin_table --> readonly preflight --> native restore
                                                                |
                                                    readonly destination verification
 ```
@@ -52,13 +48,9 @@ DDL 不返回 copy-ready SQL，只返回风险说明。Advice 不是正确性保
 
 - transport 为 stdio；每个客户或会话信任边界运行独立进程；
 - datasource 使用本机登录建立的短期会话账号，TLS 默认强制；
-- 受控恢复申请工具默认可见，使用当前会话账号，只允许目标绑定的原生回收站恢复；
-- 恢复页面要求数据库登录时建立的同浏览器 HttpOnly 操作员会话；缺少该会话或当前
-  数据库账号没有恢复权限时，恢复 fail closed；
-- 恢复申请五分钟失效、一次性消费、拒绝目标表冲突，并从本机审批路径直接执行；操作人
-  还必须来自完成过数据库登录的同一浏览器，Agent 只获得申请和状态，不获得浏览器会话；
-- 恢复批准和执行结果使用 Recovery Operator 身份同步写入审计；审计批准写入失败时
-  fail closed，不执行恢复；
+- 受控恢复工具默认可见，使用当前会话账号，只允许目标绑定的原生回收站恢复；
+- 恢复前检查对象存在性和目标冲突，恢复后进行只读验证；没有有效会话凭据、审计能力
+  或数据库恢复权限时 fail closed；
 - 动态目标与本机登录工具默认可见，选择实例后直接签发登录链接；固定静态部署可显式
   关闭这些工具，会话目标绑定本身不授予写能力；
 - 查询受超时、并发、队列、结果行列/字段/BLOB/总字节限制；
@@ -68,4 +60,5 @@ DDL 不返回 copy-ready SQL，只返回风险说明。Advice 不是正确性保
 历史只读决策见 [ADR-0001](./adr/0001-customer-harness-never-executes-mutation-sql.md)；
 登录边界见 [ADR-0002](./adr/0002-local-credential-validation-and-expiry.md)；受控恢复
 例外的原始设计见 [ADR-0003](./adr/0003-recycle-bin-restore-is-a-human-gated-exception.md)；
-当前登录与恢复身份决策见 [ADR-0004](./adr/0004-instance-selection-starts-session-login.md)。
+登录与旧恢复身份决策见 [ADR-0004](./adr/0004-instance-selection-starts-session-login.md)；
+当前直接恢复决策见 [ADR-0005](./adr/0005-target-bound-direct-recycle-bin-restore.md)。

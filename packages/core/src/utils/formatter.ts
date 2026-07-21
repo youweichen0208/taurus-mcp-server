@@ -33,6 +33,7 @@ export const ErrorCode = {
   AUDIT_FAILED: "AUDIT_FAILED",
   SERVER_BUSY: "SERVER_BUSY",
   UNSUPPORTED_FEATURE: "UNSUPPORTED_FEATURE",
+  FLASHBACK_VIEW_UNAVAILABLE: "FLASHBACK_VIEW_UNAVAILABLE",
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];

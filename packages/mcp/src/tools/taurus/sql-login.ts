@@ -60,7 +60,6 @@ async function expireCredentials(
 ): Promise<void> {
   const expire = async () => {
     deps.profileLoader.clearRuntimeUser(datasource);
-    deps.operatorSessions?.revokeDatasource(datasource);
     const previousEngine = deps.engine;
     if (previousEngine?.close) {
       await previousEngine.close();

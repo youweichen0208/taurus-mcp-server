@@ -20,11 +20,6 @@ import {
 } from "./security/local-credential-login.js";
 import { SessionCoordinator } from "./security/session-coordinator.js";
 import { SessionCredentialManager } from "./security/session-credential-manager.js";
-import {
-  LocalRecoveryApprovalService,
-  type RecoveryApprovalService,
-} from "./security/local-recovery-approval.js";
-import { BrowserOperatorSessionStore } from "./security/browser-operator-session.js";
 import { preflightDatabaseEndpoint } from "./security/database-endpoint-preflight.js";
 
 export interface ServerDeps {
@@ -32,8 +27,6 @@ export interface ServerDeps {
   profileLoader: RuntimeTargetProfileLoader;
   engine: TaurusDBEngine;
   credentialLogin: CredentialLoginService;
-  operatorSessions?: BrowserOperatorSessionStore;
-  recoveryApproval?: RecoveryApprovalService;
   auditWriter?: AuditWriter;
   sessionCoordinator?: SessionCoordinator;
   credentialSessions?: SessionCredentialManager;
@@ -49,7 +42,6 @@ export interface ServerDeps {
 
 export async function bootstrapDependencies(): Promise<ServerDeps> {
   const config = getConfig();
-  const operatorSessions = new BrowserOperatorSessionStore();
   const profileLoader = new RuntimeOverrideProfileLoader(
     createSqlProfileLoader({ config }),
   );
@@ -72,14 +64,7 @@ export async function bootstrapDependencies(): Promise<ServerDeps> {
     config,
     profileLoader,
     engine,
-    credentialLogin: new LocalCredentialLoginService({ operatorSessions }),
-    operatorSessions,
-    recoveryApproval: config.security.recycleBinRestoreEnabled
-      ? new LocalRecoveryApprovalService({
-          operatorSessions,
-          ttlMs: config.security.approvalTtlSeconds * 1000,
-        })
-      : undefined,
+    credentialLogin: new LocalCredentialLoginService(),
     auditWriter,
     sessionCoordinator,
     credentialSessions,
@@ -99,7 +84,6 @@ export function createServer(deps: ServerDeps): McpServer {
   const cleanup = (): Promise<void> => {
     cleanupPromise ??= Promise.all([
       deps.credentialLogin.close(),
-      deps.recoveryApproval?.close() ?? Promise.resolve(),
       deps.credentialSessions?.close() ?? Promise.resolve(),
       deps.engine.close(),
       deps.auditWriter?.close() ?? Promise.resolve(),

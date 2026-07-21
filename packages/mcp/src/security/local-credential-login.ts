@@ -5,7 +5,6 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
-import { BrowserOperatorSessionStore } from "./browser-operator-session.js";
 
 const DEFAULT_TOKEN_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_MAX_ATTEMPTS = 3;
@@ -65,7 +64,6 @@ export type LocalCredentialLoginServiceOptions = {
   tokenTtlMs?: number;
   maxAttempts?: number;
   failureDelayMs?: number;
-  operatorSessions?: BrowserOperatorSessionStore;
 };
 
 type PendingSqlLogin = SqlLoginRequest & {
@@ -80,7 +78,6 @@ type PageState = "form" | "success" | "expired" | "locked" | "method" | "invalid
 const COPY = {
   "zh-CN": {
     product: "TaurusDB MCP",
-    secureSession: "安全会话",
     title: "连接数据库",
     intro: "输入数据库账号和密码以验证连接。",
     target: "连接目标",
@@ -120,7 +117,6 @@ const COPY = {
   },
   en: {
     product: "TaurusDB MCP",
-    secureSession: "Secure session",
     title: "Connect to database",
     intro: "Enter your database credentials to validate the connection.",
     target: "Connection target",
@@ -246,8 +242,6 @@ function page(input: {
     .shell { width:min(1000px,calc(100% - 32px)); margin:clamp(24px,7vh,72px) auto; }
     .masthead { display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; font-size:13px; letter-spacing:.035em; }
     .brand { font-size:15px; font-weight:750; letter-spacing:-.015em; }
-    .session { display:inline-flex; align-items:center; gap:8px; color:var(--brand-dark); background:var(--brand-soft); padding:7px 12px; border-radius:999px; font-weight:680; }
-    .session:before { content:""; width:7px; height:7px; border-radius:50%; background:var(--brand); box-shadow:0 0 0 3px rgba(199,0,11,.12); }
     .panel { display:grid; grid-template-columns:minmax(300px,.9fr) minmax(390px,1.25fr); overflow:hidden; border:1px solid rgba(21,34,56,.08); border-radius:20px; background:var(--surface); box-shadow:var(--shadow); }
     .context { padding:46px 42px 40px; color:#f8f9fb; background:linear-gradient(155deg,var(--ink-soft),var(--ink)); }
     .eyebrow { margin:0 0 34px; color:#f3aeb3; font-size:11px; font-weight:760; letter-spacing:.14em; text-transform:uppercase; }
@@ -292,7 +286,7 @@ function page(input: {
 </head>
 <body>
   <main class="shell">
-    <header class="masthead"><span class="brand">${copy.product}</span><span class="session">${copy.secureSession}</span></header>
+    <header class="masthead"><span class="brand">${copy.product}</span></header>
     <section class="panel">
       <aside class="context">
         <p class="eyebrow">${copy.target}</p>
@@ -397,7 +391,6 @@ export class LocalCredentialLoginService implements CredentialLoginService {
   private readonly tokenTtlMs: number;
   private readonly maxAttempts: number;
   private readonly failureDelayMs: number;
-  private readonly operatorSessions?: BrowserOperatorSessionStore;
   private readonly pending = new Map<string, PendingSqlLogin>();
   private server: Server | undefined;
   private port: number | undefined;
@@ -407,7 +400,6 @@ export class LocalCredentialLoginService implements CredentialLoginService {
     this.tokenTtlMs = options.tokenTtlMs ?? DEFAULT_TOKEN_TTL_MS;
     this.maxAttempts = options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
     this.failureDelayMs = options.failureDelayMs ?? DEFAULT_FAILURE_DELAY_MS;
-    this.operatorSessions = options.operatorSessions;
   }
 
   async issueSqlLogin(request: SqlLoginRequest): Promise<IssuedSqlLogin> {
@@ -423,7 +415,6 @@ export class LocalCredentialLoginService implements CredentialLoginService {
 
   async close(): Promise<void> {
     this.pending.clear();
-    this.operatorSessions?.clear();
     const server = this.server;
     this.server = undefined;
     this.port = undefined;
@@ -546,17 +537,6 @@ export class LocalCredentialLoginService implements CredentialLoginService {
       }
 
       this.pending.delete(token);
-      const maxTtlMinutes = Math.min(
-        pending.target?.credentialIdleTtlMinutes ?? 30,
-        pending.target?.credentialMaxTtlMinutes ?? 480,
-      );
-      const operatorCookie = this.operatorSessions?.issue(
-        pending.datasource,
-        maxTtlMinutes * 60_000,
-      );
-      if (operatorCookie) {
-        res.setHeader("set-cookie", operatorCookie);
-      }
       respond(res, 200, page({ locale, state: "success", target: pending.target }));
     } catch {
       respond(res, 400, page({ locale, state: "invalid" }));

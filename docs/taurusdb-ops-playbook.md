@@ -1,7 +1,7 @@
 # TaurusDB MCP 只读运维 Playbook
 
 当前 MCP 日常用于证据收集、诊断和 SQL Advice，不负责普通修复执行。回收站恢复是
-唯一人工审批例外；申请工具默认可见，恢复确认必须来自完成数据库登录的同一浏览器。旧版通用写入文档
+唯一精确目标绑定的写入例外。旧版通用写入文档
 已归档到 [`archive/pre-readonly-taurusdb-ops-playbook.md`](./archive/pre-readonly-taurusdb-ops-playbook.md)。
 
 ## 标准处理路径
@@ -20,9 +20,8 @@
 - 连接突增：`show_processlist` → `diagnose_connection_spike` → 客户外部限流/连接池变更。
 - 锁等待：`diagnose_lock_contention` → 识别 blocker → 客户人工决定会话或事务处置。
 - 复制延迟：`diagnose_replication_lag` → 判断 channel 状态 → 云控制面或人工处理。
-- 误删表：先用 `list_recycle_bin` 核对精确对象，再调用 `prepare_recycle_bin_restore`，
-  由完成数据库登录的同一浏览器中的本机操作人核对明确目标并
-  确认，再用状态工具验证结果。Agent 不能直接恢复或覆盖现有表。
+- 误删表：先用 `list_recycle_bin` 核对精确对象，再调用 `restore_recycle_bin_table` 指定
+  一个不存在的目标表；预检通过后直接恢复并只读验证。不能覆盖现有表。
 - 存储压力：`diagnose_storage_pressure` → 核实增长对象与窗口 → 外部容量或数据治理流程。
 
 所有建议都必须明确证据、假设和未验证项；不得把 Advice 表述为“保证正确”。

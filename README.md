@@ -152,9 +152,8 @@ npx -y taurusdb-mcp init --client vscode
 
 ## 可用工具
 
-当前 `0.5.0-rc.9` 默认注册只读、发现、实例选择、本机登录、能力探测、诊断以及受控
-恢复申请/状态 tools。
-Agent 工具面仍不存在通用写入或直接恢复执行能力。
+当前 `0.5.0-rc.10` 默认注册只读、发现、实例选择、本机登录、能力探测、诊断以及精确
+目标绑定的回收站恢复 tool。Agent 工具面仍不存在通用写入能力。
 
 ### 通用工具
 
@@ -181,10 +180,9 @@ Agent 工具面仍不存在通用写入或直接恢复执行能力。
 - `flashback_query`
 - `list_recycle_bin`
 
-### 受控恢复工具（默认可见，执行需同浏览器人工确认）
+### 受控恢复工具（默认可见）
 
-- `prepare_recycle_bin_restore`：只读预检并生成一次性本机审批页面；Agent 不能执行恢复
-- `get_recycle_bin_restore_status`：查询审批、执行和只读验证结果
+- `restore_recycle_bin_table`：对精确回收站对象和不存在的目标表完成预检后立即恢复，并只读验证结果
 
 ### 诊断工具
 
@@ -201,10 +199,10 @@ Agent 工具面仍不存在通用写入或直接恢复执行能力。
 
 - TaurusDB 专属 tools 在 `tools/list` 中默认可见。
 - 如果当前实例不是 TaurusDB，或者某项能力未开启，调用时会返回结构化 unsupported-feature 错误，而不是直接把 tool 隐藏掉。
-- MCP 永不注册通用数据库写入工具，也不向 Agent 暴露直接恢复工具。普通 SQL 的账号
+- MCP 永不注册通用数据库写入工具。普通 SQL 的账号
   权限、环境变量和审批 token 都不能改变这条边界。
-- 回收站恢复是唯一受控例外：申请和状态工具默认可见，只允许恢复一个明确对象到一个
-  不存在的明确目标，并由本机操作人在 Agent 工具调用之外确认后直接执行。
+- 回收站恢复是唯一受控例外：只允许把一个明确的回收站对象恢复到一个明确且不存在的
+  目标表；自然语言请求可直接触发，不再经过浏览器人工确认。
 - `set_cloud_region`、`select_cloud_taurus_instance`、`set_default_database`、
   `begin_sql_login` 和 `clear_sql_credentials` 默认可见，确保选择实例后可以直接返回
   本机登录链接；固定静态部署可以设置 `TAURUSDB_ENABLE_DYNAMIC_TARGETS=false` 隐藏它们。
@@ -249,13 +247,10 @@ TAURUSDB_SQL_CREDENTIAL_IDLE_TTL_MINUTES=30
 TAURUSDB_SQL_CREDENTIAL_MAX_TTL_MINUTES=480
 ```
 
-申请和状态工具默认注册。数据库登录成功时，本机页面会建立短期、HttpOnly 的浏览器
-操作员会话；Agent 只能调用 `prepare_recycle_bin_restore` 获取只读预检结果和一次性
-`http://127.0.0.1:...` 审批地址。操作人必须核对 datasource、回收站对象和目标表，
-并在完成数据库登录的同一浏览器中输入身份和精确确认短语。浏览器会话 Cookie 不进入
-tool 返回、页面脚本或 Agent 配置；没有该浏览器会话时恢复会 fail closed。
-审批链接五分钟失效且只能使用一次；恢复前拒绝
-目标冲突，恢复后通过只读元数据验证目标，并记录操作人审计事件。当前仅支持原生
+`restore_recycle_bin_table` 默认注册。它使用当前内存会话凭据，先检查精确回收站对象
+存在且目标表不存在，再执行原生恢复并通过只读元数据验证结果。无需审批链接、浏览器
+Cookie、第二组恢复账号或审批密钥。请求、目标、SQL hash、成功或失败会进入审计日志。
+当前仅支持原生
 `native_restore`，不支持 `insert_select` 或覆盖现有表。
 
 通过实例选择返回的 `login_url` 或 `begin_sql_login` 绑定的数据库凭据，在空闲 30 分钟
@@ -264,7 +259,7 @@ tool 返回、页面脚本或 Agent 配置；没有该浏览器会话时恢复�
 
 本产品没有“开启通用写能力”的配置。客户需要执行普通 DML、DDL、DCL 或管理语句时，
 应复制经过人工复核的 `advised_sql`，在其受控数据库变更流程中自行执行；MCP 不参与
-执行或授权。回收站恢复仅按上述人工审批例外处理。
+执行或授权。回收站恢复仅按上述精确对象受控例外处理。
 
 正式发版前必须完成 [release readiness](docs/release-readiness.md) 中的自动化
 门禁和真实 TaurusDB release-candidate 验证。
@@ -461,8 +456,7 @@ export TAURUSDB_DEFAULT_DATASOURCE=production
 ```
 
 数据库密码通过 loopback 本机页面直达 MCP 内存，不进入 Agent 对话或 Tool 参数，也不会
-由 MCP 持久化保存。登录成功还会在同一浏览器建立短期 HttpOnly 操作员会话，用于受控
-回收站恢复的人工确认。
+由 MCP 持久化保存。
 
 ### 无人值守静态凭据模式（可选）
 

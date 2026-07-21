@@ -70,8 +70,7 @@ test("tool registry registers default MCP tools through legacy tool API", async 
       "explain_sql_enhanced",
       "flashback_query",
       "list_recycle_bin",
-      "prepare_recycle_bin_restore",
-      "get_recycle_bin_restore_status",
+      "restore_recycle_bin_table",
     ],
   );
 
@@ -88,12 +87,12 @@ test("tool registry registers default MCP tools through legacy tool API", async 
   assert.match(result.structuredContent.metadata.task_id, /^task_/);
 });
 
-test("tool registry exposes interactive instance selection and human-gated recovery by default", () => {
+test("tool registry exposes interactive instance selection and direct target-bound recovery by default", () => {
   const recorder = createLegacyToolServerRecorder();
   registerTools(recorder.server, { pingResponse: "pong" }, createConfigFromEnv({}));
   assert.equal(recorder.calls.some((call) => call.name === "execute_sql"), false);
-  assert.equal(recorder.calls.some((call) => call.name === "restore_recycle_bin_table"), false);
-  assert.equal(recorder.calls.some((call) => call.name === "prepare_recycle_bin_restore"), true);
+  assert.equal(recorder.calls.some((call) => call.name === "restore_recycle_bin_table"), true);
+  assert.equal(recorder.calls.some((call) => call.name === "prepare_recycle_bin_restore"), false);
   assert.equal(recorder.calls.some((call) => call.name === "set_cloud_region"), true);
   assert.equal(recorder.calls.some((call) => call.name === "begin_sql_login"), true);
 });
@@ -105,15 +104,13 @@ test("tool registry can explicitly disable controlled recovery tools", () => {
     {},
     createConfigFromEnv({ TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE: "false" }),
   );
-  const prepare = recorder.calls.find((call) => call.name === "prepare_recycle_bin_restore");
-  const status = recorder.calls.find((call) => call.name === "get_recycle_bin_restore_status");
-  assert.equal(prepare, undefined);
-  assert.equal(status, undefined);
+  const restore = recorder.calls.find((call) => call.name === "restore_recycle_bin_table");
+  assert.equal(restore, undefined);
   assert.equal(recorder.calls.some((call) => call.name === "restore_recycle_bin_table"), false);
   assert.equal(recorder.calls.some((call) => call.name === "execute_sql"), false);
 });
 
-test("tool registry never exposes database mutation tools, even with legacy flags", () => {
+test("tool registry exposes only the recovery mutation, even with legacy flags", () => {
   const recorder = createLegacyToolServerRecorder();
   registerTools(
     recorder.server,
@@ -124,7 +121,7 @@ test("tool registry never exposes database mutation tools, even with legacy flag
     }),
   );
   assert.equal(recorder.calls.some((call) => call.name === "execute_sql"), false);
-  assert.equal(recorder.calls.some((call) => call.name === "restore_recycle_bin_table"), false);
+  assert.equal(recorder.calls.some((call) => call.name === "restore_recycle_bin_table"), true);
   assert.equal(recorder.calls.some((call) => call.name === "analyze_mutation_sql"), true);
   assert.equal(recorder.calls.some((call) => call.name === "set_cloud_region"), true);
   assert.equal(recorder.calls.some((call) => call.name === "begin_sql_login"), true);
@@ -214,6 +211,16 @@ test("SQL Advice is registered as readonly and non-destructive", () => {
   assert.ok(advice);
   assert.equal(advice.config.annotations.readOnlyHint, true);
   assert.equal(advice.config.annotations.destructiveHint, false);
+});
+
+test("recycle-bin restore is registered as a destructive database mutation", () => {
+  const recorder = createModernToolServerRecorder();
+  registerTools(recorder.server, {}, createConfigFromEnv({}));
+  const restore = recorder.calls.find((call) => call.name === "restore_recycle_bin_table");
+  assert.ok(restore);
+  assert.equal(restore.config.annotations.readOnlyHint, false);
+  assert.equal(restore.config.annotations.destructiveHint, true);
+  assert.equal(restore.config.annotations.idempotentHint, false);
 });
 
 test("tool registry writes actor and target context to the audit sink", async () => {

@@ -91,7 +91,7 @@ npx taurusdb-mcp credentials check
 - macOS Keychain, Linux Secret Service, or Windows Credential Manager cloud identity is enabled with `TAURUSDB_CLOUD_KEYCHAIN_SERVICE`
 - SQL TLS with certificate verification is required by default
 - General database mutation tools do not exist; the Agent-facing operating plane remains read-only regardless of database account privileges
-- Recycle-bin request/status tools are visible by default: `prepare_recycle_bin_restore` performs readonly preflight and the loopback-only operator page requires the Agent-invisible HttpOnly browser session established by database login before executing one target-bound native restore with the active in-memory SQL session; no secret file, direct restore tool, or Agent-held execution token is required
+- `restore_recycle_bin_table` is visible by default and directly restores one exact recycle-bin object to one explicit non-existing destination after readonly preflight; it uses the active in-memory SQL session, post-verifies the destination, and writes audit evidence without a browser approval step
 - `analyze_mutation_sql` returns evidence-backed SQL Advice with `execution_status: not_executed`
 - Selecting a cloud instance returns a local SQL login link immediately; login validates the connection before binding credentials, allows at most three attempts per five-minute link, and never sends the password through Agent-visible tool arguments
 - Interactive instance selection binds the read/write public IP and fails immediately when the instance has no public IP; it never falls back to a VPC-private address that a local MCP client cannot route to

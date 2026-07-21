@@ -124,11 +124,15 @@ function hasTaurusSpecificVariables(variables: ProbeVariables): boolean {
 }
 
 async function detectKernelInfo(session: Session, variables: ProbeVariables): Promise<KernelInfo> {
-  const rawVersion = (await executeSingleValueQuery(session, "SELECT VERSION() AS version")) ?? "unknown";
+  const [rawVersionValue, taurusVersion] = await Promise.all([
+    executeSingleValueQuery(session, "SELECT VERSION() AS version"),
+    executeSingleValueQuery(session, "SELECT taurus_version() AS version"),
+  ]);
+  const rawVersion = rawVersionValue ?? "unknown";
   const versionComment = variables.version_comment;
-  const combined = [rawVersion, versionComment].filter(Boolean).join(" ");
-  const kernelVersion = extractKernelVersion(combined);
-  const taurusSignals = [combined, variables.force_parallel_execute, variables.innodb_rds_backquery_enable]
+  const combined = [taurusVersion, rawVersion, versionComment].filter(Boolean).join(" ");
+  const kernelVersion = extractKernelVersion(taurusVersion) ?? extractKernelVersion(combined);
+  const taurusSignals = [taurusVersion, combined, variables.force_parallel_execute, variables.innodb_rds_backquery_enable]
     .filter((value): value is string => typeof value === "string")
     .join(" ");
   const hasTaurusSignals =

@@ -6,7 +6,6 @@ import {
   LocalCredentialLoginService,
   SqlCredentialValidationError,
 } from "../dist/security/local-credential-login.js";
-import { BrowserOperatorSessionStore } from "../dist/security/browser-operator-session.js";
 
 async function submit(url, fields, headers = {}) {
   return fetch(url, {
@@ -69,6 +68,7 @@ test("local credential login renders a localized neutral target-aware page", asy
     assert.match(body, /font-family:&quot;SFMono-Regular&quot;|font-family:"SFMono-Regular"/);
     assert.match(body, /凭据对 Agent 不可见/);
     assert.match(body, /空闲 30 分钟后清除 · 最长保留 8 小时/);
+    assert.doesNotMatch(body, /安全会话|Secure session/);
     assert.doesNotMatch(body, /Huawei Cloud account login/);
   } finally {
     await service.close();
@@ -97,33 +97,6 @@ test("local credential login binds credentials without echoing the password", as
     assert.doesNotMatch(body, new RegExp(password));
     assert.match(body, /Account validated/);
     assert.deepEqual(bindings, [{ datasource: "taurus_mcp", username: "db_user", password }]);
-  } finally {
-    await service.close();
-  }
-});
-
-test("successful database login establishes an Agent-invisible browser operator session", async () => {
-  const operatorSessions = new BrowserOperatorSessionStore();
-  const service = createService({ operatorSessions });
-  try {
-    const issued = await service.issueSqlLogin({
-      datasource: "taurus_mcp",
-      target: { datasource: "taurus_mcp", credentialMaxTtlMinutes: 30 },
-      bind: async () => {},
-    });
-    const response = await submit(issued.loginUrl, {
-      username: "db_user",
-      password: "pwd",
-    });
-    const setCookie = response.headers.get("set-cookie");
-    assert.equal(response.status, 200);
-    assert.match(setCookie, /HttpOnly/);
-    assert.match(setCookie, /SameSite=Strict/);
-    const cookie = setCookie.split(";", 1)[0];
-    assert.equal(operatorSessions.authorizes(cookie, "taurus_mcp"), true);
-    assert.equal(operatorSessions.authorizes(cookie, "other"), false);
-    operatorSessions.revokeDatasource("taurus_mcp");
-    assert.equal(operatorSessions.authorizes(cookie, "taurus_mcp"), false);
   } finally {
     await service.close();
   }

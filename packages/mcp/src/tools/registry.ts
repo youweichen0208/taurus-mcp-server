@@ -36,9 +36,8 @@ import { diagnosticToolDefinitions } from "./taurus/diagnostics.js";
 import { explainSqlEnhancedTool } from "./taurus/explain.js";
 import { flashbackQueryTool } from "./taurus/flashback.js";
 import {
-  getRecycleBinRestoreStatusTool,
   listRecycleBinTool,
-  prepareRecycleBinRestoreTool,
+  restoreRecycleBinTableTool,
 } from "./taurus/recycle-bin.js";
 import {
   ErrorCode,
@@ -220,9 +219,10 @@ const SESSION_MUTATION_TOOLS = new Set([
 
 const PRIVILEGED_TOOL_NAMES = new Set([
   ...SESSION_MUTATION_TOOLS,
+  "restore_recycle_bin_table",
 ]);
 
-const DATABASE_MUTATION_TOOLS = new Set<string>();
+const DATABASE_MUTATION_TOOLS = new Set(["restore_recycle_bin_table"]);
 
 const IDEMPOTENT_SESSION_MUTATION_TOOLS = new Set([
   "set_cloud_region",
@@ -245,7 +245,7 @@ const SQL_CREDENTIAL_ACTIVITY_TOOLS = new Set([
   "explain_sql_enhanced",
   "flashback_query",
   "list_recycle_bin",
-  "prepare_recycle_bin_restore",
+  "restore_recycle_bin_table",
   ...diagnosticToolDefinitions.map((tool) => tool.name),
 ]);
 
@@ -354,8 +354,7 @@ export const taurusToolDefinitions: ToolDefinition[] = [
 ];
 
 export const controlledRecoveryToolDefinitions: ToolDefinition[] = [
-  prepareRecycleBinRestoreTool,
-  getRecycleBinRestoreStatusTool,
+  restoreRecycleBinTableTool,
 ];
 
 function buildDefaultToolDefinitions(config: Config): ToolDefinition[] {

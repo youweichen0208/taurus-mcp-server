@@ -4,6 +4,23 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.5.0-rc.11] - 2026-07-21
+
+### Fixed
+
+- Flashback Query capability detection now compares the TaurusDB kernel version
+  returned by `taurus_version()` instead of the MySQL-compatible `VERSION()` value.
+- Missing historical Flashback views now return `FLASHBACK_VIEW_UNAVAILABLE`
+  instead of being misreported as database connection failures.
+
+## [0.5.0-rc.10] - 2026-07-20
+
+### Changed
+
+- Recycle-bin recovery now executes directly from `restore_recycle_bin_table` after exact-object
+  and destination-collision preflight, then performs readonly post-verification and audit logging.
+- Removed the browser recovery approval/status flow and the login-page secure-session badge.
+
 ## [0.5.0-rc.9] - 2026-07-20
 
 ### Changed

@@ -153,7 +153,6 @@ export const setCloudRegionTool: ToolDefinition = {
         clearCloudSelection(nextConfig, deps);
       });
       deps.credentialSessions?.clearAll();
-      deps.operatorSessions?.clear();
 
       return formatSuccess(
         {
@@ -299,7 +298,6 @@ export const clearSqlCredentialsTool: ToolDefinition = {
         deps.profileLoader.clearRuntimeUser(datasource);
       });
       deps.credentialSessions?.clear(datasource);
-      deps.operatorSessions?.revokeDatasource(datasource);
 
       return formatSuccess(
         {
@@ -454,7 +452,6 @@ export const selectCloudTaurusInstanceTool: ToolDefinition = {
         });
       });
       deps.credentialSessions?.clear(boundDatasource);
-      deps.operatorSessions?.revokeDatasource(boundDatasource);
       const login = await issueSqlLoginForDatasource(deps, boundDatasource);
 
       return formatSuccess(

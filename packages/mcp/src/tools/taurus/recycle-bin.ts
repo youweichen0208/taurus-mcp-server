@@ -1,9 +1,5 @@
 import { z } from "zod";
-import {
-  buildRestoreRecycleBinTableSql,
-  normalizeSql,
-  sqlHash,
-} from "taurusdb-core";
+import { buildRestoreRecycleBinTableSql, normalizeSql, sqlHash } from "taurusdb-core";
 import { formatSuccess, type ToolResponse } from "../../utils/formatter.js";
 import { formatToolError, ToolInputError } from "../error-handling.js";
 import type { ToolDefinition } from "../registry.js";
@@ -26,32 +22,6 @@ function recycleObjectExists(
   const rows = (result as { rows?: unknown[][] }).rows;
   return Array.isArray(rows) && rows.some((row) =>
     Array.isArray(row) && row.some((value) => String(value) === recycleTable));
-}
-
-function sameRecoveryTarget(
-  prepared: {
-    datasource: string;
-    host?: string;
-    port?: number;
-    projectId?: string;
-    instanceId?: string;
-    nodeId?: string;
-  },
-  current: {
-    datasource: string;
-    host?: string;
-    port?: number;
-    projectId?: string;
-    instanceId?: string;
-    nodeId?: string;
-  },
-): boolean {
-  return prepared.datasource === current.datasource &&
-    prepared.host === current.host &&
-    prepared.port === current.port &&
-    prepared.projectId === current.projectId &&
-    prepared.instanceId === current.instanceId &&
-    prepared.nodeId === current.nodeId;
 }
 
 async function writeRecoveryAudit(
@@ -130,10 +100,10 @@ export const listRecycleBinTool: ToolDefinition = {
   },
 };
 
-export const prepareRecycleBinRestoreTool: ToolDefinition = {
-  name: "prepare_recycle_bin_restore",
+export const restoreRecycleBinTableTool: ToolDefinition = {
+  name: "restore_recycle_bin_table",
   description:
-    "Prepare a short-lived local operator approval for one TaurusDB recycle-bin table. This tool performs readonly preflight only; the Agent cannot execute the restore.",
+    "Restore one exact TaurusDB recycle-bin table after readonly existence and destination-collision checks. This performs a database mutation immediately and records the request and result in the audit log.",
   inputSchema: {
     datasource: contextInputShape.datasource,
     recycle_table: z.string().trim().min(1),
@@ -145,9 +115,6 @@ export const prepareRecycleBinRestoreTool: ToolDefinition = {
     try {
       if (!deps.config.security.recycleBinRestoreEnabled) {
         throw new ToolInputError("Controlled recycle-bin recovery is not enabled by the administrator.");
-      }
-      if (!deps.recoveryApproval) {
-        throw new ToolInputError("Controlled recycle-bin recovery approval is unavailable.");
       }
       if (!deps.auditWriter) {
         throw new ToolInputError("Controlled recycle-bin recovery requires durable audit persistence.");
@@ -161,7 +128,7 @@ export const prepareRecycleBinRestoreTool: ToolDefinition = {
         datasource,
         database: destinationDatabase,
         timeout_ms: timeoutMs,
-        readonly: true,
+        readonly: false,
       }, context.taskId);
       const profile = await deps.profileLoader.get(ctx.datasource);
       if (!profile?.user) {
@@ -190,172 +157,50 @@ export const prepareRecycleBinRestoreTool: ToolDefinition = {
         destinationTable,
       };
       const restoreSql = buildRestoreRecycleBinTableSql(restoreInput);
-      const issued = await deps.recoveryApproval.issue({
-        target: {
-          datasource: ctx.datasource,
-          recycleTable,
-          destinationDatabase,
-          destinationTable,
-        },
-        execute: async (operator, requestId) => {
-          const performRecovery = async () => {
-            const startedAt = Date.now();
-            let auditTool = "approve_recycle_bin_restore";
-            try {
-              const executionCtx = await deps.engine.resolveContext({
-                datasource: ctx.datasource,
-                database: destinationDatabase,
-                timeout_ms: timeoutMs,
-                readonly: false,
-              }, requestId);
-              if (!sameRecoveryTarget(ctx, executionCtx)) {
-                throw new Error(
-                  "Datasource target changed after recovery preflight. Create a new recovery request for the current target.",
-                );
-              }
-              const currentProfile = await deps.profileLoader.get(ctx.datasource);
-              if (!currentProfile?.user) {
-                throw new Error("The SQL credential session is no longer available.");
-              }
-              const [currentRecycleBin, currentDestinationTables] = await Promise.all([
-                deps.engine.listRecycleBin(executionCtx),
-                deps.engine.listTables(executionCtx, destinationDatabase),
-              ]);
-              if (!recycleObjectExists(currentRecycleBin, recycleTable)) {
-                throw new Error("Recycle-bin object is no longer available. Create a new recovery request.");
-              }
-              if (currentDestinationTables.some(
-                (table) => table.name.toLowerCase() === destinationTable.toLowerCase(),
-              )) {
-                throw new Error("Destination table now exists. Controlled recovery will not overwrite it.");
-              }
-              await writeRecoveryAudit(deps, {
-                requestId,
-                actor: operator,
-                datasource: executionCtx.datasource,
-                database: destinationDatabase,
-                sql: restoreSql,
-                tool: auditTool,
-                outcome: "success",
-                durationMs: Date.now() - startedAt,
-              });
-              auditTool = "restore_recycle_bin_table";
-              const result = await deps.engine.restoreRecycleBinTable(restoreInput, executionCtx, {
-                timeoutMs,
-              });
-              const verifiedTables = await deps.engine.listTables(executionCtx, destinationDatabase);
-              const verified = verifiedTables.some(
-                (table) => table.name.toLowerCase() === destinationTable.toLowerCase(),
-              );
-              if (!verified) {
-                throw new Error(
-                  "Recovery command completed, but readonly destination verification failed. Inspect database state before retrying.",
-                );
-              }
-              await writeRecoveryAudit(deps, {
-                requestId,
-                actor: operator,
-                datasource: executionCtx.datasource,
-                database: destinationDatabase,
-                sql: restoreSql,
-                tool: "restore_recycle_bin_table",
-                outcome: "success",
-                durationMs: Date.now() - startedAt,
-              });
-              return {
-                queryId: result.queryId,
-                affectedRows: result.affectedRows,
-                verified,
-              };
-            } catch (error) {
-              await writeRecoveryAudit(deps, {
-                requestId,
-                actor: operator,
-                datasource: ctx.datasource,
-                database: destinationDatabase,
-                sql: restoreSql,
-                tool: auditTool,
-                outcome: "error",
-                errorCode: "RECOVERY_FAILED",
-                durationMs: Date.now() - startedAt,
-              });
-              throw error;
-            }
-          };
-          return deps.sessionCoordinator
-            ? deps.sessionCoordinator.runExclusive(performRecovery)
-            : performRecovery();
-        },
+      const startedAt = Date.now();
+      const client = deps.clientIdentityProvider?.();
+      await writeRecoveryAudit(deps, {
+        requestId: context.taskId,
+        actor: client
+          ? `mcp:${client.name}@${client.version}`
+          : "unattributed-mcp-client",
+        datasource: ctx.datasource,
+        database: destinationDatabase,
+        sql: restoreSql,
+        tool: "restore_recycle_bin_table_requested",
+        outcome: "success",
+        durationMs: Date.now() - startedAt,
       });
-
+      const result = await deps.engine.restoreRecycleBinTable(restoreInput, ctx, { timeoutMs });
+      const verifiedTables = await deps.engine.listTables(ctx, destinationDatabase);
+      const verified = verifiedTables.some(
+        (table) => table.name.toLowerCase() === destinationTable.toLowerCase(),
+      );
+      if (!verified) {
+        throw new Error(
+          "Recovery command completed, but readonly destination verification failed. Inspect database state before retrying.",
+        );
+      }
       return formatSuccess({
-        request_id: issued.requestId,
-        status: "pending",
-        approval_url: issued.approvalUrl,
-        expires_at: issued.expiresAt,
-        target: {
-          datasource: ctx.datasource,
-          recycle_table: recycleTable,
-          destination_database: destinationDatabase,
-          destination_table: destinationTable,
-        },
-        agent_can_execute: false,
+        datasource: ctx.datasource,
+        recycle_table: recycleTable,
+        destination_database: destinationDatabase,
+        destination_table: destinationTable,
+        query_id: result.queryId,
+        affected_rows: result.affectedRows,
+        verified,
+        execution_status: "executed",
       }, {
-        summary: "Readonly preflight passed. A local operator must approve the recovery before it can execute.",
+        summary: `Recycle-bin table restored and verified as ${destinationDatabase}.${destinationTable}.`,
         metadata: metadata(context.taskId, {
-          statement_type: "show",
+          statement_type: "unknown",
           sql_hash: sqlHash(normalizeSql(restoreSql)),
+          duration_ms: result.durationMs,
         }),
       });
     } catch (error) {
       return formatToolError(error, {
-        action: "prepare_recycle_bin_restore",
-        metadata: metadata(context.taskId),
-      });
-    }
-  },
-};
-
-export const getRecycleBinRestoreStatusTool: ToolDefinition = {
-  name: "get_recycle_bin_restore_status",
-  description: "Get the status of a previously prepared recycle-bin recovery request.",
-  inputSchema: {
-    request_id: z.string().trim().min(1),
-  },
-  async handler(input, deps, context): Promise<ToolResponse> {
-    try {
-      if (!deps.recoveryApproval) {
-        throw new ToolInputError("Controlled recycle-bin recovery is not enabled by the administrator.");
-      }
-      const requestId = asRequiredString(input.request_id, "request_id");
-      const status = deps.recoveryApproval.getStatus(requestId);
-      if (!status) throw new ToolInputError("Recovery request was not found or is no longer retained.");
-      return formatSuccess({
-        request_id: status.requestId,
-        status: status.status,
-        target: {
-          datasource: status.target.datasource,
-          recycle_table: status.target.recycleTable,
-          destination_database: status.target.destinationDatabase,
-          destination_table: status.target.destinationTable,
-        },
-        created_at: status.createdAt,
-        expires_at: status.expiresAt,
-        operator: status.operator,
-        completed_at: status.completedAt,
-        result: status.result ? {
-          query_id: status.result.queryId,
-          affected_rows: status.result.affectedRows,
-          verified: status.result.verified,
-        } : undefined,
-        error: status.error,
-      }, {
-        summary: `Recovery request status: ${status.status}.`,
-        metadata: metadata(context.taskId),
-      });
-    } catch (error) {
-      return formatToolError(error, {
-        action: "get_recycle_bin_restore_status",
+        action: "restore_recycle_bin_table",
         metadata: metadata(context.taskId),
       });
     }

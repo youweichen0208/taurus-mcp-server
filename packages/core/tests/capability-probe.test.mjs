@@ -6,6 +6,13 @@ import { createCapabilityProbe } from "../dist/capability/probe.js";
 function makeSession(values) {
   return {
     async execute(sql) {
+      if (/SELECT taurus_version\(\) AS version/i.test(sql)) {
+        if (!values.taurusVersion) {
+          throw new Error("taurus_version() is unavailable");
+        }
+        return { rows: [{ version: values.taurusVersion }] };
+      }
+
       if (/SELECT VERSION\(\) AS version/i.test(sql)) {
         return { rows: [{ version: values.version ?? "8.0.22-30" }] };
       }
@@ -35,6 +42,7 @@ function makeSession(values) {
 test("capability probe treats Taurus-specific variables as TaurusDB signals even when disabled", async () => {
   const session = makeSession({
     version: "8.0.22-30",
+    taurusVersion: "2.0.69.250900",
     variables: {
       version_comment: "MySQL Community Server - GPL",
       force_parallel_execute: "OFF",
@@ -56,6 +64,8 @@ test("capability probe treats Taurus-specific variables as TaurusDB signals even
 
   assert.equal(snapshot.kernelInfo.isTaurusDB, true);
   assert.equal(snapshot.kernelInfo.rawVersion, "8.0.22-30");
+  assert.equal(snapshot.kernelInfo.mysqlCompat, "8.0");
+  assert.equal(snapshot.kernelInfo.kernelVersion, "2.0.69.250900");
   assert.equal(snapshot.features.flashback_query.param, "innodb_rds_backquery_enable=OFF");
   assert.equal(snapshot.features.parallel_query.available, true);
   assert.equal(snapshot.features.parallel_query.enabled, false);
@@ -65,6 +75,7 @@ test("capability probe treats Taurus-specific variables as TaurusDB signals even
 test("capability probe exposes parameter-level disable reasons for TaurusDB feature flags", async () => {
   const session = makeSession({
     version: "8.0.32 TaurusDB 2.0.69.250900",
+    taurusVersion: "2.0.69.250900",
     variables: {
       version_comment: "TaurusDB Kernel",
       innodb_rds_backquery_enable: "ON",
@@ -121,4 +132,55 @@ test("capability probe exposes parameter-level disable reasons for TaurusDB feat
   );
   assert.equal(snapshot.features.hot_row_update.enabled, false);
   assert.equal(snapshot.features.hot_row_update.param, "rds_hotspot=OFF");
+});
+
+test("capability probe gates flashback by TaurusDB kernel version instead of MySQL compatibility version", async () => {
+  const session = makeSession({
+    version: "8.0.22-30",
+    taurusVersion: "2.0.78.260600",
+    variables: {
+      version_comment: "TaurusDB Kernel",
+      innodb_rds_backquery_enable: "ON",
+    },
+  });
+  const probe = createCapabilityProbe({
+    connectionPool: {
+      async acquire() {
+        return session;
+      },
+      async release() {},
+    },
+  });
+
+  const snapshot = await probe.probe({ datasource: "taurus_mcp" });
+
+  assert.equal(snapshot.kernelInfo.rawVersion, "8.0.22-30");
+  assert.equal(snapshot.kernelInfo.mysqlCompat, "8.0");
+  assert.equal(snapshot.kernelInfo.kernelVersion, "2.0.78.260600");
+  assert.equal(snapshot.features.flashback_query.available, true);
+  assert.equal(snapshot.features.flashback_query.enabled, true);
+});
+
+test("capability probe fails closed when only a MySQL compatibility version is available", async () => {
+  const session = makeSession({
+    version: "8.0.22-30",
+    variables: {
+      version_comment: "TaurusDB Kernel",
+      innodb_rds_backquery_enable: "ON",
+    },
+  });
+  const probe = createCapabilityProbe({
+    connectionPool: {
+      async acquire() {
+        return session;
+      },
+      async release() {},
+    },
+  });
+
+  const snapshot = await probe.probe({ datasource: "taurus_mcp" });
+
+  assert.equal(snapshot.kernelInfo.kernelVersion, undefined);
+  assert.equal(snapshot.features.flashback_query.available, false);
+  assert.match(snapshot.features.flashback_query.reason, /current: unknown/);
 });
