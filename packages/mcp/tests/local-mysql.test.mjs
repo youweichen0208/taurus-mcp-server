@@ -974,3 +974,41 @@ localMysqlTest("local SQL login link is revoked when credentials are cleared", a
     env: { TAURUSDB_ENABLE_DYNAMIC_TARGETS: "true" },
   });
 });
+
+localMysqlTest("installed acceptance command passes readonly, advice, and diagnostics on real MySQL", async () => {
+  await prepareDatabase();
+  const { profilesPath } = await createProfilesFile();
+  const reportDir = await mkdtemp(path.join(os.tmpdir(), "taurusdb-acceptance-mysql-"));
+  const reportPath = path.join(reportDir, "report.json");
+  const { execFile } = await import("node:child_process");
+  const exitCode = await new Promise((resolve) => {
+    execFile(process.execPath, [
+      serverEntrypoint,
+      "acceptance",
+      "--database", requiredEnv("TAURUSDB_TEST_MYSQL_DATABASE"),
+      "--advice-sql", "UPDATE orders SET status = 'cancelled' WHERE order_no = 'ORD-1002'",
+      "--advice-snapshot-sql", "SELECT status FROM orders WHERE order_no = 'ORD-1002' LIMIT 1",
+      "--report", reportPath,
+    ], {
+      env: {
+        ...process.env,
+        TAURUSDB_SQL_PROFILES: profilesPath,
+        TAURUSDB_DEFAULT_DATASOURCE: "local_mysql_e2e",
+        TAURUSDB_REQUIRE_TLS: "false",
+        TAURUSDB_MCP_LOG_LEVEL: "error",
+        TAURUSDB_MCP_AUDIT_LOG_PATH: path.join(reportDir, "audit.jsonl"),
+      },
+    }, (error) => resolve(error ? error.code : 0));
+  });
+  const report = JSON.parse(await readFile(reportPath, "utf8"));
+  const status = Object.fromEntries(report.checks.map((check) => [check.name, check.status]));
+  assert.equal(status["Readonly query"], "pass");
+  assert.equal(status["SQL Advice does not write"], "pass");
+  assert.equal(status["Diagnostics"], "pass");
+  assert.equal(status["Recycle-bin recovery"], "pending");
+  assert.equal(report.outcome, "incomplete");
+  assert.equal(exitCode, 3);
+  const serialized = JSON.stringify(report);
+  assert.doesNotMatch(serialized, new RegExp(requiredEnv("TAURUSDB_TEST_MYSQL_USER")));
+  assert.doesNotMatch(serialized, new RegExp(requiredEnv("TAURUSDB_TEST_MYSQL_HOST").replaceAll(".", "\\.")));
+});
