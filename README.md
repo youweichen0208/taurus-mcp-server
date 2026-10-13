@@ -1,251 +1,488 @@
 # TaurusDB MCP Server
 
-本仓库发布两个 npm 包：
+[![npm](https://img.shields.io/npm/v/taurusdb-mcp?label=taurusdb-mcp)](https://www.npmjs.com/package/taurusdb-mcp)
+[![CI](https://github.com/youweichen0208/taurus-mcp-server/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/youweichen0208/taurus-mcp-server/actions/workflows/ci.yml)
+![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
-- `taurusdb-core`
-- `taurusdb-mcp`
+让 AI 助手（Claude、Cursor、VS Code Copilot、Codex 等）用自然语言帮你**查看、诊断和优化华为云
+TaurusDB 数据库**，同时保证 AI **不能随意改动你的数据**。
 
-环境要求：
+> 例如你可以直接说：“列出我在华为云上的 TaurusDB 实例”、“这个库里最慢的 SQL 是哪几条？”、
+> “帮我看看这条 UPDATE 会影响多少行，但不要执行”。
 
-- Node.js `>= 20`
-- npm
+---
 
-## 从 npm 使用
+## 目录
 
-普通用户不需要 clone 或 build 当前仓库，直接通过 npm 启动 MCP server：
+- [这是什么](#这是什么)
+- [能做什么](#能做什么)
+- [安全边界：AI 能做什么、不能做什么](#安全边界ai-能做什么不能做什么)
+- [开始之前：准备清单](#开始之前准备清单)
+- [一步一步安装](#一步一步安装)
+- [开始使用](#开始使用)
+- [工具清单](#工具清单)
+- [生产环境配置](#生产环境配置)
+- [常见问题](#常见问题)
+- [更多文档](#更多文档)
+
+---
+
+## 这是什么
+
+**MCP（Model Context Protocol）** 是一种让 AI 助手调用外部工具的开放标准。安装本项目后，
+你的 AI 助手就多了一组“TaurusDB 工具”：它可以查询华为云上的实例列表、连接数据库、
+执行只读查询、分析慢 SQL、诊断锁等待等问题，再用自然语言把结果解释给你。
+
+本项目以 npm 包形式发布：
+
+| 包名 | 用途 |
+| --- | --- |
+| [`taurusdb-mcp`](https://www.npmjs.com/package/taurusdb-mcp) | MCP 服务本体，**你只需要安装这个** |
+| [`taurusdb-core`](https://www.npmjs.com/package/taurusdb-core) | 内部引擎，会被自动安装，无需单独处理 |
+
+它在**你自己的电脑上**运行，由 AI 客户端在需要时自动启动；不需要部署服务器。
+
+---
+
+## 能做什么
+
+| 场景 | 你可以这样说 | 背后的工具 |
+| --- | --- | --- |
+| 找到并连接实例 | “列出我的 TaurusDB 实例，选择 xxx” | `list_cloud_taurus_instances`、`select_cloud_taurus_instance` |
+| 浏览库表结构 | “这个实例有哪些库？orders 表有哪些字段和索引？” | `list_databases`、`list_tables`、`describe_table` |
+| 只读查询 | “统计一下各状态的订单数量” | `execute_readonly_sql` |
+| 看执行计划 | “这条 SQL 为什么慢？会不会全表扫描？” | `explain_sql`、`explain_sql_enhanced` |
+| 变更前评估 | “这条 UPDATE 会影响多少行？有没有风险？先别执行” | `analyze_mutation_sql` |
+| 慢 SQL 分析 | “最近 1 小时最慢的 SQL 有哪些？” | `find_top_slow_sql`、`diagnose_slow_query` |
+| 性能问题定位 | “接口变慢了，帮我查是不是数据库的问题” | `diagnose_service_latency`、`diagnose_db_hotspot` |
+| 连接数 / 锁 / 存储 | “连接数突然暴涨”“有锁等待”“磁盘快满了” | `diagnose_connection_spike`、`diagnose_lock_contention`、`diagnose_storage_pressure` |
+| 主从延迟 | “只读节点延迟高是什么原因？” | `diagnose_replication_lag` |
+| 查看历史数据 | “看看这张表 10 分钟前的数据” | `flashback_query`（TaurusDB 闪回查询） |
+| 误删表找回 | “回收站里有哪些表？把 xxx 恢复成 orders_restored” | `list_recycle_bin`、`restore_recycle_bin_table` |
+| 实例能力 | “这个实例的内核版本是多少？开了哪些特性？” | `get_kernel_info`、`list_taurus_features` |
+
+完整列表见 [工具清单](#工具清单)。
+
+---
+
+## 安全边界：AI 能做什么、不能做什么
+
+这是本项目最核心的设计，请花一分钟了解：
+
+- ✅ **可以**：查询实例、读取表结构、执行只读 SQL（SELECT / SHOW / EXPLAIN / DESCRIBE）、做各种诊断。
+- ✅ **可以**：对你想执行的 INSERT / UPDATE / DELETE / DDL 给出“SQL 建议”和影响评估。
+  `analyze_mutation_sql` 的结果始终标记 `not_executed` 和 `human_review_required`，
+  **由你自己复核后**在 MCP 之外执行。
+- ❌ **不可以**：执行任何修改数据或结构的 SQL。无论数据库账号权限多大、怎么配置，
+  都没有“开启写入”的开关。
+- ❌ **不可以**：调用自定义函数或 `SLEEP`、`GET_LOCK` 这类可能锁表、等待或写入的函数。
+- 🔐 **数据库密码不经过 AI**：密码在本机浏览器页面输入，直接交给本机的 MCP 进程，
+  不会出现在对话里，也不会被保存到磁盘。
+- ♻️ **唯一受控例外：回收站恢复**。只能把回收站中一个**精确指定**的表恢复为一个
+  **尚不存在**的新表，不会覆盖已有表，并且会完整记录审计日志。不需要此功能的部署可以关闭
+  （设置 `TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE=false`）。
+- 📝 **全程审计**：每次工具调用都会写入本机审计日志（默认只记录 SQL 的哈希值）。
+
+---
+
+## 开始之前：准备清单
+
+请先逐项确认，缺任何一项都可能导致后面某一步失败：
+
+| # | 需要准备 | 说明 |
+| --- | --- | --- |
+| 1 | 一台电脑 | macOS、Windows 或 Linux 均可 |
+| 2 | **Node.js 20 或更高版本** | 安装方法见步骤 1 |
+| 3 | 一个支持 MCP 的 AI 客户端 | Claude Code、Claude Desktop、Cursor、VS Code（Copilot Agent 模式）、Codex 任选其一 |
+| 4 | **华为云 AK/SK**（访问密钥） | 获取方法见步骤 3；建议使用只读权限的 IAM 子用户 |
+| 5 | 实例所在的**区域 ID** | 例如 `cn-north-4`（华北-北京四）、`cn-east-3`（华东-上海一） |
+| 6 | 一个 TaurusDB 实例，且已**开通读写公网地址** | 本机通过公网连接数据库 |
+| 7 | 实例安全组已**放通你电脑的公网 IP** | 方法见步骤 5 |
+| 8 | 一个数据库账号和密码 | 建议使用**只读账号** |
+
+---
+
+## 一步一步安装
+
+### 步骤 1：安装 Node.js
+
+前往 <https://nodejs.org/> 下载并安装 **LTS 版本**（20 或更高）。安装完成后，打开终端
+（macOS 的“终端”、Windows 的 “PowerShell”）执行：
 
 ```bash
-npx -y taurusdb-mcp --version
+node -v
 ```
 
-也可以先安装到项目里：
+看到 `v20.x.x` 或更高版本号即可。
+
+### 步骤 2：确认能运行 taurusdb-mcp
 
 ```bash
-npm install taurusdb-mcp@1.0.0
-npx taurusdb-mcp --version
+npx -y taurusdb-mcp@1.0.0 --version
 ```
 
-MCP 客户端里的启动命令建议固定版本，避免 `latest` 缓存造成版本不一致：
+第一次运行会自动下载，稍等片刻，看到 `1.0.0` 说明一切正常。
 
-```json
-{
-  "command": "npx",
-  "args": ["-y", "taurusdb-mcp@1.0.0"]
-}
-```
+> 💡 所有命令都写成了 `taurusdb-mcp@1.0.0`，固定版本可以避免不同时间拿到不同版本。
 
-安装后可以用同一套环境变量运行验收检查（详见
-[真实 TaurusDB 验收](docs/cloud-taurusdb-testing.md)）：
+### 步骤 3：获取华为云 AK/SK 和区域
+
+1. 登录 [华为云控制台](https://console.huaweicloud.com/)。
+2. 右上角点击用户名 → **我的凭证** → **访问密钥** → **新增访问密钥**，下载保存好
+   `credentials.csv`（里面有 Access Key ID 和 Secret Access Key）。
+3. 在控制台顶部的区域选择器中确认实例所在区域，并记下区域 ID（例如 `cn-north-4`）。
+
+> 🔒 建议在 IAM 中创建一个专用子用户，只授予查看 TaurusDB 实例的只读权限
+> （以控制台中 TaurusDB / GaussDB 相关的只读系统策略为准）；如需慢 SQL、监控类诊断，
+> 再加上 DAS、CES 的只读权限。不要使用主账号的 AK/SK。
+
+### 步骤 4：把 AK/SK 安全地保存到系统凭据库
+
+AK/SK **不要**写进配置文件。运行下面的命令，按提示依次输入 Access Key ID 和
+Secret Access Key：
 
 ```bash
-npx -y taurusdb-mcp@1.0.0 acceptance --report acceptance.json
+npx -y taurusdb-mcp@1.0.0 credentials configure
 ```
 
-未配置或未执行的检查会标记为 `pending`，不会计为通过。
+它会保存到操作系统自带的安全存储中：
 
-生产环境推荐先通过安全输入把华为云身份保存到操作系统凭据库：
+- **macOS**：钥匙串（Keychain），会弹出系统输入框
+- **Windows**：凭据管理器（Credential Manager）
+- **Linux**：Secret Service，需要先安装 `secret-tool`（如 `sudo apt install libsecret-tools`）
+
+> 使用的是临时 AK/SK？在命令后加 `--with-security-token`，一并保存 Security Token。
+
+保存后检查一下（把 `cn-north-4` 换成你的区域）：
+
+**macOS / Linux：**
 
 ```bash
-npx -y taurusdb-mcp credentials configure
+TAURUSDB_CLOUD_REGION=cn-north-4 \
 TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
-  npx -y taurusdb-mcp credentials check
+  npx -y taurusdb-mcp@1.0.0 credentials check
 ```
 
-AK/SK 不会进入命令参数、shell history 或 MCP 客户端配置。只有在容器 secret
-injection 等受控部署中，才使用下面的环境变量方式：
+**Windows PowerShell：**
 
-```bash
-TAURUSDB_CLOUD_REGION=<your-region>
-TAURUSDB_CLOUD_ACCESS_KEY_ID=<your-ak>
-TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk>
+```powershell
+$env:TAURUSDB_CLOUD_REGION="cn-north-4"
+$env:TAURUSDB_CLOUD_KEYCHAIN_SERVICE="taurusdb-mcp/huaweicloud"
+npx -y taurusdb-mcp@1.0.0 credentials check
 ```
 
-如果使用华为云临时凭证，再补：
+检查不会打印任何密钥内容，也不会连接数据库。
 
-```bash
-TAURUSDB_CLOUD_SECURITY_TOKEN=<your-session-token>
-```
+### 步骤 5：让你的电脑能连上数据库
 
-## MCP 客户端配置
+MCP 运行在你的电脑上，通过数据库的**公网地址**连接实例：
 
-### Claude Code
+1. 在 TaurusDB 控制台打开实例 → **基本信息**，确认已开通**读写公网地址**（没有就先开通）。
+2. 查询你电脑当前的公网出口 IP：
 
-先完成上面的系统凭据库配置，再把非敏感的 region 和功能开关写入 MCP 配置：
+   ```bash
+   curl ifconfig.me
+   ```
+
+   Windows 也可以直接在浏览器打开 <https://ifconfig.me>。
+3. 打开实例关联的**安全组** → **入方向规则** → **添加规则**：
+   - 协议端口：TCP `3306`（以实例实际端口为准）
+   - 源地址：`你的公网IP/32`，例如 `203.0.113.10/32`
+
+   ![TaurusDB 安全组放通本机公网 IP 的示例](image-1.png)
+
+> ⚠️ 不要把源地址设成 `0.0.0.0/0`。你的公网 IP 变化后（换网络、重新拨号），需要同步更新规则。
+> 生产环境或长期使用，更推荐在同 VPC 的云服务器上运行，见
+> [进阶配置：连接方式](docs/advanced-configuration.md#连接方式)。
+
+### 步骤 6：把 MCP 添加到你的 AI 客户端
+
+下面按客户端分别说明，**只需要做你正在使用的那一个**。所有示例中：
+
+- 把 `cn-north-4` 换成你的区域 ID；
+- `TAURUSDB_CLOUD_KEYCHAIN_SERVICE` 保持 `taurusdb-mcp/huaweicloud` 不变（与步骤 4 对应）；
+- **不需要**填写数据库地址、账号或密码，这些在使用时再登录。
+
+<details open>
+<summary><b>Claude Code（命令行）</b></summary>
 
 ```bash
 claude mcp add huaweicloud-taurusdb \
   --transport stdio \
-  -s local \
-  -e TAURUSDB_CLOUD_REGION=<your-region> \
+  -s user \
+  -e TAURUSDB_CLOUD_REGION=cn-north-4 \
   -e TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
-  -- npx -y taurusdb-mcp
+  -- npx -y taurusdb-mcp@1.0.0
 ```
 
 验证：
 
 ```bash
-claude mcp list
 claude mcp get huaweicloud-taurusdb
 ```
 
-### Codex
+能看到 `command`、`args` 和 `env` 即配置成功。`-s user` 表示所有项目都可用；只想在当前目录
+使用可改为 `-s local`。
 
-Codex 支持通过 CLI 添加 stdio MCP server，也可以直接写 `~/.codex/config.toml`。CLI 和 IDE extension 共享这份配置。
+</details>
 
-```bash
-codex mcp add huaweicloud-taurusdb \
-  --env TAURUSDB_CLOUD_REGION=<your-region> \
-  --env TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
-  -- npx -y taurusdb-mcp
-```
+<details>
+<summary><b>Claude Desktop</b></summary>
 
-验证：
-
-```bash
-codex mcp list
-```
-
-等价的 `~/.codex/config.toml`：
-
-```toml
-[mcp_servers.huaweicloud-taurusdb]
-command = "npx"
-args = ["-y", "taurusdb-mcp"]
-enabled = true
-
-[mcp_servers.huaweicloud-taurusdb.env]
-TAURUSDB_CLOUD_REGION = "<your-region>"
-TAURUSDB_CLOUD_KEYCHAIN_SERVICE = "taurusdb-mcp/huaweicloud"
-```
-
-### Cursor
-
-创建或编辑 `~/.cursor/mcp.json`：
+1. 打开 Claude Desktop → **Settings（设置）** → **Developer（开发者）** → **Edit Config（编辑配置）**，
+   会打开 `claude_desktop_config.json`：
+   - macOS：`~/Library/Application Support/Claude/claude_desktop_config.json`
+   - Windows：`%APPDATA%\Claude\claude_desktop_config.json`
+2. 写入以下内容（如果文件里已有其他 `mcpServers`，把 `huaweicloud-taurusdb` 这一段加进去即可）：
 
 ```json
 {
   "mcpServers": {
     "huaweicloud-taurusdb": {
       "command": "npx",
-      "args": ["-y", "taurusdb-mcp"],
+      "args": ["-y", "taurusdb-mcp@1.0.0"],
       "env": {
-        "TAURUSDB_CLOUD_REGION": "<your-region>",
-        "TAURUSDB_CLOUD_KEYCHAIN_SERVICE": "taurusdb-mcp/huaweicloud",
+        "TAURUSDB_CLOUD_REGION": "cn-north-4",
+        "TAURUSDB_CLOUD_KEYCHAIN_SERVICE": "taurusdb-mcp/huaweicloud"
       }
     }
   }
 }
 ```
 
-重启 Cursor 后，在 Agent 模式里让它按下面顺序调用：
+3. **完全退出**并重新打开 Claude Desktop，在输入框的工具图标里能看到 `huaweicloud-taurusdb` 即成功。
 
-- `list_cloud_taurus_instances`
-- `select_cloud_taurus_instance`
-- 浏览器打开返回的 `login_url`，输入数据库账号密码并完成连接验证
-- `list_databases`
-- `set_default_database`
-- `get_session_binding`
-- `execute_readonly_sql` with `SELECT 1 AS ok`
+</details>
 
-### 生成客户端配置
+<details>
+<summary><b>Cursor</b></summary>
 
-`taurusdb-mcp` 也提供初始化命令，可生成 Claude Desktop、Cursor、VS Code 的基础 MCP 配置：
+1. 创建或编辑 `~/.cursor/mcp.json`（Windows 为 `%USERPROFILE%\.cursor\mcp.json`），
+   也可以在 Cursor **Settings → MCP → Add new MCP server** 中打开它。
+2. 写入：
 
-```bash
-npx -y taurusdb-mcp init --client claude
-npx -y taurusdb-mcp init --client cursor
-npx -y taurusdb-mcp init --client vscode
+```json
+{
+  "mcpServers": {
+    "huaweicloud-taurusdb": {
+      "command": "npx",
+      "args": ["-y", "taurusdb-mcp@1.0.0"],
+      "env": {
+        "TAURUSDB_CLOUD_REGION": "cn-north-4",
+        "TAURUSDB_CLOUD_KEYCHAIN_SERVICE": "taurusdb-mcp/huaweicloud"
+      }
+    }
+  }
+}
 ```
 
-生成后按需把上面的 `env` 补进对应配置文件。
+3. 重启 Cursor，在 **Settings → MCP** 中看到 `huaweicloud-taurusdb` 显示为绿色即可。
+   使用时请切换到 **Agent** 模式。
 
-## 可用工具
+</details>
 
-当前 `1.0.0` 默认注册只读、发现、实例选择、本机登录、能力探测、诊断以及精确
-目标绑定的回收站恢复 tool。Agent 工具面仍不存在通用写入能力。
+<details>
+<summary><b>VS Code（GitHub Copilot Agent 模式）</b></summary>
 
-### 通用工具
+1. 打开命令面板（`Cmd/Ctrl + Shift + P`）→ **MCP: Open User Configuration**，会打开用户级 `mcp.json`。
+2. 写入：
 
-- `ping`
-- `list_data_sources`
-- `list_databases`
-- `list_tables`
-- `describe_table`
-- `show_processlist`
-- `execute_readonly_sql`
-- `explain_sql`
-- `analyze_mutation_sql`（只返回 SQL Advice，不执行状态变更）
+```json
+{
+  "servers": {
+    "huaweicloud-taurusdb": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "taurusdb-mcp@1.0.0"],
+      "env": {
+        "TAURUSDB_CLOUD_REGION": "cn-north-4",
+        "TAURUSDB_CLOUD_KEYCHAIN_SERVICE": "taurusdb-mcp/huaweicloud"
+      }
+    }
+  }
+}
+```
 
-### 云会话与能力工具
+3. 保存后点击配置上方出现的 **Start**，在 Copilot Chat 中切换到 **Agent** 模式使用。
 
-- `get_kernel_info`
-- `list_taurus_features`
-- `list_cloud_taurus_instances`
-- `get_session_binding`
+</details>
 
-### TaurusDB 专属工具
+<details>
+<summary><b>Codex</b></summary>
 
-- `explain_sql_enhanced`
-- `flashback_query`
-- `list_recycle_bin`
+```bash
+codex mcp add huaweicloud-taurusdb \
+  --env TAURUSDB_CLOUD_REGION=cn-north-4 \
+  --env TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
+  -- npx -y taurusdb-mcp@1.0.0
+```
 
-### 受控恢复工具（默认可见）
+或直接编辑 `~/.codex/config.toml`（CLI 和 IDE 插件共用）：
 
-- `restore_recycle_bin_table`：对精确回收站对象和不存在的目标表完成预检后立即恢复，并只读验证结果
+```toml
+[mcp_servers.huaweicloud-taurusdb]
+command = "npx"
+args = ["-y", "taurusdb-mcp@1.0.0"]
+enabled = true
 
-### 诊断工具
+[mcp_servers.huaweicloud-taurusdb.env]
+TAURUSDB_CLOUD_REGION = "cn-north-4"
+TAURUSDB_CLOUD_KEYCHAIN_SERVICE = "taurusdb-mcp/huaweicloud"
+```
 
-- `find_top_slow_sql`
-- `diagnose_service_latency`
-- `diagnose_db_hotspot`
-- `diagnose_slow_query`
-- `diagnose_connection_spike`
-- `diagnose_lock_contention`
-- `diagnose_replication_lag`
-- `diagnose_storage_pressure`
+验证：`codex mcp list`。
 
-说明：
+</details>
 
-- TaurusDB 专属 tools 在 `tools/list` 中默认可见。
-- 如果当前实例不是 TaurusDB，或者某项能力未开启，调用时会返回结构化 unsupported-feature 错误，而不是直接把 tool 隐藏掉。
-- MCP 永不注册通用数据库写入工具。普通 SQL 的账号
-  权限、环境变量和审批 token 都不能改变这条边界。
-- 回收站恢复是唯一受控例外：只允许把一个明确的回收站对象恢复到一个明确且不存在的
-  目标表；自然语言请求可直接触发，不再经过浏览器人工确认。
-- `set_cloud_region`、`select_cloud_taurus_instance`、`set_default_database`、
-  `begin_sql_login` 和 `clear_sql_credentials` 默认可见，确保选择实例后可以直接返回
-  本机登录链接；固定静态部署可以设置 `TAURUSDB_ENABLE_DYNAMIC_TARGETS=false` 隐藏它们。
-- `analyze_mutation_sql` 可以使用只读元数据、`EXPLAIN` 和安全派生的
-  `COUNT(*)` 生成 SQL Advice；返回结果始终标记 `not_executed` 和
-  `human_review_required`。
+> 💡 快捷方式：`npx -y taurusdb-mcp@1.0.0 init --client claude`（或 `cursor`、`vscode`）
+> 可以自动写入基础配置，但**不包含**上面的 `env`，写入后仍需手动补上两行环境变量。
 
-## 生产安全基线
+### 步骤 7：（可选）运行自检
 
-生产环境默认开启并强制执行以下边界：
+在终端运行验收命令，确认安装和配置都正常：
 
-- SQL 连接默认不启用 TLS，以兼容直接使用公网 IP 的交互式实例选择。该默认值仅适合
-  演示或可信隔离网络；生产环境应设置 `TAURUSDB_REQUIRE_TLS=true`，并在 datasource
-  profile 中配置可信 CA、`servername` 和 `rejectUnauthorized: true`。
-- datasource 会话账号优先使用最小权限只读账号；即使该账号拥有恢复权限，Agent 也没有
-  通用数据库状态变更工具。
-- INSERT、UPDATE、DELETE、DDL、DCL 和管理语句只可进入 SQL Advice，必须由客户
-  在 MCP 之外人工复核和执行。
-- 如需回收站恢复，为同一个会话登录账号授予 TaurusDB 原生恢复所需权限；不需要在
-  MCP 配置中增加 recovery 用户名、密码或审批密钥文件。
-- datasource/database 会绑定到实际连接池，跨数据库 SQL 会被阻断。
-- SQL 只能调用白名单内无副作用的内置函数；自定义函数、带库名限定的函数以及
-  `GET_LOCK`、`SLEEP` 等会被阻断（`R010`），`analyze_mutation_sql` 派生的
-  `COUNT`/`EXPLAIN` 同样适用，被拒绝时在 `impact_analysis.evidence_gaps` 中说明原因。
-- 只读查询和查询语句的 `EXPLAIN` 在 `START TRANSACTION READ ONLY` 中执行，作为数据库侧
-  兜底；MySQL 不允许在只读事务中 `EXPLAIN` DML，因此 DML 的 `EXPLAIN` 在事务外执行，
-  它不会执行 DML 本身，且同样受函数白名单约束。
-- 云 API 只允许 HTTPS 和华为云域名；私有 endpoint 必须由 operator
-  在静态配置中显式列出。
-- 查询受超时、并发、有界队列、行列数、字段、BLOB 和总返回字节限制。
-- 每次 tool 调用都会写入权限为 `0600` 的 JSONL 审计日志；默认只记录
-  SQL hash，不记录原始 SQL。
+```bash
+TAURUSDB_CLOUD_REGION=cn-north-4 \
+TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
+  npx -y taurusdb-mcp@1.0.0 acceptance --instance-id <你的实例ID> --report acceptance.json
+```
 
-推荐的生产环境变量：
+命令会在终端打印一个本机登录链接，在浏览器打开并登录数据库后自动继续。结果中
+`[pass]` 为通过，`[pending]` 为未配置或未执行的项（不算失败，也不算通过），`[fail]` 为失败。
+完整参数见 [TaurusDB 云端验收](docs/cloud-taurusdb-testing.md)。
+
+---
+
+## 开始使用
+
+配置完成后，在 AI 客户端里**用自然语言**对话即可，AI 会自己选择合适的工具。
+
+### 第一次连接：四句话
+
+1. **“列出我的 TaurusDB 实例”**
+   AI 会调用 `list_cloud_taurus_instances`，列出当前区域的实例。
+2. **“选择实例 `<实例ID>`”**
+   AI 会调用 `select_cloud_taurus_instance`，并返回一个本机登录链接
+   （形如 `http://127.0.0.1:xxxxx/sql-login/...`）。
+3. **在浏览器打开这个链接，输入数据库账号和密码**，看到“账号验证成功”即可回到对话。
+   - 链接 **5 分钟内有效**、只能使用一次，最多尝试 3 次；
+   - 密码只交给本机 MCP，**不会**出现在对话里；
+   - 登录状态空闲 30 分钟或累计 8 小时后自动清除，届时重新选择实例即可。
+4. **“列出所有数据库，并把默认库设为 `<库名>`”**，然后就可以开始提问了。
+
+下图是在 Claude Code 中实际调用的效果：
+
+![Claude Code 中的 TaurusDB MCP 调用示例](image.png)
+
+### 常用提问示例
+
+```text
+orders 表有哪些字段和索引？
+统计最近 7 天每天的订单数量
+这条 SQL 为什么慢：SELECT * FROM orders WHERE user_id = 123 ORDER BY created_at DESC
+帮我评估这条 UPDATE 的影响，先不要执行：UPDATE orders SET status = 'closed' WHERE created_at < '2026-01-01'
+最近 1 小时最慢的 10 条 SQL 是哪些？给出优化建议
+现在有没有锁等待？是谁阻塞了谁？
+连接数突然升高，帮我看看原因
+磁盘空间增长很快，哪些表最大？
+看看 orders 表 10 分钟前 id = 100 的数据
+回收站里有哪些被删除的表？
+```
+
+### 关于“改数据”的请求
+
+如果你让 AI 执行 UPDATE / DELETE / ALTER 等语句，它**不会执行**，而是返回：
+
+- `advised_sql`：建议执行的 SQL（只有在表结构、条件、范围都核实过时才会给出）
+- 影响评估：匹配行数、执行计划、是否可能全表扫描
+- 风险提示与需要人工确认的业务规则
+
+请你自行复核后，通过自己的数据库客户端或变更流程执行。
+
+### 误删表恢复
+
+TaurusDB 开启回收站后，被 DROP 的表会暂存在回收站中。你可以说：
+
+```text
+回收站里有哪些表？
+把回收站中的 <回收站对象名> 恢复到 app 库，新表名叫 orders_restored
+```
+
+AI 会调用 `restore_recycle_bin_table`：先确认该回收站对象存在、目标表不存在，再执行恢复并验证。
+**这是会写入数据库的操作**，请确认对象名和目标表名无误；当前登录的数据库账号需要具备回收站恢复权限。
+
+---
+
+## 工具清单
+
+<details>
+<summary>点击展开全部工具（共 30 个）</summary>
+
+**实例与连接**
+
+| 工具 | 作用 |
+| --- | --- |
+| `list_cloud_taurus_instances` | 列出当前区域的 TaurusDB 实例 |
+| `select_cloud_taurus_instance` | 选择实例并返回本机数据库登录链接 |
+| `begin_sql_login` | 重新生成本机数据库登录链接 |
+| `get_session_binding` | 查看当前绑定的实例、库和登录状态 |
+| `set_default_database` | 设置当前会话的默认库 |
+| `set_cloud_region` | 切换华为云区域 |
+| `clear_sql_credentials` | 清除当前会话中的数据库登录 |
+| `list_data_sources` | 列出已配置的数据源 |
+| `ping` | 检查 MCP 服务是否在线 |
+
+**浏览与查询（只读）**
+
+| 工具 | 作用 |
+| --- | --- |
+| `list_databases` / `list_tables` / `describe_table` | 查看库、表、字段和索引 |
+| `execute_readonly_sql` | 执行只读 SQL（SELECT / SHOW / EXPLAIN / DESCRIBE） |
+| `explain_sql` | 查看执行计划和风险提示 |
+| `explain_sql_enhanced` | TaurusDB 增强执行计划分析 |
+| `show_processlist` | 查看当前会话和正在执行的 SQL |
+| `analyze_mutation_sql` | 为变更 SQL 生成建议和影响评估，**不执行** |
+
+**TaurusDB 特性**
+
+| 工具 | 作用 |
+| --- | --- |
+| `get_kernel_info` / `list_taurus_features` | 内核版本与特性开关 |
+| `flashback_query` | 闪回查询：查看表在过去某一时间点的数据 |
+| `list_recycle_bin` | 查看回收站中的表 |
+| `restore_recycle_bin_table` | 将一个精确的回收站对象恢复为新表（唯一写操作，可关闭） |
+
+**诊断**
+
+| 工具 | 作用 |
+| --- | --- |
+| `find_top_slow_sql` | 找出最慢 / 最耗资源的 SQL |
+| `diagnose_slow_query` | 分析单条慢 SQL 的原因 |
+| `diagnose_service_latency` | 从“接口变慢”出发判断瓶颈类型 |
+| `diagnose_db_hotspot` | 找出数据库热点 |
+| `diagnose_connection_spike` | 分析连接数暴涨 |
+| `diagnose_lock_contention` | 分析锁等待和阻塞链 |
+| `diagnose_replication_lag` | 分析主从复制延迟 |
+| `diagnose_storage_pressure` | 分析存储空间和临时表压力 |
+
+如果实例不支持某项 TaurusDB 特性（或特性未开启），工具会返回明确的“不支持”错误和开启提示，而不是静默失败。
+
+</details>
+
+---
+
+## 生产环境配置
+
+个人试用按上面的步骤即可。在生产或团队环境中使用前，请评估以下默认值：
+
+| 默认值 | 说明 | 生产建议 |
+| --- | --- | --- |
+| 数据库连接**未启用 TLS** | 为兼容公网 IP 直连 | 设置 `TAURUSDB_REQUIRE_TLS=true`，并配置可信 CA 与证书校验 |
+| 回收站恢复**默认开启** | 无单独审批步骤 | 需要独立审批时设置 `TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE=false` |
+| 审计日志写在本机 | 文件权限 `0600`，默认只记录 SQL 哈希 | 指定日志路径并接入集中采集 |
+
+推荐的生产环境变量（加到 MCP 客户端配置的 `env` 中）：
 
 ```bash
 TAURUSDB_REQUIRE_TLS=true
@@ -262,880 +499,150 @@ TAURUSDB_SQL_CREDENTIAL_IDLE_TTL_MINUTES=30
 TAURUSDB_SQL_CREDENTIAL_MAX_TTL_MINUTES=480
 ```
 
-`restore_recycle_bin_table` 默认注册。它要求存在未过期、且绑定到当前所选目标
-（主机、端口、实例、区域）的本机登录会话；静态配置的数据库账号不能执行恢复，缺少会话
-时返回 `SQL_SESSION_REQUIRED`。预检确认精确回收站对象存在且目标表不存在后，执行原生
-恢复并通过只读元数据验证结果。无需审批链接、浏览器 Cookie、第二组恢复账号或审批密钥。
-执行前会固定审计目标，请求、完成、失败和未验证结果都记录同一实例、回收站对象、目标
-库表和 SQL hash；请求审计写入失败时不会开始恢复，执行后状态无法确认时返回
-`RECOVERY_STATE_UNCERTAIN`，请先核对数据库状态，不要盲目重试。需要独立审批的部署应设置
-`TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE=false`。
-当前仅支持原生
-`native_restore`，不支持 `insert_select` 或覆盖现有表。
-
-通过实例选择返回的 `login_url` 或 `begin_sql_login` 绑定的数据库凭据，在空闲 30 分钟
-后自动清除，且无论是否活跃都不会超过 8 小时。管理员可以缩短这两个值，但不能超过
-默认安全上限。
-
-本产品没有“开启通用写能力”的配置。客户需要执行普通 DML、DDL、DCL 或管理语句时，
-应复制经过人工复核的 `advised_sql`，在其受控数据库变更流程中自行执行；MCP 不参与
-执行或授权。回收站恢复仅按上述精确对象受控例外处理。
-
-发版标准见 [release readiness](docs/release-readiness.md)。`1.0.0` 已完成本地与 CI
-验收；真实 TaurusDB 验收在发布后执行，结果以补丁版本跟进。
-
-支持的单会话部署边界、集中审计接入和容量预算见
-[客户部署与运行边界](docs/customer-deployment.md)。
-
-## 本地开发
-
-如果你要开发当前仓库，再使用下面的本地流程。
-
-安装依赖：
-
-```bash
-npm install
-```
-
-开发模式启动当前 MCP Server：
-
-```bash
-npm run dev
-```
-
-构建：
-
-```bash
-npm run build
-```
-
-运行测试：
-
-```bash
-npm test
-```
-
-只看 MCP 包的检查 / 测试：
-
-```bash
-npm run check --workspace taurusdb-mcp
-npm run test --workspace taurusdb-mcp
-```
-
-查看本地 workspace 版本：
-
-```bash
-npx taurusdb-mcp --version
-```
-
-## npm 发布
-
-维护者先在本地执行完整发布检查：
-
-```bash
-npm run release:check
-```
-
-日常开发合入默认分支 `develop`。发布时从 `develop` 拉出 `release/<主版本>.<次版本>`
-分支（如 `release/1.0`），CI 通过后在该分支上创建 `v<version>` tag；同一版本线的
-补丁先合入 `develop`，再 cherry-pick 到发布分支。release workflow 会拒绝不在对应
-发布分支上的 tag。GitHub release workflow 会重新执行门禁、生成 SBOM，并按
-`taurusdb-core` → `taurusdb-mcp` 的顺序使用 npm provenance 发布。不要从开发机
-手工执行 `npm publish`。
-
-发布配置和回滚要求见 [发布就绪门禁](docs/release-readiness.md)。
-
-安装和运行已发布包：
-
-```bash
-npm install taurusdb-mcp
-npx taurusdb-mcp --version
-```
-
-## 从源码配置 Claude Code
-
-下面是从本地源码构建并接入 Claude Code 的开发路径。普通用户优先使用上面的 npm 配置。
-
-### 1. 构建
-
-```bash
-cd /path/to/taurus-mcp-server
-npm run build
-```
-
-### 2. 添加本地 MCP Server
-
-如果你只想先验证本地 MCP 能否启动：
-
-```bash
-claude mcp add huaweicloud-taurusdb \
-  --transport stdio \
-  -- node "$(pwd)/packages/mcp/dist/index.js"
-```
-
-如果希望 Claude Code 带着云控制面配置启动，先用 `credentials configure`
-保存身份，再只传入非敏感配置：
-
-```bash
-claude mcp add huaweicloud-taurusdb \
-  --transport stdio \
-  -e TAURUSDB_CLOUD_REGION=<your-region> \
-  -e TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
-  -- node "$(pwd)/packages/mcp/dist/index.js"
-```
-
-如果使用临时凭证，在 `credentials configure` 的安全输入流程中同时保存
-Security Token。
-
-### 3. 验证 MCP 注册
-
-```bash
-claude mcp list
-claude mcp get huaweicloud-taurusdb
-```
-
-检查重点：
-
-- `huaweicloud-taurusdb` 已出现在 `claude mcp list`
-- `claude mcp get huaweicloud-taurusdb` 能看到正确的 `command`
-- 如果你通过 `-e` 写入了云配置，`env` 不应为空
-
-### 4. 验证云控制面
-
-在 Claude Code 里直接调用：
-
-- `list_cloud_taurus_instances`
-
-查询成功时，通常会看到类似下面这样的结果：
-
-![Successful instance list screenshot](docs/assets/readme/claude-instance-list-success.png)
-
-说明当前 MCP 会话已经能使用这组凭证访问华为云控制面，并且能看见实例列表。
-
-### 5. 验证数据库数据面
-
-控制面通过后，实例选择会直接创建本机数据库登录链接：
-
-1. `select_cloud_taurus_instance`
-2. 浏览器打开返回的 `login_url`，输入数据库账号和密码并完成连接验证
-3. `list_databases`
-4. `set_default_database`
-5. `get_session_binding`
-6. `execute_readonly_sql` with `SELECT 1 AS ok`
-
-如果 `SELECT 1` 成功，说明数据库数据面也已连通。
-
-## 云数据源模板
-
-当前版本已经支持一种更适合云上多实例切换的用法：
-
-- 只把 datasource 当作模板
-- 不要求模板里预先写死 `host`
-- 不要求模板里预先写死 `database`
-- 通过 `select_cloud_taurus_instance` 在运行时把当前实例的 `host/port` 绑定到这个模板
-- `select_cloud_taurus_instance` 同时返回短时本机 `login_url`，账号密码由用户在页面输入
-- 通过 `set_default_database` 在运行时把默认库绑定到当前会话
-
-这意味着客户不需要每切一个实例就重新改一遍：
-
-- `TAURUSDB_SQL_HOST`
-- `TAURUSDB_SQL_PORT`
-- `TAURUSDB_SQL_ENGINE`
-- `TAURUSDB_SQL_DATASOURCE`
-- `TAURUSDB_SQL_DATABASE`
-- `TAURUSDB_SQL_USER`
-- `TAURUSDB_SQL_PASSWORD`
-
-更推荐的方式是：
-
-1. 先配一次云控制面凭证
-2. 保留一个最小 datasource template
-3. 每次会话内按顺序调用：
-   - `list_cloud_taurus_instances`
-   - `select_cloud_taurus_instance`
-   - 浏览器打开返回的 `login_url` 完成数据库登录
-   - `list_databases`
-   - `set_default_database`
-   - `get_session_binding`
-
-### 交互式登录的最小模板
-
-当前版本已经把这几个默认值内置好了：
-
-- 默认 `engine = mysql`
-- 默认 `datasource = taurus_mcp`
-- 只要检测到最小 SQL 模板输入，就会自动把 `taurus_mcp` 作为默认 datasource
-
-交互式客户场景不需要预置 SQL 用户名、密码、host 或 database。未提供 SQL profile 时，
-MCP 会自动创建名为 `taurus_mcp` 的无凭据 datasource 模板；选择实例后返回本机
-`login_url`，由用户直接在浏览器输入数据库账号密码。
-
-如果需要自定义 datasource 名称，只需配置非敏感名称：
-
-```bash
-export TAURUSDB_SQL_DATASOURCE=production
-export TAURUSDB_DEFAULT_DATASOURCE=production
-```
-
-数据库密码通过 loopback 本机页面直达 MCP 内存，不进入 Agent 对话或 Tool 参数，也不会
-由 MCP 持久化保存。
-
-### 无人值守静态凭据模式（可选）
-
-只有不具备浏览器交互条件的固定部署才需要预配数据库凭据引用。支持 `env:`、`file:`、
-`hw-csms:`、`hw-kms:` 和 `hw-kms-file:`；交互式客户流程不需要这些配置。
-
-| 模式 | 推荐场景 | 本地保存内容 |
-| --- | --- | --- |
-| `env:` / `file:` | 本地开发、快速体验、已有企业密钥注入系统 | 数据库密码或其文件 |
-| `hw-csms:` | 客户电脑或云端长期运行，推荐正式环境使用 | CSMS 凭据名称，以及调用 CSMS 所需的云身份 |
-| `hw-kms:` / `hw-kms-file:` | 需要华为云 KMS 访问控制和审计 | KMS 密文，以及调用 KMS 所需的云身份 |
-| 系统凭据库 + DEW CSMS | macOS/Linux/Windows 客户电脑长期运行，推荐 | 系统凭据库中的云身份；数据库密码由 CSMS 管理 |
-| IAM 委托 + DEW CSMS | ECS/CCE 企业部署，规划接入 | 无长期本地敏感凭据 |
-
-推荐交互式客户优先使用本机登录页面，无人值守部署再按环境选择静态 secret 模式。
-无论选择哪种模式，数据库密码都不会作为 MCP Tool 参数进入 Agent 对话。
-
-## 系统凭据库存储云身份
-
-在客户电脑上，可以将调用华为云 API 所需的 AK/SK 保存到系统凭据库。MCP 配置中只保留非敏感的 service/account 名称，不再保存 AK/SK。
-
-当前支持：
-
-- macOS Keychain，通过系统自带的 `security` 命令访问
-- Linux Secret Service，通过 `secret-tool` 访问；通常需要安装 `libsecret-tools`，并运行可用的 Secret Service 服务
-- Windows Credential Manager，通过 Windows PowerShell 调用系统 `CredReadW` / `CredWriteW` API
-
-一次性写入系统凭据库：
-
-```bash
-npx taurusdb-mcp credentials configure
-```
-
-在源码仓库内也可以使用：
-
-```bash
-npm run credentials:configure
-```
-
-该命令会依次使用当前系统凭据库的安全输入流程。输入内容不会作为命令参数传递，也不会写入 shell history。旧命令 `npm run keychain:configure` 继续作为兼容别名。
-
-macOS 默认写入以下记录：
-
-```text
-service: taurusdb-mcp/huaweicloud/access-key-id
-service: taurusdb-mcp/huaweicloud/secret-access-key
-account: default
-```
-
-Windows 使用以下 Generic Credential Target：
-
-```text
-taurusdb-mcp/huaweicloud/default/access-key-id
-taurusdb-mcp/huaweicloud/default/secret-access-key
-```
-
-如果使用临时 AK/SK，可以同时保存 Security Token：
-
-```bash
-npm run credentials:configure -- --with-security-token
-```
-
-随后 MCP 只需要配置：
-
-```bash
-export TAURUSDB_CLOUD_REGION='cn-north-4'
-export TAURUSDB_CLOUD_PROJECT_ID='<project-id>'
-export TAURUSDB_CLOUD_KEYCHAIN_SERVICE='taurusdb-mcp/huaweicloud'
-export TAURUSDB_CLOUD_KEYCHAIN_ACCOUNT='default'
-```
-
-`TAURUSDB_CLOUD_KEYCHAIN_ACCOUNT` 可省略，默认值为 `default`。变量名为兼容已有版本而保留；在 Linux 上它同样表示系统凭据库配置。如果同时配置环境变量 AK/SK 和系统凭据库，环境变量优先。
-
-系统凭据库身份适用于 CSMS、KMS、TaurusDB 实例发现、DAS 和 CES 请求。凭据在首次请求时读取并缓存在当前 MCP 进程内存中。
-
-### 验证凭据链
-
-配置完成后运行：
-
-```bash
-npx taurusdb-mcp credentials check
-```
-
-在源码仓库内也可以使用：
-
-```bash
-npm run credentials:check
-```
-
-该命令会分层验证：
-
-- IAM Token、环境变量 AK/SK 或系统凭据库是否可用
-- Project ID 是否已配置或能通过 IAM 解析
-- datasource 中的 `hw-csms:` / `hw-kms:` / `hw-kms-file:` 密码引用是否可读取
-
-检查过程不会连接数据库，也不会打印 AK/SK、Token、数据库密码、CSMS 凭据名称或 KMS 密文。
-
-## 使用华为云 DEW CSMS 保存数据库密码
-
-DEW CSMS 直接保存并返回数据库密码，适合作为正式环境的默认模式。MCP 只保存凭据名称，不在本地保存数据库密码或 KMS 密文。
-
-在华为云 DEW 凭据管理服务中创建一个通用凭据，将 `secret_string` 设置为数据库密码。然后配置：
-
-```bash
-export TAURUSDB_CLOUD_REGION='cn-north-4'
-export TAURUSDB_CLOUD_PROJECT_ID='<project-id>'
-export TAURUSDB_SQL_USER='taurus_readonly'
-export TAURUSDB_SQL_PASSWORD='hw-csms:production-taurusdb-password'
-```
-
-名称包含 `/` 等特殊字符时需要 URL 编码，例如：
-
-```bash
-export TAURUSDB_SQL_PASSWORD='hw-csms:production%2Ftaurusdb-password'
-```
-
-MCP 使用华为云 CSMS 官方接口读取凭据的 `latest` 版本：
-
-```text
-GET /v1/{project_id}/secrets/{secret_name}/versions/latest
-```
-
-默认 endpoint 为 `https://csms.<region>.myhuaweicloud.com`，也可以通过 `TAURUSDB_CLOUD_CSMS_ENDPOINT` 覆盖。运行身份需要读取目标凭据版本的最小权限。
-
-当前 CSMS 调用复用现有华为云身份配置：
-
-- `TAURUSDB_CLOUD_AUTH_TOKEN`
-- 或 `TAURUSDB_CLOUD_ACCESS_KEY_ID` + `TAURUSDB_CLOUD_SECRET_ACCESS_KEY`
-- 或 `TAURUSDB_CLOUD_KEYCHAIN_SERVICE` 指向系统凭据库中的 AK/SK
-- 使用临时 AK/SK 时额外配置 `TAURUSDB_CLOUD_SECURITY_TOKEN`
-
-数据库密码只会短暂进入 MCP 进程内存，并用于创建数据库连接。CSMS 凭据更新后，重启 MCP 或重建连接池即可读取最新版本。
-
-## 使用华为云 DEW/KMS 保存数据库密码
-
-华为云 DEW/KMS 是正式环境的推荐选项，但不是 MCP 的强制要求。开发和简单部署可使用 `env:` 或 `file:`；需要云端访问控制和审计时使用 `hw-kms:` 或 `hw-kms-file:`。
-
-数据流如下：
-
-```text
-客户数据库密码
-  -> 使用客户华为云账号下的 KMS 用户主密钥加密
-  -> 本地或配置系统只保存 cipher_text
-  -> MCP 使用客户授权的 IAM Token 或 AK/SK 调用 KMS decrypt-data
-  -> 明文密码短暂进入 MCP 进程内存
-  -> MCP 通过 MySQL/TLS 连接 TaurusDB
-```
-
-KMS 负责加密、解密和访问控制，不负责创建、修改或自动轮换 TaurusDB 数据库账号密码。
-
-### 1. 前置条件
-
-准备以下信息：
-
-- 华为云区域，例如 `cn-north-4`
-- 对应区域的 Project ID
-- 一个 DEW/KMS 用户主密钥
-- TaurusDB 数据库用户名和密码
-- 用于运行 MCP 的 IAM 身份
-- `curl` 和 `jq`，仅在使用下面的 API 示例生成密文时需要
-
-KMS 密钥、Project ID 和 MCP 配置的 region 必须属于同一区域。默认 KMS endpoint 为：
-
-```text
-https://kms.<region>.myhuaweicloud.com
-```
-
-例如：
-
-```text
-https://kms.cn-north-4.myhuaweicloud.com
-```
-
-### 2. 创建 KMS 密钥
-
-在华为云控制台进入：
-
-```text
-数据加密服务 DEW -> 密钥管理 KMS -> 用户主密钥 -> 创建密钥
-```
-
-推荐配置：
-
-- 密钥类型：对称密钥
-- 密钥规格：`AES_256`
-- 密钥用途：`ENCRYPT_DECRYPT`
-- 密钥别名：例如 `taurusdb-mcp-production`
-- 密钥描述：明确对应的环境和数据库用途
-
-创建后记录密钥 ID。不要把密钥 ID 和数据库实例 ID 混淆。
-
-### 3. 配置 IAM 权限
-
-建议使用两个不同的 IAM 身份：
-
-- 凭据管理员：仅在生成或轮换密文时使用，需要调用 KMS `encrypt-data`
-- MCP 运行身份：日常运行使用，只需要调用 KMS `decrypt-data`
-
-生产环境不要给 MCP 运行身份授予创建密钥、删除密钥、禁用密钥或生成新密文等权限。权限策略应限制到目标区域、Project 和目标 KMS 密钥；实际策略动作名称请在华为云 IAM 策略编辑器或 API Explorer 中选择对应的 KMS 加密/解密操作。
-
-MCP 运行身份通常还需要：
-
-- 查看目标 TaurusDB 实例的权限
-- 使用指定 KMS 密钥执行解密的权限
-- 如启用 DAS/CES 诊断，对应的只读查询权限
-
-优先使用 IAM 委托或临时凭证；如果使用长期 AK/SK，应由客户自行保管并定期轮换。
-
-### 4. 生成密文
-
-生成密文属于部署或密码轮换操作，不应由日常运行的 MCP 自动完成。
-
-仓库提供 `npm run kms:encrypt` 工具。它会：
-
-- 在终端中隐藏输入数据库密码
-- 调用 KMS `encrypt-data`
-- 默认立即调用 `decrypt-data` 回验
-- 仅在回验成功后写入密文文件
-- 使用原子替换更新目标密文文件
-- 将密文文件权限设置为 `0600`
-- 不打印数据库密码或 `cipher_text`
-
-先配置 region、Project ID、KMS key ID 和具备加密、解密权限的临时 IAM Token：
-
-```bash
-export TAURUSDB_CLOUD_REGION='cn-north-4'
-export TAURUSDB_CLOUD_PROJECT_ID='<project-id>'
-export HUAWEICLOUD_KMS_KEY_ID='<kms-key-id>'
-export TAURUSDB_CLOUD_AUTH_TOKEN='<temporary-iam-token>'
-```
-
-生成并验证密文：
-
-```bash
-npm run kms:encrypt -- \
-  --output ~/.taurusdb-mcp/production-password.ciphertext
-```
-
-也可以使用 AK/SK 或临时 AK/SK 运行该工具，认证变量与 MCP 运行身份配置相同。`--no-verify` 可以跳过解密回验，但不推荐在生产环境使用。
-
-如果不使用仓库工具，也可以直接调用 API。下面的示例使用临时 IAM Token，密码不会写入 shell history，也不会作为命令行参数出现：
-
-```bash
-export HUAWEICLOUD_KMS_ENDPOINT="https://kms.${TAURUSDB_CLOUD_REGION}.myhuaweicloud.com"
-read -r -s -p 'TaurusDB password: ' TAURUSDB_PASSWORD
-printf '\n'
-printf '%s' "$TAURUSDB_PASSWORD" \
-  | jq -Rs --arg key_id "$HUAWEICLOUD_KMS_KEY_ID" \
-      '{key_id: $key_id, plain_text: .}' \
-  | curl -fsS \
-      -X POST \
-      -H "X-Auth-Token: ${TAURUSDB_CLOUD_AUTH_TOKEN}" \
-      -H 'Content-Type: application/json' \
-      --data-binary @- \
-      "${HUAWEICLOUD_KMS_ENDPOINT}/v1.0/${TAURUSDB_CLOUD_PROJECT_ID}/kms/encrypt-data" \
-  | jq -er '.cipher_text' \
-  > ~/.taurusdb-mcp/production-password.ciphertext
-
-unset TAURUSDB_PASSWORD
-chmod 600 ~/.taurusdb-mcp/production-password.ciphertext
-```
-
-检查文件存在且非空，不要打印文件内容：
-
-```bash
-test -s ~/.taurusdb-mcp/production-password.ciphertext
-stat -f '%Sp %N' ~/.taurusdb-mcp/production-password.ciphertext 2>/dev/null \
-  || stat -c '%A %n' ~/.taurusdb-mcp/production-password.ciphertext
-```
-
-密文文件中只保存 KMS 返回的 `cipher_text`。它不是明文密码，但仍应按敏感配置管理。
-
-### 5. 配置数据源
-
-推荐使用 profile 文件保存 datasource，并通过 `hw-kms-file:` 引用密文：
-
-```json
-{
-  "defaultDatasource": "production",
-  "dataSources": {
-    "production": {
-      "engine": "mysql",
-      "host": "<taurusdb-host>",
-      "port": 3306,
-      "database": "<optional-default-database>",
-      "user": {
-        "username": "taurus_readonly",
-        "password": "hw-kms-file:~/.taurusdb-mcp/production-password.ciphertext"
-      },
-      "tls": {
-        "enabled": true,
-        "rejectUnauthorized": true,
-        "servername": "<taurusdb-host>",
-        "ca": "file:/path/to/ca.pem"
-      }
-    }
-  }
-}
-```
-
-启用 profile：
-
-```bash
-export TAURUSDB_SQL_PROFILES='~/.taurusdb-mcp/profiles.json'
-export TAURUSDB_DEFAULT_DATASOURCE='production'
-```
-
-也可以通过环境变量配置最小模板：
-
-```bash
-export TAURUSDB_SQL_USER='taurus_readonly'
-export TAURUSDB_SQL_PASSWORD='hw-kms-file:~/.taurusdb-mcp/production-password.ciphertext'
-```
-
-支持的 KMS 密码引用：
-
-- `hw-kms-file:<path>`：从文件读取 `cipher_text`，推荐用于生产环境
-- `hw-kms:<cipher_text>`：直接在配置中保存密文，不推荐用于较长密文
-
-### 6. 配置 MCP 运行身份
-
-MCP 使用下面两种方式之一调用 KMS `decrypt-data` API。
-
-使用 AK/SK：
-
-```bash
-export TAURUSDB_CLOUD_REGION='cn-north-4'
-export TAURUSDB_CLOUD_PROJECT_ID='<project-id>'
-export TAURUSDB_CLOUD_ACCESS_KEY_ID='<access-key-id>'
-export TAURUSDB_CLOUD_SECRET_ACCESS_KEY='<secret-access-key>'
-```
-
-使用临时 AK/SK 时还需要：
-
-```bash
-export TAURUSDB_CLOUD_SECURITY_TOKEN='<session-token>'
-```
-
-或者使用 IAM Token：
-
-```bash
-export TAURUSDB_CLOUD_REGION='cn-north-4'
-export TAURUSDB_CLOUD_PROJECT_ID='<project-id>'
-export TAURUSDB_CLOUD_AUTH_TOKEN='<iam-token>'
-```
-
-如需覆盖默认 endpoint：
-
-```bash
-export TAURUSDB_CLOUD_KMS_ENDPOINT='https://kms.cn-north-4.myhuaweicloud.com'
-```
-
-如果 MCP 由 Claude Code、Codex、Cursor 或其他客户端作为 stdio 子进程启动，需要把这些变量写入客户端的 MCP 配置，而不是只在另一个终端中执行 `export`。
-
-Claude Code 完整示例：
-
-```bash
-claude mcp add huaweicloud-taurusdb \
-  --transport stdio \
-  -s local \
-  -e TAURUSDB_CLOUD_REGION='<region>' \
-  -e TAURUSDB_CLOUD_PROJECT_ID='<project-id>' \
-  -e TAURUSDB_CLOUD_ACCESS_KEY_ID='<access-key-id>' \
-  -e TAURUSDB_CLOUD_SECRET_ACCESS_KEY='<secret-access-key>' \
-  -e TAURUSDB_SQL_PROFILES='~/.taurusdb-mcp/profiles.json' \
-  -e TAURUSDB_DEFAULT_DATASOURCE='production' \
-  -- npx -y taurusdb-mcp
-```
-
-Codex `~/.codex/config.toml` 完整示例：
-
-```toml
-[mcp_servers.huaweicloud-taurusdb]
-command = "npx"
-args = ["-y", "taurusdb-mcp"]
-enabled = true
-
-[mcp_servers.huaweicloud-taurusdb.env]
-TAURUSDB_CLOUD_REGION = "<region>"
-TAURUSDB_CLOUD_PROJECT_ID = "<project-id>"
-TAURUSDB_CLOUD_ACCESS_KEY_ID = "<access-key-id>"
-TAURUSDB_CLOUD_SECRET_ACCESS_KEY = "<secret-access-key>"
-TAURUSDB_SQL_PROFILES = "~/.taurusdb-mcp/profiles.json"
-TAURUSDB_DEFAULT_DATASOURCE = "production"
-```
-
-如果使用临时 AK/SK，还必须把 `TAURUSDB_CLOUD_SECURITY_TOKEN` 加入同一份 MCP 客户端配置。
-
-### 7. 启动并验证
-
-启动 MCP 后，按顺序验证：
-
-1. `list_cloud_taurus_instances`
-2. `select_cloud_taurus_instance`
-3. 浏览器打开返回的 `login_url` 完成数据库登录
-4. `list_databases`
-5. `set_default_database`
-6. `execute_readonly_sql`，执行 `SELECT 1 AS ok`
-
-首次建立数据库连接时，MCP 会读取密文并调用：
-
-```text
-POST /v1.0/{project_id}/kms/decrypt-data
-```
-
-如果 `SELECT 1` 成功，说明以下链路均已通过：
-
-- MCP 的 IAM 身份有效
-- MCP 有权使用指定 KMS 密文
-- KMS 解密成功
-- 数据库账号密码正确
-- MCP 到 TaurusDB 的网络和 TLS 连接正常
-
-### 8. 轮换数据库密码
-
-推荐轮换流程：
-
-1. 在 TaurusDB 中修改数据库账号密码。
-2. 使用新密码重新调用 KMS `encrypt-data`。
-3. 将新的 `cipher_text` 写入临时文件。
-4. 使用原子替换方式更新正式密文文件。
-5. 重启 MCP，使现有连接池全部使用新密码。
-6. 执行 `SELECT 1 AS ok` 验证。
-
-不要在确认新密文可用前删除或禁用旧 KMS 密钥。如果需要轮换 KMS 主密钥，应先使用 KMS 重加密能力生成新密文，再更新 MCP 配置。
-
-### 9. 故障排查
-
-| Error or symptom | Check |
-| --- | --- |
-| `Huawei KMS endpoint is not configured` | 配置 `TAURUSDB_CLOUD_REGION` 或 `TAURUSDB_CLOUD_KMS_ENDPOINT` |
-| 无法解析 Project ID | 配置 `TAURUSDB_CLOUD_PROJECT_ID`，并确认与 KMS 密钥区域一致 |
-| KMS 返回 `401` | 检查 IAM Token、AK/SK，以及临时凭证的 Security Token |
-| KMS 返回 `403` | MCP 运行身份缺少目标密钥的解密权限 |
-| KMS 返回 `404` | 检查 region、Project ID、endpoint 和密文所属密钥 |
-| KMS 解密成功但数据库登录失败 | 检查数据库用户名、密码轮换状态、账号锁定和数据库权限 |
-| 密文文件读取失败 | 检查路径、文件权限和 MCP 运行用户 |
-| 修改密文后仍使用旧密码 | 重启 MCP，清理旧数据库连接池 |
-
-### 10. 安全边界
-
-- 数据库明文密码不会进入 Agent 对话或 MCP Tool 参数。
-- 密文文件只包含 `cipher_text`，不包含数据库明文密码。
-- KMS 解密后的密码会短暂存在于 MCP 进程内存，并被数据库驱动用于建立连接。
-- `begin_sql_login` 通过本机页面完成凭据验证；凭据不进入 Agent 对话或 MCP Tool 参数，不由 MCP 持久化保存。
-- 会话式数据库凭据空闲 30 分钟或绑定满 8 小时后自动清除，并关闭关联连接池。
-- 不要在日志、错误信息、审计记录或命令输出中打印明文密码、密文、AK/SK 或 IAM Token。
-- 推荐在客户 VPC 内运行 MCP，并通过私网和 TLS 访问 TaurusDB。
-- 推荐使用专用只读数据库账号、最小 IAM 权限和短期云凭证。
-
-## 连接与会话流程
-
-这里的关键点是：
-
-- `host / port` 来自当前选中的云实例
-- `user / password` 默认来自实例选择后返回的本机登录页面，只保存在 MCP 会话内存
-- `database` 可以来自模板，也可以来自 `set_default_database`
-- `engine` 默认按 `mysql` 处理，因为 TaurusDB for MySQL 走的是 MySQL 协议
-- `datasource` 默认使用 `taurus_mcp`
-
-### 连接方式
-
-在执行下面的推荐流程之前，先确认你的客户端是通过公网还是私网访问 TaurusDB。
-
-#### 方式 A：无同 VPC ECS
-
-如果本机不在和 TaurusDB 相同的 VPC 内，也没有可用的 ECS / VPN / 专线中转，通常需要通过数据库的读写公网地址访问实例。
-
-建议配置：
-
-- 为 TaurusDB 实例开通读写公网地址
-- 在实例对应的安全组里只放通当前公网出口 IP，例如
-  `<your-public-egress-ip>/32`
-- 优先只放通数据库端口 `3306`
-
-可以先在本机终端获取当前公网出口 IP：
-
-```bash
-curl ifconfig.me; echo
-```
-
-例如返回 `<your-public-egress-ip>`，对应安全组 CIDR 为
-`<your-public-egress-ip>/32`。不要把个人或办公网络的真实公网 IP 提交到仓库。
-
-下图展示了一个将本机公网 IP 加入安全组规则的示例：
-
-![TaurusDB 安全组放通本机公网 IP 的示例](image-1.png)
-
-说明：
-
-- 常见情况下，安全组重点是入方向规则；如果你的环境对出方向也做了限制，再补充对应的出方向规则
-- 本机公网 IP 变化后，需要同步更新安全组规则
-- 这种方式适合本地开发、临时调试或从办公室网络直连云上数据库
-
-#### 方式 B：使用同 VPC ECS
-
-如果你有和 TaurusDB 位于同一 VPC 内的 ECS，或已经通过 VPN / 专线打通到该私网，优先使用读写内网地址连接实例，不必依赖公网地址。
-
-这不是标准的本机交互式实例选择流程：`select_cloud_taurus_instance` 只绑定公网地址。
-私网部署应由管理员通过静态 datasource profile 显式配置内网 host，并在同 VPC 的运行
-环境中启动 MCP。
-
-建议配置：
-
-- 在 ECS 或已打通私网的运行环境中部署 Claude Code / MCP Server / 业务程序
-- 使用 TaurusDB 的读写内网地址，例如 `192.168.x.x:3306`
-- 在安全组里只放通 ECS 所在网段、ECS 安全组，或最小必要来源
-
-说明：
-
-- 这是更推荐的长期方案，安全性和稳定性通常都更好
-- 一般不需要为数据库额外购买读写公网地址
-- 适合生产环境、固定云上开发机和长期运行的自动化任务
-
-### 推荐流程
-
-完成上面的网络打通后，推荐的实际使用顺序：
-
-1. 在 Claude Code 里调用 `list_cloud_taurus_instances`
-2. 调用 `select_cloud_taurus_instance`
-3. 浏览器打开返回的 `login_url`，输入数据库账号密码并完成连接验证
-4. 调用 `list_databases`
-5. 调用 `set_default_database`
-6. 调用 `get_session_binding`
-7. 再调用 `execute_readonly_sql`，例如：
-
-```json
-{
-  "sql": "SELECT 1 AS ok"
-}
-```
-
-下图展示了按上述顺序执行后的实际调用效果：
-
-![Claude Code 中的 TaurusDB MCP 调用示例](image.png)
-
-### 会话绑定模型
-
-当前版本里，实例、数据库凭据和默认库都按会话维度绑定；账号密码通过本机页面提交，
-不要求写入 MCP 配置。
-
-相关 tool：
-
-- `select_cloud_taurus_instance`
-- `set_default_database`
-- `get_session_binding`
-
-其中：
-
-- `select_cloud_taurus_instance` 负责绑定实例地址
-- `select_cloud_taurus_instance` 在签发登录链接前执行一次不携带凭据的 TCP 端口预检
-- `select_cloud_taurus_instance` 同时签发一次性本机数据库登录链接
-- `set_default_database` 负责绑定默认库
-- `get_session_binding` 负责把当前绑定状态显式返回出来
-
-`select_cloud_taurus_instance` 除了设置当前会话的：
-
-- `project_id`
-- `instance_id`
-- `node_id`
-
-它现在会把当前实例的：
-
-- `public_ips[0]`
-- 以及 `port`
-
-绑定到当前 datasource 模板，然后重建 engine，避免连接池继续复用旧实例。标准交互式
-MCP 运行在客户本机，因此实例必须先开通读写公网地址；没有公网地址时选择工具会立即
-失败，不会回退到本机不可达的 VPC 私网地址并等待连接超时。
-
-如果公网地址存在但端口不可达，实例选择会在用户输入数据库密码之前返回
-`DB_ENDPOINT_UNREACHABLE`，并提示检查实例安全组入方向规则、当前公网出口 IP、网络
-ACL、VPN 和本机出口防火墙。端口明确拒绝连接时返回 `DB_CONNECTION_REFUSED`。
-
-数据库登录页面会直接显示账号、端点、TLS 和验证超时等结构化错误码及处理建议。
-这些可恢复错误不会再以 401/502/503/504 状态交给内嵌浏览器处理，因此客户不需要打开
-开发者工具才能看到失败原因。非法跨站请求仍会以 403 fail-closed。
-
-### DBA 友好模型
-
-这套模型更适合 DBA 统一兜底：
-
-- DBA 维护模板中的 `tls / datasource / engine`
-- 用户在会话里选择实例，通过返回的本机页面登录数据库，再选择数据库
-- MCP 自动把实例地址和默认库绑定到当前会话
-
-对于无人值守的静态部署，仍可由管理员预配数据库 secret 引用；交互式客户流程不需要
-在 MCP 客户端配置中写数据库用户名或密码。
-
-如果你需要覆盖默认值，仍然可以显式设置：
-
-- `TAURUSDB_SQL_ENGINE`
-- `TAURUSDB_SQL_DATASOURCE`
-- `TAURUSDB_DEFAULT_DATASOURCE`
+<details>
+<summary>完整的安全机制说明</summary>
+
+- INSERT、UPDATE、DELETE、DDL、DCL 和管理语句只会进入 SQL 建议（`analyze_mutation_sql`），
+  结果始终为 `not_executed`、`human_review_required`，必须由客户在 MCP 之外人工复核和执行。
+  本产品没有“开启通用写能力”的配置。
+- 查询绑定到当前选择的 datasource/database，跨库 SQL 会被阻断。
+- SQL 只能调用白名单内无副作用的内置函数；自定义函数、带库名限定的函数以及 `GET_LOCK`、
+  `SLEEP` 等会被阻断（`R010`）。`analyze_mutation_sql` 派生的 `COUNT`/`EXPLAIN` 同样受此约束，
+  被拒绝时在 `impact_analysis.evidence_gaps` 中说明原因。
+- 只读查询和查询语句的 `EXPLAIN` 在 `START TRANSACTION READ ONLY` 中执行，作为数据库侧兜底；
+  MySQL 不允许在只读事务中 `EXPLAIN` DML，因此 DML 的 `EXPLAIN` 在事务外执行，它不会执行 DML 本身。
+- 本机登录链接绑定签发时的实例、地址和区域；切换实例或区域、清除登录、重新签发都会让旧链接失效。
+- 回收站恢复是唯一受控例外：`restore_recycle_bin_table` 要求当前所选实例上存在未过期的本机登录会话
+  （静态配置账号返回 `SQL_SESSION_REQUIRED`），只把一个精确的回收站对象恢复到不存在的目标表；
+  恢复前固定审计目标，请求、完成、失败和未验证结果都记录同一实例、对象、目标库表和 SQL 哈希。
+  请求审计写入失败时不会开始恢复；执行后状态无法确认时返回 `RECOVERY_STATE_UNCERTAIN`，
+  请先核对数据库状态，不要盲目重试。当前仅支持原生恢复，不覆盖已有表。
+- 云 API 只允许 HTTPS 和华为云域名。
+- 查询受超时、并发、排队、行列数、字段长度、BLOB 和总返回字节数限制。
+
+单进程部署边界、集中审计接入和容量预算见 [客户部署与运行边界](docs/customer-deployment.md)。
+
+</details>
+
+---
 
 ## 常见问题
 
-### `list_cloud_taurus_instances` returns `INVALID_INPUT`
+<details>
+<summary><b>AI 说找不到 TaurusDB 工具 / MCP 没有启动</b></summary>
 
-如果你在 Claude Code 中看到类似错误：
+- 修改配置后需要**完全重启** AI 客户端（Claude Desktop 需要从菜单栏/托盘退出）。
+- 确认 `node -v` ≥ 20，并且 `npx -y taurusdb-mcp@1.0.0 --version` 能输出版本号。
+- **Windows** 上如果客户端无法启动 `npx`，把配置改为：
+
+  ```json
+  "command": "cmd",
+  "args": ["/c", "npx", "-y", "taurusdb-mcp@1.0.0"]
+  ```
+
+- Claude Code 可执行 `claude mcp get huaweicloud-taurusdb` 检查配置。
+
+</details>
+
+<details>
+<summary><b><code>list_cloud_taurus_instances</code> 返回 <code>INVALID_INPUT</code> 或提示未配置区域/凭证</b></summary>
 
 ![Missing env screenshot](docs/assets/readme/claude-mcp-missing-env.png)
 
-这通常说明当前 MCP 进程没有拿到：
+说明 MCP 进程没有拿到区域或凭证：
 
-- `TAURUSDB_CLOUD_REGION`
-- `TAURUSDB_CLOUD_ACCESS_KEY_ID`
-- `TAURUSDB_CLOUD_SECRET_ACCESS_KEY`
+- 检查 MCP 配置中是否有 `TAURUSDB_CLOUD_REGION` 和 `TAURUSDB_CLOUD_KEYCHAIN_SERVICE`。
+  在另一个终端执行 `export` **不会**传给 AI 客户端启动的 MCP 进程。
+- 确认步骤 4 的 `credentials check` 通过。
+- 修改配置后重启客户端。
 
-最常见原因不是变量没配，而是：
-
-- 你在外部 shell 里执行了 `export`，但 Claude Code 的 MCP 进程早已启动
-- 你修改了环境变量，但没有重启 Claude Code 会话
-- `claude mcp add` 时没有把 `-e` 写进 MCP 配置
-
-### 修复缺失的云配置
-
-先检查当前配置：
-
-```bash
-claude mcp get huaweicloud-taurusdb
-```
-
-如果 `env` 为空，直接重配：
-
-```bash
-claude mcp add "huaweicloud-taurusdb" \
-  --transport stdio \
-  -s local \
-  -e TAURUSDB_CLOUD_REGION=cn-east-3 \
-  -e TAURUSDB_CLOUD_ACCESS_KEY_ID=<your-ak> \
-  -e TAURUSDB_CLOUD_SECRET_ACCESS_KEY=<your-sk> \
-  -- npx -y taurusdb-mcp
-```
-
-如果是临时凭证，再补：
-
-```bash
--e TAURUSDB_CLOUD_SECURITY_TOKEN=<your-session-token>
-```
-
-重配后再次执行：
-
-```bash
-claude mcp get huaweicloud-taurusdb
-```
-
-如果能看到类似下面这样带 `env` 的配置，就说明 Claude Code 的 MCP 启动环境已经写对了：
+配置正确时，`claude mcp get huaweicloud-taurusdb` 能看到带 `env` 的配置：
 
 ![Configured env screenshot](docs/assets/readme/claude-mcp-env-configured.png)
 
-### `401 verify ak sk signature failed`
+</details>
 
-如果 `list_cloud_taurus_instances` 返回 `401`，通常说明：
+<details>
+<summary><b>返回 <code>401 verify ak sk signature failed</code></b></summary>
 
-- `AK/SK` 填错
-- 使用的是临时凭证但缺少 `TAURUSDB_CLOUD_SECURITY_TOKEN`
-- `AK/SK` 已禁用或已重置
+- AK/SK 输入错误、已禁用或已删除：重新执行 `credentials configure`。
+- 使用的是临时 AK/SK，但没有保存 Security Token：加 `--with-security-token` 重新配置。
 
-当前仓库已经修复了华为云 IAM 签名中的 canonical URI 尾斜杠问题。如果你仍然收到 `401`，优先检查凭证本身，而不是 `project_id`。
+</details>
+
+<details>
+<summary><b>选择实例时提示 <code>DB_ENDPOINT_UNREACHABLE</code> 或没有公网地址</b></summary>
+
+- 实例没有开通读写公网地址：先在控制台开通。
+- 安全组没有放通你当前的公网 IP，或 IP 已变化：重新执行 `curl ifconfig.me`，更新入方向规则（步骤 5）。
+- 公司网络、VPN 或本机防火墙拦截了出方向 3306 端口。
+- 提示 `DB_CONNECTION_REFUSED`：地址可达但端口拒绝，检查实例状态和端口号。
+
+</details>
+
+<details>
+<summary><b>登录页面显示“登录链接已失效”</b></summary>
+
+链接 5 分钟内有效、只能用一次；切换实例、切换区域或清除登录后，旧链接也会失效。
+回到对话说“重新生成数据库登录链接”（`begin_sql_login`）或重新选择实例即可。
+
+</details>
+
+<details>
+<summary><b>提示账号验证失败 / 尝试次数已用完</b></summary>
+
+- 检查数据库账号和密码（这里是**数据库**账号，不是华为云登录账号）。
+- 连续 3 次失败后链接失效，需要重新生成。
+- 页面上会显示具体错误码（如 `DB_AUTH_FAILED`、`DB_VALIDATION_TIMEOUT`）及处理建议。
+
+</details>
+
+<details>
+<summary><b>过一段时间后提示需要重新登录 / <code>SQL_SESSION_REQUIRED</code></b></summary>
+
+数据库登录在空闲 30 分钟或累计 8 小时后自动清除（安全设计）。重新选择实例并登录即可。
+回收站恢复必须使用本机页面登录的会话，静态配置的账号不能执行恢复。
+
+</details>
+
+<details>
+<summary><b>提示某个功能不支持（<code>UNSUPPORTED_FEATURE</code>）</b></summary>
+
+实例内核版本过低或对应特性未开启（例如回收站、闪回查询）。错误信息中会给出所需版本和需要开启的参数，
+请在 TaurusDB 控制台的参数设置中开启后再试。
+
+</details>
+
+<details>
+<summary><b>Linux 上 <code>credentials configure</code> 失败</b></summary>
+
+需要安装 `secret-tool` 并有可用的 Secret Service（桌面环境通常自带）：
+
+```bash
+sudo apt install libsecret-tools   # Debian / Ubuntu
+sudo dnf install libsecret         # Fedora / RHEL
+```
+
+无桌面的服务器环境，可改用容器 secret 注入等方式，见 [进阶配置](docs/advanced-configuration.md)。
+
+</details>
+
+---
+
+## 更多文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [进阶配置](docs/advanced-configuration.md) | 无人值守部署、DEW CSMS / KMS 托管数据库密码、私网连接、会话模型 |
+| [客户部署与运行边界](docs/customer-deployment.md) | 部署形态、最小权限、审计采集 |
+| [TaurusDB 云端验收](docs/cloud-taurusdb-testing.md) | 安装后验收步骤 |
+| [架构说明](docs/architecture.md) | 内部设计 |
+| [开发与发布](docs/development.md) | 从源码构建、测试与发布（维护者） |
+| [发布就绪门禁](docs/release-readiness.md) | 发布标准与流程 |
+| [更新日志](CHANGELOG.md) | 版本变更 |
+
+问题反馈与建议：[GitHub Issues](https://github.com/youweichen0208/taurus-mcp-server/issues)
+
+## License
+
+[MIT](LICENSE)
