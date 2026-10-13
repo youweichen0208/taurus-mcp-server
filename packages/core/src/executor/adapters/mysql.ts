@@ -19,10 +19,52 @@ function normalizeRows(value: unknown): QueryRows {
   return Array.isArray(value) ? (value as QueryRows) : [];
 }
 
+type FieldPacket = { name: string; columnType?: number };
+
+function isStatusPacket(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    "affectedRows" in value &&
+    "insertId" in value &&
+    ("serverStatus" in value || "warningStatus" in value)
+  );
+}
+
+/**
+ * mysql2 returns CALL results as `[resultSet..., statusPacket]` with matching
+ * nested field arrays. Exactly one result set is supported; any other shape is
+ * rejected rather than guessed at.
+ */
+function unwrapProcedureResult(
+  rows: unknown[],
+  fields: unknown,
+): { rows: unknown; fields: FieldPacket[] | undefined } {
+  const resultSetIndexes = rows.flatMap((entry, index) => (Array.isArray(entry) ? [index] : []));
+  const others = rows.filter((entry) => !Array.isArray(entry));
+  if (resultSetIndexes.length !== 1 || !others.every(isStatusPacket)) {
+    throw new Error(
+      `Unrecognized stored procedure result structure: expected one result set and a status packet, got ${resultSetIndexes.length} result set(s) and ${others.length} other item(s).`,
+    );
+  }
+  const index = resultSetIndexes[0];
+  const nestedFields = Array.isArray(fields) ? fields[index] : undefined;
+  return {
+    rows: rows[index],
+    fields: Array.isArray(nestedFields) ? (nestedFields as FieldPacket[]) : undefined,
+  };
+}
+
 function normalizeResult(
-  rows: unknown,
-  fields: Array<{ name: string; columnType?: number }> | undefined,
+  rawRows: unknown,
+  rawFields: FieldPacket[] | undefined,
 ): RawResult {
+  const isProcedureResult =
+    Array.isArray(rawRows) && rawRows.some((entry) => Array.isArray(entry) || isStatusPacket(entry));
+  const { rows, fields } = isProcedureResult
+    ? unwrapProcedureResult(rawRows as unknown[], rawFields)
+    : { rows: rawRows, fields: rawFields };
   const normalizedRows = normalizeRows(rows);
 
   if (Array.isArray(rows)) {
@@ -87,7 +129,7 @@ class MySqlDriverSession implements DriverSession {
       rowsAsArray: false,
     });
 
-    return normalizeResult(rows, fields as Array<{ name: string; columnType?: number }> | undefined);
+    return normalizeResult(rows, fields as FieldPacket[] | undefined);
   }
 
   async cancel(): Promise<void> {

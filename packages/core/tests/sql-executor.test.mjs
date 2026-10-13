@@ -30,12 +30,15 @@ function createDeferred() {
   return { promise, resolve, reject };
 }
 
-function makeMockConnectionPool(queryHandler, cancelHandler) {
+const READONLY_TRANSACTION_CONTROL = new Set(["START TRANSACTION READ ONLY", "COMMIT", "ROLLBACK"]);
+
+function makeMockConnectionPool(queryHandler, cancelHandler, transactionHandler) {
   const state = {
     acquires: [],
     releases: [],
     executions: [],
     cancels: [],
+    readonlyTransactions: [],
   };
 
   let sessionSeq = 0;
@@ -56,6 +59,13 @@ function makeMockConnectionPool(queryHandler, cancelHandler) {
         database: opts?.database,
         mode,
         async execute(sql, options) {
+          if (mode === "ro" && READONLY_TRANSACTION_CONTROL.has(sql)) {
+            state.readonlyTransactions.push({ sessionId, sql });
+            if (transactionHandler) {
+              return transactionHandler({ sessionId, sql });
+            }
+            return { rows: [] };
+          }
           state.executions.push({ sessionId, mode, sql, options });
           return queryHandler({ sessionId, mode, sql, options });
         },
@@ -411,4 +421,67 @@ test("sql executor getQueryStatus and cancelQuery handle missing ids", async () 
 
   const cancel = await executor.cancelQuery("qry_unknown");
   assert.equal(cancel.status, "not_found");
+});
+
+function plainExecutor(pool) {
+  return createSqlExecutor({ connectionPool: pool });
+}
+
+test("readonly queries run inside a READ ONLY transaction", async () => {
+  const { pool, state } = makeMockConnectionPool(() => ({ rows: [{ id: 1 }], rowCount: 1 }));
+  await plainExecutor(pool).executeReadonly("SELECT id FROM users LIMIT 1", makeContext());
+  assert.deepEqual(state.readonlyTransactions.map((entry) => entry.sql), ["START TRANSACTION READ ONLY", "COMMIT"]);
+  assert.deepEqual(state.releases, ["sess_1"]);
+});
+
+test("explain runs inside a READ ONLY transaction", async () => {
+  const { pool, state } = makeMockConnectionPool(() => ({ rows: [{ table: "users", type: "ALL", rows: 3 }], rowCount: 1 }));
+  await plainExecutor(pool).explain("SELECT id FROM users", makeContext());
+  assert.deepEqual(state.readonlyTransactions.map((entry) => entry.sql), ["START TRANSACTION READ ONLY", "COMMIT"]);
+  assert.equal(state.executions[0].sql, "EXPLAIN SELECT id FROM users");
+});
+
+test("a failed readonly query is rolled back and the session released", async () => {
+  const { pool, state } = makeMockConnectionPool(() => {
+    throw new Error("Cannot execute statement in a READ ONLY transaction.");
+  });
+  await assert.rejects(plainExecutor(pool).executeReadonly("SELECT id FROM users", makeContext()), /READ ONLY/);
+  assert.deepEqual(state.readonlyTransactions.map((entry) => entry.sql), ["START TRANSACTION READ ONLY", "ROLLBACK"]);
+  assert.deepEqual(state.cancels, []);
+  assert.deepEqual(state.releases, ["sess_1"]);
+});
+
+test("a readonly session whose rollback fails is destroyed instead of pooled", async () => {
+  const { pool, state } = makeMockConnectionPool(
+    () => { throw new Error("query failed"); },
+    undefined,
+    ({ sql }) => {
+      if (sql === "ROLLBACK") throw new Error("connection lost");
+      return { rows: [] };
+    },
+  );
+  await assert.rejects(plainExecutor(pool).executeReadonly("SELECT id FROM users", makeContext()), /query failed/);
+  assert.equal(state.cancels.length, 1);
+  assert.deepEqual(state.releases, ["sess_1"]);
+});
+
+test("fixed procedures bypass the transaction wrapper but only for known statements", async () => {
+  const { pool, state } = makeMockConnectionPool(() => ({
+    rows: [{ TABLE: "__innodb_1063" }],
+    rowCount: 1,
+    fields: [{ name: "TABLE" }],
+  }));
+  const executor = plainExecutor(pool);
+  const result = await executor.executeFixedProcedure("call dbms_recyclebin.show_tables()", makeContext());
+  assert.deepEqual(result.rows, [["__innodb_1063"]]);
+  assert.deepEqual(state.readonlyTransactions, []);
+  await assert.rejects(
+    executor.executeFixedProcedure("call dbms_recyclebin.restore_table('x')", makeContext()),
+    /fixed internal readonly procedures/,
+  );
+  await assert.rejects(
+    executor.executeFixedProcedure("call app.mutate()", makeContext()),
+    /fixed internal readonly procedures/,
+  );
+  assert.equal(state.executions.length, 1);
 });
