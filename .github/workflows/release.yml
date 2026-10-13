@@ -32,10 +32,24 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - name: Require the tag to point at a commit on main
+      - name: Require the tag to point at a commit on its release branch
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          git fetch origin main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          # v1.0.0, v1.0.1, and v1.0.0-rc.1 all belong to release/1.0.
+          if [[ ! "$RELEASE_TAG" =~ ^v([0-9]+)\.([0-9]+)\.[0-9]+(-.+)?$ ]]; then
+            echo "Tag $RELEASE_TAG is not a semantic version tag." >&2
+            exit 1
+          fi
+          branch="release/${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+          if ! git fetch origin "refs/heads/$branch:refs/remotes/origin/$branch"; then
+            echo "Release branch $branch does not exist." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" "origin/$branch"; then
+            echo "Tag $RELEASE_TAG does not point at a commit on $branch." >&2
+            exit 1
+          fi
       - run: npm ci
       - name: Verify release metadata
         id: meta
