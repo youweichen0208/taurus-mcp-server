@@ -485,3 +485,10 @@ test("fixed procedures bypass the transaction wrapper but only for known stateme
   );
   assert.equal(state.executions.length, 1);
 });
+
+test("explain of DML runs without a READ ONLY transaction, which MySQL would reject", async () => {
+  const { pool, state } = makeMockConnectionPool(() => ({ rows: [{ table: "users", type: "range", rows: 1 }], rowCount: 1 }));
+  await plainExecutor(pool).explain("UPDATE users SET name = 'x' WHERE id = 1", makeContext());
+  assert.deepEqual(state.readonlyTransactions, []);
+  assert.equal(state.executions[0].sql, "EXPLAIN UPDATE users SET name = 'x' WHERE id = 1");
+});

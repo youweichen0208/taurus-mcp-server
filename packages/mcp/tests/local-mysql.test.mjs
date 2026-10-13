@@ -1012,3 +1012,38 @@ localMysqlTest("installed acceptance command passes readonly, advice, and diagno
   assert.doesNotMatch(serialized, new RegExp(requiredEnv("TAURUSDB_TEST_MYSQL_USER")));
   assert.doesNotMatch(serialized, new RegExp(requiredEnv("TAURUSDB_TEST_MYSQL_HOST").replaceAll(".", "\\.")));
 });
+
+localMysqlTest("local mysql EXPLAIN of a mutation still returns a plan for an account allowed to explain DML", async () => {
+  await prepareDatabase();
+  const { createConfigFromEnv, createSqlProfileLoader, TaurusDBEngine } = await import("taurusdb-core");
+  const dir = await mkdtemp(path.join(os.tmpdir(), "taurusdb-explain-dml-"));
+  const profilesPath = path.join(dir, "profiles.json");
+  const mutation = mysqlConnectionConfig({ mutation: true });
+  await writeFile(profilesPath, JSON.stringify({
+    defaultDatasource: "explain_dml",
+    dataSources: {
+      explain_dml: {
+        engine: "mysql",
+        host: mutation.host,
+        port: mutation.port,
+        database: mutation.database,
+        user: { username: mutation.user, password: mutation.password },
+      },
+    },
+  }));
+  const config = createConfigFromEnv({
+    TAURUSDB_SQL_PROFILES: profilesPath,
+    TAURUSDB_DEFAULT_DATASOURCE: "explain_dml",
+    TAURUSDB_REQUIRE_TLS: "false",
+  });
+  const engine = await TaurusDBEngine.create({ config, profileLoader: createSqlProfileLoader({ config }) });
+  try {
+    const ctx = await engine.resolveContext({ datasource: "explain_dml", database: mutation.database, readonly: true }, "task_explain_dml");
+    const plan = await engine.explain("UPDATE orders SET status = 'cancelled' WHERE order_no = 'ORD-1002'", ctx);
+    assert.ok(plan.plan.length > 0);
+    const selectPlan = await engine.explain("SELECT id FROM orders WHERE order_no = 'ORD-1002'", ctx);
+    assert.ok(selectPlan.plan.length > 0);
+  } finally {
+    await engine.close();
+  }
+});

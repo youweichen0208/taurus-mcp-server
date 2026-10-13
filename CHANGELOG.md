@@ -50,8 +50,10 @@ First stable release of `taurusdb-core` and `taurusdb-mcp`.
 - `analyze_mutation_sql` runs its derived COUNT and EXPLAIN through the same
   guardrail and reports `impact_analysis.evidence_gaps` instead of executing
   unsafe predicates such as `GET_LOCK` or `SLEEP`.
-- Readonly queries and EXPLAIN run inside `START TRANSACTION READ ONLY`; a
-  session whose rollback fails is discarded instead of being pooled.
+- Readonly queries and EXPLAIN of queries run inside `START TRANSACTION READ
+  ONLY`; a session whose rollback fails is discarded instead of being pooled.
+  EXPLAIN of INSERT/UPDATE/DELETE runs outside the transaction because MySQL
+  rejects it there; it never executes the DML and remains function-restricted.
 
 ### Fixed
 

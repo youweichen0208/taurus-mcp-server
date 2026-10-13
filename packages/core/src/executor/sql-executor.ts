@@ -52,6 +52,8 @@ function isTimeoutError(error: unknown): boolean {
   );
 }
 
+const READ_QUERY_PATTERN = /^\s*(?:\(\s*)*(?:select|with|table|values)\b/i;
+
 /** Internal readonly procedures the executor may CALL outside the guardrail. */
 const FIXED_READONLY_PROCEDURES = new Set(["call dbms_recyclebin.show_tables()"]);
 
@@ -126,15 +128,24 @@ export class SqlExecutorImpl implements SqlExecutor {
     });
     const active = this.beginQuery(queryId, session, ctx, "ro", startedAt);
 
+    // MySQL rejects EXPLAIN of INSERT/UPDATE/DELETE inside a READ ONLY
+    // transaction (ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION). EXPLAIN never runs
+    // the DML itself, and functions it could evaluate are already restricted by
+    // the guardrail allowlist, so only query EXPLAINs get the transaction.
+    const readOnlyTransaction = READ_QUERY_PATTERN.test(sql);
     let inTransaction = false;
     try {
-      await session.execute("START TRANSACTION READ ONLY", { timeoutMs: ctx.limits.timeoutMs });
-      inTransaction = true;
+      if (readOnlyTransaction) {
+        await session.execute("START TRANSACTION READ ONLY", { timeoutMs: ctx.limits.timeoutMs });
+        inTransaction = true;
+      }
       const result = await session.execute(`EXPLAIN ${sql}`, {
         timeoutMs: ctx.limits.timeoutMs,
       });
-      await session.execute("COMMIT", { timeoutMs: ctx.limits.timeoutMs });
-      inTransaction = false;
+      if (inTransaction) {
+        await session.execute("COMMIT", { timeoutMs: ctx.limits.timeoutMs });
+        inTransaction = false;
+      }
       const plan = normalizeExplainRows(result);
       const riskSummary = summarizeExplainRows(plan);
       const recommendations = buildExplainRecommendations(riskSummary);

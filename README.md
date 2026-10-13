@@ -236,7 +236,9 @@ npx -y taurusdb-mcp init --client vscode
 - SQL 只能调用白名单内无副作用的内置函数；自定义函数、带库名限定的函数以及
   `GET_LOCK`、`SLEEP` 等会被阻断（`R010`），`analyze_mutation_sql` 派生的
   `COUNT`/`EXPLAIN` 同样适用，被拒绝时在 `impact_analysis.evidence_gaps` 中说明原因。
-- 只读查询和 `EXPLAIN` 在 `START TRANSACTION READ ONLY` 中执行，作为数据库侧兜底。
+- 只读查询和查询语句的 `EXPLAIN` 在 `START TRANSACTION READ ONLY` 中执行，作为数据库侧
+  兜底；MySQL 不允许在只读事务中 `EXPLAIN` DML，因此 DML 的 `EXPLAIN` 在事务外执行，
+  它不会执行 DML 本身，且同样受函数白名单约束。
 - 云 API 只允许 HTTPS 和华为云域名；私有 endpoint 必须由 operator
   在静态配置中显式列出。
 - 查询受超时、并发、有界队列、行列数、字段、BLOB 和总返回字节限制。
