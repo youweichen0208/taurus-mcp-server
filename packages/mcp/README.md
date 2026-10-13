@@ -10,7 +10,7 @@ TaurusDB MCP server for MCP clients such as:
 ## Install
 
 ```bash
-npm install taurusdb-mcp@latest
+npm install taurusdb-mcp@1.0.0
 ```
 
 Run directly with:
@@ -19,13 +19,19 @@ Run directly with:
 npx -y taurusdb-mcp --version
 ```
 
-Use this command in MCP client configs:
+Pin the version in MCP client configs so cached `latest` lookups cannot drift:
 
 ```json
 {
   "command": "npx",
-  "args": ["-y", "taurusdb-mcp"]
+  "args": ["-y", "taurusdb-mcp@1.0.0"]
 }
+```
+
+After installing, verify the package against your environment:
+
+```bash
+npx -y taurusdb-mcp@1.0.0 acceptance --report acceptance.json
 ```
 
 Configure Huawei Cloud identity through the operating-system credential store
@@ -89,11 +95,13 @@ npx taurusdb-mcp credentials check
 - Interactive clients do not need database usernames or passwords in MCP configuration
 - Unattended static deployments may use `env:`, `file:`, `hw-csms:`, `hw-kms:`, or `hw-kms-file:` password references
 - macOS Keychain, Linux Secret Service, or Windows Credential Manager cloud identity is enabled with `TAURUSDB_CLOUD_KEYCHAIN_SERVICE`
-- SQL TLS with certificate verification is required by default
+- SQL TLS is **off** by default (`TAURUSDB_REQUIRE_TLS=false`) for compatibility with dynamically selected public IPs; production deployments should set `TAURUSDB_REQUIRE_TLS=true` with a trusted CA and hostname verification
 - General database mutation tools do not exist; the Agent-facing operating plane remains read-only regardless of database account privileges
-- `restore_recycle_bin_table` is visible by default and directly restores one exact recycle-bin object to one explicit non-existing destination after readonly preflight; it uses the active in-memory SQL session, post-verifies the destination, and writes audit evidence without a browser approval step
+- `restore_recycle_bin_table` is visible by default and directly restores one exact recycle-bin object to one explicit non-existing destination after readonly preflight, without a browser approval step. It requires an unexpired local login session bound to the currently selected target (static profile credentials return `SQL_SESSION_REQUIRED`), records requested/completed/failed/unverified audit events against one immutable target, and returns `RECOVERY_STATE_UNCERTAIN` when post-execution state cannot be confirmed. Set `TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE=false` where independent approval is required
+- SQL may call only side-effect-free built-in functions; user-defined, schema-qualified, locking, and sleeping functions are blocked, and readonly queries and query EXPLAINs run inside a READ ONLY transaction
 - `analyze_mutation_sql` returns evidence-backed SQL Advice with `execution_status: not_executed`
-- Selecting a cloud instance returns a local SQL login link immediately; login validates the connection before binding credentials, allows at most three attempts per five-minute link, and never sends the password through Agent-visible tool arguments
+- Selecting a cloud instance returns a local SQL login link immediately; login validates the connection before binding credentials, allows at most three attempts per five-minute link, and never sends the password through Agent-visible tool arguments. Each link is bound to its target and is revoked when the instance or region changes, credentials are cleared, or a newer link is issued
+- `taurusdb-mcp acceptance` runs post-install checks over MCP stdio with redacted output; unconfigured or unexecuted checks are reported as pending
 - Interactive instance selection binds the read/write public IP and fails immediately when the instance has no public IP; it never falls back to a VPC-private address that a local MCP client cannot route to
 - Before issuing a login link, instance selection performs a credential-free TCP endpoint preflight and returns actionable security-group/network guidance when the public database port is unreachable
 - Login validation distinguishes unreachable endpoint, refused port, TLS, authentication, and database validation timeout failures instead of returning a generic HTTP 504

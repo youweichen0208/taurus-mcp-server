@@ -125,3 +125,34 @@ test("guardrail accepts a quoted hyphenated database only when it matches the bo
   assert.equal(blocked.action, "block");
   assert.ok(blocked.reasonCodes.includes("D002"));
 });
+
+test("guardrail blocks user-defined, schema-qualified, and locking functions anywhere in the statement", async () => {
+  const guardrail = createGuardrail();
+  const cases = [
+    ["execute_readonly_sql", "SELECT audit_writer(id) FROM orders LIMIT 1", /audit_writer/],
+    ["execute_readonly_sql", "SELECT id FROM orders WHERE id = demo.next_id() LIMIT 1", /demo\.next_id/],
+    ["execute_readonly_sql", "SELECT `demo`.`f`(1)", /demo\.f/],
+    ["execute_readonly_sql", "SELECT id FROM orders WHERE id IN (SELECT evil()) LIMIT 1", /evil/],
+    ["execute_readonly_sql", "SELECT COUNT(*) AS matched_row_count FROM orders WHERE id = GET_LOCK('x', 10)", /GET_LOCK/i],
+    ["execute_readonly_sql", "SELECT COUNT(*) FROM orders WHERE SLEEP(5) = 0", /SLEEP/i],
+    ["explain_sql", "SELECT id FROM orders WHERE id = mutate_state() LIMIT 1", /mutate_state/],
+    ["explain_sql", "UPDATE orders SET status = 'x' WHERE id = bump_counter()", /bump_counter/],
+  ];
+  for (const [toolName, sql, pattern] of cases) {
+    const decision = await guardrail.inspect({ toolName, sql, context: makeContext() });
+    assert.equal(decision.action, "block", sql);
+    assert.ok(decision.reasonCodes.includes("R010"), sql);
+    assert.match(decision.riskHints.join(" "), pattern, sql);
+  }
+});
+
+test("guardrail allows common side-effect-free built-in functions", async () => {
+  const guardrail = createGuardrail();
+  const decision = await guardrail.inspect({
+    toolName: "execute_readonly_sql",
+    sql: "SELECT COUNT(*), MAX(created_at), COALESCE(status, 'n'), DATE_FORMAT(NOW(), '%Y'), CAST(id AS CHAR), CURRENT_TIMESTAMP, ROW_NUMBER() OVER (ORDER BY id) FROM orders WHERE LOWER(status) = 'paid' LIMIT 10",
+    context: makeContext(),
+  });
+  assert.notEqual(decision.action, "block", decision.riskHints.join(" "));
+  assert.ok(!decision.reasonCodes.includes("R010"));
+});

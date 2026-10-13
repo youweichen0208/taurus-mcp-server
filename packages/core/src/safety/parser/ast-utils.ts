@@ -171,6 +171,44 @@ export function getFunctionName(value: unknown): string | undefined {
   return undefined;
 }
 
+function identifierValue(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (isObject(value) && typeof value.value === "string") {
+    return value.value;
+  }
+  return undefined;
+}
+
+/**
+ * Resolves the full name of a node-sql-parser function node, keeping the
+ * schema qualifier that getFunctionName() drops.
+ */
+export function getQualifiedFunctionName(
+  value: unknown,
+): { name: string; schema?: string } | undefined {
+  if (typeof value === "string") {
+    return { name: value };
+  }
+  if (!isObject(value)) {
+    return undefined;
+  }
+  const parts = Array.isArray(value.name)
+    ? value.name.map(identifierValue)
+    : [identifierValue(value.name)];
+  if (parts.length === 0 || parts.some((part) => part === undefined)) {
+    return undefined;
+  }
+  const names = parts as string[];
+  const schema = identifierValue(value.schema);
+  const name = names[names.length - 1];
+  const qualifier = [schema, ...names.slice(0, -1)].filter(
+    (part): part is string => typeof part === "string" && part.length > 0,
+  );
+  return qualifier.length > 0 ? { name, schema: qualifier.join(".") } : { name };
+}
+
 export function toParseError(error: unknown): ParseError {
   const typed = error as ParserErrorLike;
   const message = typed instanceof Error ? typed.message : String(error);

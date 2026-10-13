@@ -4,6 +4,77 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-13
+
+First stable release of `taurusdb-core` and `taurusdb-mcp`.
+
+### Release status
+
+- Local and CI acceptance is complete: type checks, unit tests on Node 20, 22,
+  and 24, a zero-skip MySQL 8.0 integration suite, a production dependency
+  audit with no findings, and installation of the packed tarballs outside the
+  workspace.
+- **Acceptance against a real TaurusDB instance is still pending.** It is run
+  after publication with `taurusdb-mcp acceptance` (see
+  `docs/cloud-taurusdb-testing.md`). Issues found there ship as patch releases.
+
+### Defaults to review before deployment
+
+- Database TLS is **off** by default (`TAURUSDB_REQUIRE_TLS=false`) for
+  compatibility with dynamically selected public IPs. Production deployments
+  should set `TAURUSDB_REQUIRE_TLS=true` with a trusted CA and hostname
+  verification.
+- `restore_recycle_bin_table` is **enabled** by default and restores directly,
+  without a separate approval step (ADR-0005). Deployments that require
+  independent approval must set `TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE=false`.
+
+### Security
+
+- Local login links are bound to the target (host, port, instance, region)
+  they were issued for and are re-validated under the session lock before
+  credentials are used. Switching instance or region, clearing credentials, or
+  issuing a newer link revokes outstanding links.
+- Login links are claimed before the request body is read and stay claimed
+  through failure backoff; connection failures are rate limited as well as
+  authentication failures.
+- `restore_recycle_bin_table` requires an unexpired in-memory login session
+  bound to the currently selected target and returns `SQL_SESSION_REQUIRED`
+  otherwise. Configured static credentials no longer authorize a restore.
+- Recovery audit records share one immutable target captured before execution
+  and now include requested, completed, failed, and unverified outcomes with
+  the recycle object and destination. A failed request audit stops the restore;
+  uncertain post-execution state returns `RECOVERY_STATE_UNCERTAIN`.
+- SQL may call only an allowlist of side-effect-free built-in functions.
+  User-defined, schema-qualified, and unresolved functions are blocked (`R010`)
+  in readonly queries, EXPLAIN, and Impact Preview.
+- `analyze_mutation_sql` runs its derived COUNT and EXPLAIN through the same
+  guardrail and reports `impact_analysis.evidence_gaps` instead of executing
+  unsafe predicates such as `GET_LOCK` or `SLEEP`.
+- Readonly queries and EXPLAIN of queries run inside `START TRANSACTION READ
+  ONLY`; a session whose rollback fails is discarded instead of being pooled.
+  EXPLAIN of INSERT/UPDATE/DELETE runs outside the transaction because MySQL
+  rejects it there; it never executes the DML and remains function-restricted.
+
+### Fixed
+
+- Stored procedure results returned by mysql2 as nested result sets are parsed
+  correctly. Recycle-bin preflight matches explicit object identifier columns
+  only and fails closed on unrecognized result shapes.
+- `npm ci` failed because the lockfile still referenced `taurusdb-core@0.5.0-rc.10`.
+
+### Added
+
+- `taurusdb-mcp acceptance` runs post-install checks over MCP stdio with
+  redacted output; unexecuted or unconfigured checks are reported as pending.
+- `taurusdb-mcp --help`.
+
+### Changed
+
+- Upgraded `mysql2` to 3.24.5 and `@modelcontextprotocol/sdk` to 1.32.1, and
+  resolved transitive advisories in `hono`, `proxy-addr`, `ip-address`, and `qs`.
+- Releases publish the exact verified tarballs with provenance, SHA-256 sums,
+  and a CycloneDX SBOM, and never overwrite an existing npm version.
+
 ## [0.5.0-rc.11] - 2026-07-21
 
 ### Fixed

@@ -349,7 +349,8 @@ localMysqlTest("local SQL login validates credentials before binding them", asyn
         password: "incorrect-password",
       }),
     });
-    assert.equal(invalid.status, 401);
+    assert.equal(invalid.status, 200);
+    assert.match(await invalid.text(), /DB_AUTH_FAILED/);
 
     const valid = await fetch(loginUrl, {
       method: "POST",
@@ -814,5 +815,235 @@ localMysqlTest("local mysql MCP diagnose_lock_contention captures a live blocker
       waiterA.end().catch(() => undefined),
       waiterB.end().catch(() => undefined),
     ]);
+  }
+});
+
+async function withEngine(run) {
+  const { createConfigFromEnv, createSqlProfileLoader, TaurusDBEngine } = await import("taurusdb-core");
+  const { profilesPath } = await createProfilesFile();
+  const config = createConfigFromEnv({
+    TAURUSDB_SQL_PROFILES: profilesPath,
+    TAURUSDB_DEFAULT_DATASOURCE: "local_mysql_e2e",
+    TAURUSDB_REQUIRE_TLS: "false",
+  });
+  const engine = await TaurusDBEngine.create({
+    config,
+    profileLoader: createSqlProfileLoader({ config }),
+  });
+  try {
+    const ctx = await engine.resolveContext(
+      { datasource: "local_mysql_e2e", database: requiredEnv("TAURUSDB_TEST_MYSQL_DATABASE"), readonly: true },
+      "task_local_mysql_engine",
+    );
+    return await run({ engine, ctx });
+  } finally {
+    await engine.close();
+  }
+}
+
+const readonlyUser = () => `'${requiredEnv("TAURUSDB_TEST_MYSQL_USER")}'@'%'`;
+
+async function prepareWritingFunctionFixture() {
+  const database = requiredEnv("TAURUSDB_TEST_MYSQL_DATABASE");
+  await withBootstrapConnection(async (connection) => {
+    await connection.query("DROP TABLE IF EXISTS mcp_function_writes");
+    await connection.query("CREATE TABLE mcp_function_writes (id BIGINT PRIMARY KEY AUTO_INCREMENT, note VARCHAR(64) NOT NULL)");
+    await connection.query("DROP FUNCTION IF EXISTS mcp_write_probe");
+    // SQL SECURITY DEFINER: the function writes with root's privileges even when
+    // the readonly account calls it, which is exactly the bypass under test.
+    await connection.query(`
+      CREATE FUNCTION mcp_write_probe() RETURNS INT
+      DETERMINISTIC MODIFIES SQL DATA SQL SECURITY DEFINER
+      BEGIN
+        INSERT INTO mcp_function_writes (note) VALUES ('written');
+        RETURN 1;
+      END
+    `);
+    await connection.query(`GRANT EXECUTE ON FUNCTION ${database}.mcp_write_probe TO ${readonlyUser()}`);
+  }, { database });
+}
+
+async function countFunctionWrites() {
+  return withBootstrapConnection(async (connection) => {
+    const [rows] = await connection.query("SELECT COUNT(*) AS n FROM mcp_function_writes");
+    return Number(rows[0].n);
+  }, { database: requiredEnv("TAURUSDB_TEST_MYSQL_DATABASE") });
+}
+
+localMysqlTest("local mysql guardrail blocks a writing stored function in every readonly entry point", async () => {
+  await prepareDatabase();
+  await prepareWritingFunctionFixture();
+  await withClient(async ({ client }) => {
+    const readonly = await client.callTool({
+      name: "execute_readonly_sql",
+      arguments: { sql: "SELECT mcp_write_probe() AS written" },
+    });
+    assert.equal(readonly.isError, true);
+    assert.equal(readonly.structuredContent.error.code, "BLOCKED_SQL");
+
+    const explain = await client.callTool({
+      name: "explain_sql",
+      arguments: { sql: "SELECT id FROM orders WHERE id = mcp_write_probe()" },
+    });
+    assert.equal(explain.isError, true);
+
+    const advice = await client.callTool({
+      name: "analyze_mutation_sql",
+      arguments: { sql: "DELETE FROM orders WHERE id = mcp_write_probe()" },
+    });
+    assert.equal(advice.isError, false);
+    assert.equal(advice.structuredContent.data.impact_analysis.matched_row_count, null);
+    assert.ok(advice.structuredContent.data.impact_analysis.evidence_gaps.length > 0);
+
+    const lockAdvice = await client.callTool({
+      name: "analyze_mutation_sql",
+      arguments: { sql: "DELETE FROM orders WHERE id = GET_LOCK('mcp_probe', 0)" },
+    });
+    assert.equal(lockAdvice.structuredContent.data.impact_analysis.matched_row_count, null);
+  }, { skipPrepareDatabase: true });
+  assert.equal(await countFunctionWrites(), 0);
+});
+
+localMysqlTest("local mysql READ ONLY transaction stops a writing function that reaches the executor", async () => {
+  await prepareDatabase();
+  await prepareWritingFunctionFixture();
+  await withEngine(async ({ engine, ctx }) => {
+    await assert.rejects(
+      engine.executeReadonly("SELECT mcp_write_probe() AS written", ctx),
+      /READ ONLY transaction/i,
+    );
+    // The connection must still be usable (rolled back, not left mid-transaction).
+    const after = await engine.executeReadonly("SELECT 1 AS ok", ctx);
+    assert.equal(Number(after.rows[0][0]), 1);
+  });
+  assert.equal(await countFunctionWrites(), 0);
+});
+
+localMysqlTest("local mysql fixed procedure path parses a real CALL result set", async () => {
+  await prepareDatabase();
+  await withBootstrapConnection(async (connection) => {
+    await connection.query("CREATE DATABASE IF NOT EXISTS dbms_recyclebin");
+    await connection.query("DROP PROCEDURE IF EXISTS dbms_recyclebin.show_tables");
+    await connection.query(`
+      CREATE PROCEDURE dbms_recyclebin.show_tables()
+      READS SQL DATA SQL SECURITY DEFINER
+      SELECT '__recyclebin__' AS \`SCHEMA\`, '__innodb_1063' AS \`TABLE\`,
+             'taurus_mcp_test' AS ORIGIN_SCHEMA, 'orders' AS ORIGIN_TABLE
+      UNION ALL
+      SELECT '__recyclebin__', '__innodb_1064', 'taurus_mcp_test', 'payments'
+    `);
+    await connection.query(`GRANT EXECUTE ON PROCEDURE dbms_recyclebin.show_tables TO ${readonlyUser()}`);
+  });
+  try {
+    await withEngine(async ({ engine, ctx }) => {
+      const result = await engine.executor.executeFixedProcedure("call dbms_recyclebin.show_tables()", ctx);
+      assert.deepEqual(result.columns.map((column) => column.name), ["SCHEMA", "TABLE", "ORIGIN_SCHEMA", "ORIGIN_TABLE"]);
+      assert.deepEqual(result.rows, [
+        ["__recyclebin__", "__innodb_1063", "taurus_mcp_test", "orders"],
+        ["__recyclebin__", "__innodb_1064", "taurus_mcp_test", "payments"],
+      ]);
+      assert.equal(result.rowCount, 2);
+    });
+  } finally {
+    await withBootstrapConnection((connection) => connection.query("DROP DATABASE IF EXISTS dbms_recyclebin"));
+  }
+});
+
+localMysqlTest("local SQL login link is revoked when credentials are cleared", async () => {
+  await withClient(async ({ client }) => {
+    const issued = await client.callTool({
+      name: "begin_sql_login",
+      arguments: { datasource: "local_mysql_e2e" },
+    });
+    const loginUrl = issued.structuredContent.data.login_url;
+    const cleared = await client.callTool({
+      name: "clear_sql_credentials",
+      arguments: { datasource: "local_mysql_e2e" },
+    });
+    assert.equal(cleared.isError, false);
+    const response = await fetch(loginUrl, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        username: requiredEnv("TAURUSDB_TEST_MYSQL_USER"),
+        password: requiredEnv("TAURUSDB_TEST_MYSQL_PASSWORD"),
+      }),
+    });
+    assert.match(await response.text(), /Login link expired/i);
+  }, {
+    env: { TAURUSDB_ENABLE_DYNAMIC_TARGETS: "true" },
+  });
+});
+
+localMysqlTest("installed acceptance command passes readonly, advice, and diagnostics on real MySQL", async () => {
+  await prepareDatabase();
+  const { profilesPath } = await createProfilesFile();
+  const reportDir = await mkdtemp(path.join(os.tmpdir(), "taurusdb-acceptance-mysql-"));
+  const reportPath = path.join(reportDir, "report.json");
+  const { execFile } = await import("node:child_process");
+  const exitCode = await new Promise((resolve) => {
+    execFile(process.execPath, [
+      serverEntrypoint,
+      "acceptance",
+      "--database", requiredEnv("TAURUSDB_TEST_MYSQL_DATABASE"),
+      "--advice-sql", "UPDATE orders SET status = 'cancelled' WHERE order_no = 'ORD-1002'",
+      "--advice-snapshot-sql", "SELECT status FROM orders WHERE order_no = 'ORD-1002' LIMIT 1",
+      "--report", reportPath,
+    ], {
+      env: {
+        ...process.env,
+        TAURUSDB_SQL_PROFILES: profilesPath,
+        TAURUSDB_DEFAULT_DATASOURCE: "local_mysql_e2e",
+        TAURUSDB_REQUIRE_TLS: "false",
+        TAURUSDB_MCP_LOG_LEVEL: "error",
+        TAURUSDB_MCP_AUDIT_LOG_PATH: path.join(reportDir, "audit.jsonl"),
+      },
+    }, (error) => resolve(error ? error.code : 0));
+  });
+  const report = JSON.parse(await readFile(reportPath, "utf8"));
+  const status = Object.fromEntries(report.checks.map((check) => [check.name, check.status]));
+  assert.equal(status["Readonly query"], "pass");
+  assert.equal(status["SQL Advice does not write"], "pass");
+  assert.equal(status["Diagnostics"], "pass");
+  assert.equal(status["Recycle-bin recovery"], "pending");
+  assert.equal(report.outcome, "incomplete");
+  assert.equal(exitCode, 3);
+  const serialized = JSON.stringify(report);
+  assert.doesNotMatch(serialized, new RegExp(requiredEnv("TAURUSDB_TEST_MYSQL_USER")));
+  assert.doesNotMatch(serialized, new RegExp(requiredEnv("TAURUSDB_TEST_MYSQL_HOST").replaceAll(".", "\\.")));
+});
+
+localMysqlTest("local mysql EXPLAIN of a mutation still returns a plan for an account allowed to explain DML", async () => {
+  await prepareDatabase();
+  const { createConfigFromEnv, createSqlProfileLoader, TaurusDBEngine } = await import("taurusdb-core");
+  const dir = await mkdtemp(path.join(os.tmpdir(), "taurusdb-explain-dml-"));
+  const profilesPath = path.join(dir, "profiles.json");
+  const mutation = mysqlConnectionConfig({ mutation: true });
+  await writeFile(profilesPath, JSON.stringify({
+    defaultDatasource: "explain_dml",
+    dataSources: {
+      explain_dml: {
+        engine: "mysql",
+        host: mutation.host,
+        port: mutation.port,
+        database: mutation.database,
+        user: { username: mutation.user, password: mutation.password },
+      },
+    },
+  }));
+  const config = createConfigFromEnv({
+    TAURUSDB_SQL_PROFILES: profilesPath,
+    TAURUSDB_DEFAULT_DATASOURCE: "explain_dml",
+    TAURUSDB_REQUIRE_TLS: "false",
+  });
+  const engine = await TaurusDBEngine.create({ config, profileLoader: createSqlProfileLoader({ config }) });
+  try {
+    const ctx = await engine.resolveContext({ datasource: "explain_dml", database: mutation.database, readonly: true }, "task_explain_dml");
+    const plan = await engine.explain("UPDATE orders SET status = 'cancelled' WHERE order_no = 'ORD-1002'", ctx);
+    assert.ok(plan.plan.length > 0);
+    const selectPlan = await engine.explain("SELECT id FROM orders WHERE order_no = 'ORD-1002'", ctx);
+    assert.ok(selectPlan.plan.length > 0);
+  } finally {
+    await engine.close();
   }
 });

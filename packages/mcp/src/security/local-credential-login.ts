@@ -25,10 +25,19 @@ export type SqlLoginTarget = {
   credentialMaxTtlMinutes?: number;
 };
 
+export type SqlLoginBindContext = {
+  /**
+   * True while this login link is still unexpired and has not been revoked.
+   * Callers must re-check it after acquiring their session lock and before
+   * sending the submitted credential anywhere.
+   */
+  isActive: () => boolean;
+};
+
 export type SqlLoginRequest = {
   datasource: string;
   target?: SqlLoginTarget;
-  bind: (credentials: SqlLoginCredentials) => Promise<void>;
+  bind: (credentials: SqlLoginCredentials, context: SqlLoginBindContext) => Promise<void>;
 };
 
 export type IssuedSqlLogin = {
@@ -42,7 +51,8 @@ export type CredentialValidationFailure =
   | "refused"
   | "connectivity"
   | "tls"
-  | "timeout";
+  | "timeout"
+  | "stale";
 
 export class SqlCredentialValidationError extends Error {
   readonly kind: CredentialValidationFailure;
@@ -56,6 +66,8 @@ export class SqlCredentialValidationError extends Error {
 
 export interface CredentialLoginService {
   issueSqlLogin(request: SqlLoginRequest): Promise<IssuedSqlLogin>;
+  /** Invalidate outstanding login links for one datasource, or for all datasources. */
+  revoke(datasource?: string): void;
   close(): Promise<void>;
 }
 
@@ -69,8 +81,12 @@ export type LocalCredentialLoginServiceOptions = {
 type PendingSqlLogin = SqlLoginRequest & {
   expiresAtMs: number;
   failedAttempts: number;
+  failures: number;
   inFlight: boolean;
+  revoked: boolean;
 };
+
+const MAX_BACKOFF_EXPONENT = 4;
 
 type Locale = "zh-CN" | "en";
 type PageState = "form" | "success" | "expired" | "locked" | "method" | "invalid";
@@ -104,6 +120,7 @@ const COPY = {
     tls: "TLS 安全连接验证失败，请联系管理员检查证书配置。",
     timeout: "数据库端口已连接，但验证未在限定时间内完成。请检查实例负载、连接数和数据库状态。",
     busy: "连接正在验证，请勿重复提交。",
+    stale: "连接目标已变更或登录已被清除，此链接已失效。请返回 MCP 会话重新生成登录链接。",
     successTitle: "账号验证成功",
     successMessage: "您现在可以返回 MCP 会话并选择需要访问的数据库。",
     expiredTitle: "登录链接已失效",
@@ -143,6 +160,7 @@ const COPY = {
     tls: "The TLS connection could not be validated. Ask an administrator to check the certificate configuration.",
     timeout: "The database port connected, but validation did not finish in time. Check instance load, connection capacity, and database status.",
     busy: "Connection validation is already in progress. Do not submit again.",
+    stale: "The connection target changed or the login was cleared, so this link is no longer valid. Return to your MCP session and create a new login link.",
     successTitle: "Account validated",
     successMessage: "Return to your MCP session and select the database you want to access.",
     expiredTitle: "Login link expired",
@@ -382,6 +400,7 @@ function validationErrorCode(kind: CredentialValidationFailure): string {
     case "refused": return "DB_CONNECTION_REFUSED";
     case "tls": return "DB_TLS_FAILED";
     case "timeout": return "DB_VALIDATION_TIMEOUT";
+    case "stale": return "LOGIN_LINK_REVOKED";
     default: return "DB_CONNECTION_FAILED";
   }
 }
@@ -406,15 +425,31 @@ export class LocalCredentialLoginService implements CredentialLoginService {
     await this.ensureStarted();
     const token = randomBytes(32).toString("base64url");
     const expiresAtMs = this.now() + this.tokenTtlMs;
-    this.pending.set(token, { ...request, expiresAtMs, failedAttempts: 0, inFlight: false });
+    this.pending.set(token, {
+      ...request,
+      expiresAtMs,
+      failedAttempts: 0,
+      failures: 0,
+      inFlight: false,
+      revoked: false,
+    });
     return {
       loginUrl: `http://127.0.0.1:${this.port}/sql-login/${token}`,
       expiresAt: new Date(expiresAtMs).toISOString(),
     };
   }
 
+  revoke(datasource?: string): void {
+    for (const [token, pending] of this.pending) {
+      if (datasource === undefined || pending.datasource === datasource) {
+        pending.revoked = true;
+        this.pending.delete(token);
+      }
+    }
+  }
+
   async close(): Promise<void> {
-    this.pending.clear();
+    this.revoke();
     const server = this.server;
     this.server = undefined;
     this.port = undefined;
@@ -424,6 +459,14 @@ export class LocalCredentialLoginService implements CredentialLoginService {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
+  }
+
+  private isActive(token: string, pending: PendingSqlLogin): boolean {
+    return (
+      !pending.revoked &&
+      this.pending.get(token) === pending &&
+      pending.expiresAtMs > this.now()
+    );
   }
 
   private async ensureStarted(): Promise<void> {
@@ -494,50 +537,91 @@ export class LocalCredentialLoginService implements CredentialLoginService {
         return;
       }
 
-      const form = new URLSearchParams(await readBody(req));
-      const username = form.get("username")?.trim() ?? "";
-      const password = form.get("password") ?? "";
-      if (!username || !password) {
-        respond(res, 200, page({
-          locale,
-          state: "form",
-          target: pending.target,
-          message: COPY[locale].required,
-          username,
-          remainingAttempts: this.maxAttempts - pending.failedAttempts,
-        }));
-        return;
-      }
-
+      // Claim the link before awaiting anything so concurrent submissions cannot
+      // both reach credential validation.
+      pending.inFlight = true;
       try {
-        pending.inFlight = true;
-        await pending.bind({ datasource: pending.datasource, username, password });
-      } catch (error) {
-        pending.inFlight = false;
-        const kind = error instanceof SqlCredentialValidationError ? error.kind : "connectivity";
-        if (kind === "credentials") {
-          pending.failedAttempts += 1;
-          await delay(this.failureDelayMs * 2 ** (pending.failedAttempts - 1));
+        const form = new URLSearchParams(await readBody(req));
+        if (!this.isActive(token, pending)) {
+          this.pending.delete(token);
+          respond(res, 200, page({
+            locale,
+            state: "expired",
+            target: pending.target,
+            message: pending.revoked ? COPY[locale].stale : undefined,
+          }));
+          return;
+        }
+        const username = form.get("username")?.trim() ?? "";
+        const password = form.get("password") ?? "";
+        if (!username || !password) {
+          respond(res, 200, page({
+            locale,
+            state: "form",
+            target: pending.target,
+            message: COPY[locale].required,
+            username,
+            remainingAttempts: this.maxAttempts - pending.failedAttempts,
+          }));
+          return;
+        }
+
+        try {
+          await pending.bind(
+            { datasource: pending.datasource, username, password },
+            { isActive: () => this.isActive(token, pending) },
+          );
+        } catch (error) {
+          const kind = error instanceof SqlCredentialValidationError ? error.kind : "connectivity";
+          if (kind === "stale") {
+            pending.revoked = true;
+            this.pending.delete(token);
+            respond(res, 200, page({
+              locale,
+              state: "expired",
+              target: pending.target,
+              message: COPY[locale].stale,
+            }));
+            return;
+          }
+          pending.failures += 1;
+          if (kind === "credentials") {
+            pending.failedAttempts += 1;
+          }
+          // Keep the link claimed while backing off so failures of any kind are
+          // rate limited, not only authentication failures.
+          await delay(
+            this.failureDelayMs * 2 ** Math.min(pending.failures - 1, MAX_BACKOFF_EXPONENT),
+          );
           if (pending.failedAttempts >= this.maxAttempts) {
             this.pending.delete(token);
             respond(res, 200, page({ locale, state: "locked", target: pending.target }));
             return;
           }
+          if (!this.isActive(token, pending)) {
+            this.pending.delete(token);
+            respond(res, 200, page({ locale, state: "expired", target: pending.target }));
+            return;
+          }
+          respond(res, 200, page({
+            locale,
+            state: "form",
+            target: pending.target,
+            message: COPY[locale][kind],
+            errorCode: validationErrorCode(kind),
+            username,
+            remainingAttempts: this.maxAttempts - pending.failedAttempts,
+          }));
+          return;
         }
-        respond(res, 200, page({
-          locale,
-          state: "form",
-          target: pending.target,
-          message: COPY[locale][kind],
-          errorCode: validationErrorCode(kind),
-          username,
-          remainingAttempts: this.maxAttempts - pending.failedAttempts,
-        }));
-        return;
-      }
 
-      this.pending.delete(token);
-      respond(res, 200, page({ locale, state: "success", target: pending.target }));
+        this.pending.delete(token);
+        respond(res, 200, page({ locale, state: "success", target: pending.target }));
+      } finally {
+        // Consumed and revoked links are already removed from the map, so this
+        // only re-opens a link that remains eligible for another attempt.
+        pending.inFlight = false;
+      }
     } catch {
       respond(res, 400, page({ locale, state: "invalid" }));
     }

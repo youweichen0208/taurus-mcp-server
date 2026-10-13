@@ -80,6 +80,15 @@ export interface SqlExecutor {
     ctx: SessionContext,
     opts?: ReadonlyOptions,
   ): Promise<QueryResult>;
+  /**
+   * Runs one of a fixed set of internal TaurusDB readonly procedures. CALL
+   * cannot be wrapped in the guardrail, so only exact, known statements pass.
+   */
+  executeFixedProcedure(
+    sql: string,
+    ctx: SessionContext,
+    opts?: ReadonlyOptions,
+  ): Promise<QueryResult>;
   executeMutation(
     sql: string,
     ctx: SessionContext,

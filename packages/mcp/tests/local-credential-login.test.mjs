@@ -323,3 +323,174 @@ test("target values are escaped before rendering", async () => {
     await service.close();
   }
 });
+
+function startSlowSubmit(url, fields) {
+  const body = new URLSearchParams(fields).toString();
+  let finish;
+  const response = new Promise((resolve, reject) => {
+    const req = request(url, {
+      method: "POST",
+      headers: {
+        "content-length": Buffer.byteLength(body),
+        "content-type": "application/x-www-form-urlencoded",
+      },
+    }, (res) => {
+      let text = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => { text += chunk; });
+      res.once("end", () => resolve({ status: res.statusCode, text }));
+    });
+    req.once("error", reject);
+    req.write(body.slice(0, 5));
+    finish = () => req.end(body.slice(5));
+  });
+  return { response, finish: () => finish() };
+}
+
+async function waitFor(predicate) {
+  for (let i = 0; i < 100 && !predicate(); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+test("a login link is claimed before its request body is read", async () => {
+  const bindings = [];
+  const service = createService();
+  try {
+    const issued = await service.issueSqlLogin({
+      datasource: "taurus_mcp",
+      bind: async (credentials) => bindings.push(credentials),
+    });
+    const slow = startSlowSubmit(issued.loginUrl, { username: "first", password: "pwd" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const duplicate = await submit(issued.loginUrl, { username: "second", password: "pwd" });
+    assert.match(await duplicate.text(), /already in progress/i);
+    slow.finish();
+    const first = await slow.response;
+    assert.match(first.text, /Account validated/);
+    assert.deepEqual(bindings.map((binding) => binding.username), ["first"]);
+    const replay = await submit(issued.loginUrl, { username: "third", password: "pwd" });
+    assert.match(await replay.text(), /Login link expired/i);
+    assert.equal(bindings.length, 1);
+  } finally {
+    await service.close();
+  }
+});
+
+test("a login link revoked while its body is uploading never binds credentials", async () => {
+  const bindings = [];
+  const service = createService();
+  try {
+    const issued = await service.issueSqlLogin({
+      datasource: "taurus_mcp",
+      bind: async (credentials) => bindings.push(credentials),
+    });
+    const slow = startSlowSubmit(issued.loginUrl, { username: "db_user", password: "pwd" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    service.revoke("taurus_mcp");
+    slow.finish();
+    const result = await slow.response;
+    assert.match(result.text, /Login link expired/i);
+    assert.match(result.text, /connection target changed/i);
+    assert.equal(bindings.length, 0);
+  } finally {
+    await service.close();
+  }
+});
+
+test("a login link that expires while its body is uploading never binds credentials", async () => {
+  let now = 1_000;
+  const bindings = [];
+  const service = createService({ now: () => now, tokenTtlMs: 1_000 });
+  try {
+    const issued = await service.issueSqlLogin({
+      datasource: "taurus_mcp",
+      bind: async (credentials) => bindings.push(credentials),
+    });
+    const slow = startSlowSubmit(issued.loginUrl, { username: "db_user", password: "pwd" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    now += 5_000;
+    slow.finish();
+    assert.match((await slow.response).text, /Login link expired/i);
+    assert.equal(bindings.length, 0);
+  } finally {
+    await service.close();
+  }
+});
+
+test("revoking one datasource leaves other login links usable", async () => {
+  const service = createService();
+  try {
+    const a = await service.issueSqlLogin({ datasource: "a", bind: async () => {} });
+    const b = await service.issueSqlLogin({ datasource: "b", bind: async () => {} });
+    service.revoke("a");
+    assert.match(await (await fetch(a.loginUrl)).text(), /Login link expired/i);
+    assert.match(await (await fetch(b.loginUrl)).text(), /Connect to database/);
+  } finally {
+    await service.close();
+  }
+});
+
+test("a stale bind result invalidates the link and explains why", async () => {
+  const service = createService();
+  try {
+    const issued = await service.issueSqlLogin({
+      datasource: "taurus_mcp",
+      bind: async () => { throw new SqlCredentialValidationError("stale"); },
+    });
+    const response = await submit(issued.loginUrl, { username: "db_user", password: "pwd" });
+    assert.match(await response.text(), /connection target changed/i);
+    assert.match(await (await fetch(issued.loginUrl)).text(), /Login link expired/i);
+  } finally {
+    await service.close();
+  }
+});
+
+test("bind receives a liveness check that reflects revocation", async () => {
+  let link;
+  let release;
+  const service = createService();
+  try {
+    const issued = await service.issueSqlLogin({
+      datasource: "taurus_mcp",
+      bind: async (_credentials, context) => {
+        link = context;
+        await new Promise((resolve) => { release = resolve; });
+        if (!context.isActive()) throw new SqlCredentialValidationError("stale");
+      },
+    });
+    const pending = submit(issued.loginUrl, { username: "db_user", password: "pwd" });
+    await waitFor(() => link !== undefined);
+    assert.equal(link.isActive(), true);
+    service.revoke();
+    assert.equal(link.isActive(), false);
+    release();
+    assert.match(await (await pending).text(), /connection target changed/i);
+  } finally {
+    await service.close();
+  }
+});
+
+test("connection failures are rate limited while the link stays claimed", async () => {
+  let calls = 0;
+  const service = createService({ failureDelayMs: 150 });
+  try {
+    const issued = await service.issueSqlLogin({
+      datasource: "taurus_mcp",
+      bind: async () => {
+        calls += 1;
+        throw new SqlCredentialValidationError("unreachable");
+      },
+    });
+    const startedAt = Date.now();
+    const first = submit(issued.loginUrl, { username: "db_user", password: "pwd" });
+    await waitFor(() => calls === 1);
+    const duringBackoff = await submit(issued.loginUrl, { username: "db_user", password: "pwd" });
+    assert.match(await duringBackoff.text(), /already in progress/i);
+    assert.match(await (await first).text(), /DB_ENDPOINT_UNREACHABLE/);
+    assert.ok(Date.now() - startedAt >= 140);
+    assert.equal(calls, 1);
+  } finally {
+    await service.close();
+  }
+});

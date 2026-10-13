@@ -153,6 +153,7 @@ export const setCloudRegionTool: ToolDefinition = {
         clearCloudSelection(nextConfig, deps);
       });
       deps.credentialSessions?.clearAll();
+      deps.credentialLogin.revoke();
 
       return formatSuccess(
         {
@@ -298,6 +299,7 @@ export const clearSqlCredentialsTool: ToolDefinition = {
         deps.profileLoader.clearRuntimeUser(datasource);
       });
       deps.credentialSessions?.clear(datasource);
+      deps.credentialLogin.revoke(datasource);
 
       return formatSuccess(
         {
@@ -432,6 +434,7 @@ export const selectCloudTaurusInstanceTool: ToolDefinition = {
         );
       }
       await deps.endpointPreflight?.(selectedHost, selectedPort);
+      deps.credentialLogin.revoke(boundDatasource);
       await updateSessionState(deps, (nextConfig) => {
         nextConfig.cloud.projectId = projectId;
         nextConfig.cloud.instanceId = matched.id;

@@ -530,7 +530,7 @@ export async function listRecycleBin(
       );
     }
 
-    return engine.executor.executeReadonly(buildListRecycleBinSql(), ctx, recycleBinReadonlyOptions(opts));
+    return engine.executor.executeFixedProcedure(buildListRecycleBinSql(), ctx, recycleBinReadonlyOptions(opts));
   }
 
 export async function restoreRecycleBinTable(

@@ -21,18 +21,27 @@ npx -y taurusdb-mcp --version
 也可以先安装到项目里：
 
 ```bash
-npm install taurusdb-mcp@latest
+npm install taurusdb-mcp@1.0.0
 npx taurusdb-mcp --version
 ```
 
-MCP 客户端里的启动命令统一使用：
+MCP 客户端里的启动命令建议固定版本，避免 `latest` 缓存造成版本不一致：
 
 ```json
 {
   "command": "npx",
-  "args": ["-y", "taurusdb-mcp"]
+  "args": ["-y", "taurusdb-mcp@1.0.0"]
 }
 ```
+
+安装后可以用同一套环境变量运行验收检查（详见
+[真实 TaurusDB 验收](docs/cloud-taurusdb-testing.md)）：
+
+```bash
+npx -y taurusdb-mcp@1.0.0 acceptance --report acceptance.json
+```
+
+未配置或未执行的检查会标记为 `pending`，不会计为通过。
 
 生产环境推荐先通过安全输入把华为云身份保存到操作系统凭据库：
 
@@ -152,7 +161,7 @@ npx -y taurusdb-mcp init --client vscode
 
 ## 可用工具
 
-当前 `0.5.0-rc.10` 默认注册只读、发现、实例选择、本机登录、能力探测、诊断以及精确
+当前 `1.0.0` 默认注册只读、发现、实例选择、本机登录、能力探测、诊断以及精确
 目标绑定的回收站恢复 tool。Agent 工具面仍不存在通用写入能力。
 
 ### 通用工具
@@ -224,6 +233,12 @@ npx -y taurusdb-mcp init --client vscode
 - 如需回收站恢复，为同一个会话登录账号授予 TaurusDB 原生恢复所需权限；不需要在
   MCP 配置中增加 recovery 用户名、密码或审批密钥文件。
 - datasource/database 会绑定到实际连接池，跨数据库 SQL 会被阻断。
+- SQL 只能调用白名单内无副作用的内置函数；自定义函数、带库名限定的函数以及
+  `GET_LOCK`、`SLEEP` 等会被阻断（`R010`），`analyze_mutation_sql` 派生的
+  `COUNT`/`EXPLAIN` 同样适用，被拒绝时在 `impact_analysis.evidence_gaps` 中说明原因。
+- 只读查询和查询语句的 `EXPLAIN` 在 `START TRANSACTION READ ONLY` 中执行，作为数据库侧
+  兜底；MySQL 不允许在只读事务中 `EXPLAIN` DML，因此 DML 的 `EXPLAIN` 在事务外执行，
+  它不会执行 DML 本身，且同样受函数白名单约束。
 - 云 API 只允许 HTTPS 和华为云域名；私有 endpoint 必须由 operator
   在静态配置中显式列出。
 - 查询受超时、并发、有界队列、行列数、字段、BLOB 和总返回字节限制。
@@ -247,9 +262,14 @@ TAURUSDB_SQL_CREDENTIAL_IDLE_TTL_MINUTES=30
 TAURUSDB_SQL_CREDENTIAL_MAX_TTL_MINUTES=480
 ```
 
-`restore_recycle_bin_table` 默认注册。它使用当前内存会话凭据，先检查精确回收站对象
-存在且目标表不存在，再执行原生恢复并通过只读元数据验证结果。无需审批链接、浏览器
-Cookie、第二组恢复账号或审批密钥。请求、目标、SQL hash、成功或失败会进入审计日志。
+`restore_recycle_bin_table` 默认注册。它要求存在未过期、且绑定到当前所选目标
+（主机、端口、实例、区域）的本机登录会话；静态配置的数据库账号不能执行恢复，缺少会话
+时返回 `SQL_SESSION_REQUIRED`。预检确认精确回收站对象存在且目标表不存在后，执行原生
+恢复并通过只读元数据验证结果。无需审批链接、浏览器 Cookie、第二组恢复账号或审批密钥。
+执行前会固定审计目标，请求、完成、失败和未验证结果都记录同一实例、回收站对象、目标
+库表和 SQL hash；请求审计写入失败时不会开始恢复，执行后状态无法确认时返回
+`RECOVERY_STATE_UNCERTAIN`，请先核对数据库状态，不要盲目重试。需要独立审批的部署应设置
+`TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE=false`。
 当前仅支持原生
 `native_restore`，不支持 `insert_select` 或覆盖现有表。
 
@@ -261,8 +281,8 @@ Cookie、第二组恢复账号或审批密钥。请求、目标、SQL hash、成
 应复制经过人工复核的 `advised_sql`，在其受控数据库变更流程中自行执行；MCP 不参与
 执行或授权。回收站恢复仅按上述精确对象受控例外处理。
 
-正式发版前必须完成 [release readiness](docs/release-readiness.md) 中的自动化
-门禁和真实 TaurusDB release-candidate 验证。
+发版标准见 [release readiness](docs/release-readiness.md)。`1.0.0` 已完成本地与 CI
+验收；真实 TaurusDB 验收在发布后执行，结果以补丁版本跟进。
 
 支持的单会话部署边界、集中审计接入和容量预算见
 [客户部署与运行边界](docs/customer-deployment.md)。

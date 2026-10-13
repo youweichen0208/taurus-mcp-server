@@ -1,4 +1,5 @@
 import type { SqlClassification } from "./sql-classifier.js";
+import { findUnsafeFunctions } from "./function-policy.js";
 
 export type RiskLevel = "low" | "medium" | "high" | "blocked";
 export type ValidationAction = "allow" | "confirm" | "block";
@@ -203,6 +204,15 @@ export function validateStaticRules(cls: SqlClassification): ValidationResult {
 
   if (cls.statementType === "insert") {
     escalateToConfirm("R006", "INSERT, REPLACE, and UPSERT statements require confirmation.");
+  }
+
+  const unsafeFunctions = findUnsafeFunctions(cls.referencedFunctions ?? []);
+  if (unsafeFunctions.length > 0) {
+    const names = [...new Set(unsafeFunctions.map((violation) => violation.function))];
+    escalateToBlock(
+      "R010",
+      `Functions outside the safe built-in allowlist are blocked because they may lock, wait, or write: ${names.join(", ")}.`,
+    );
   }
 
   if (cls.statementType === "select") {

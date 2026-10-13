@@ -34,6 +34,11 @@ export interface AuditEvent {
   outcome: "success" | "error";
   error_code?: string;
   duration_ms: number;
+  recovery?: {
+    recycle_table: string;
+    destination_database: string;
+    destination_table: string;
+  };
 }
 
 export interface AuditWriter {

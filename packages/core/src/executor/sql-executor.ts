@@ -52,6 +52,27 @@ function isTimeoutError(error: unknown): boolean {
   );
 }
 
+const READ_QUERY_PATTERN = /^\s*(?:\(\s*)*(?:select|with|table|values)\b/i;
+
+/** Internal readonly procedures the executor may CALL outside the guardrail. */
+const FIXED_READONLY_PROCEDURES = new Set(["call dbms_recyclebin.show_tables()"]);
+
+/**
+ * Ends a READ ONLY transaction after a failure. If the rollback itself fails the
+ * connection state is unknown, so it is destroyed instead of being pooled.
+ */
+async function abortReadonlyTransaction(session: Session, timeoutMs: number | undefined): Promise<void> {
+  try {
+    await session.execute("ROLLBACK", { timeoutMs });
+  } catch {
+    try {
+      await session.cancel();
+    } catch {
+      // The session is released by the caller either way.
+    }
+  }
+}
+
 async function cancelTimedOutSession(
   session: Session,
   error: unknown,
@@ -107,10 +128,24 @@ export class SqlExecutorImpl implements SqlExecutor {
     });
     const active = this.beginQuery(queryId, session, ctx, "ro", startedAt);
 
+    // MySQL rejects EXPLAIN of INSERT/UPDATE/DELETE inside a READ ONLY
+    // transaction (ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION). EXPLAIN never runs
+    // the DML itself, and functions it could evaluate are already restricted by
+    // the guardrail allowlist, so only query EXPLAINs get the transaction.
+    const readOnlyTransaction = READ_QUERY_PATTERN.test(sql);
+    let inTransaction = false;
     try {
+      if (readOnlyTransaction) {
+        await session.execute("START TRANSACTION READ ONLY", { timeoutMs: ctx.limits.timeoutMs });
+        inTransaction = true;
+      }
       const result = await session.execute(`EXPLAIN ${sql}`, {
         timeoutMs: ctx.limits.timeoutMs,
       });
+      if (inTransaction) {
+        await session.execute("COMMIT", { timeoutMs: ctx.limits.timeoutMs });
+        inTransaction = false;
+      }
       const plan = normalizeExplainRows(result);
       const riskSummary = summarizeExplainRows(plan);
       const recommendations = buildExplainRecommendations(riskSummary);
@@ -125,7 +160,11 @@ export class SqlExecutorImpl implements SqlExecutor {
         durationMs,
       };
     } catch (error) {
-      await cancelTimedOutSession(session, error);
+      if (isTimeoutError(error)) {
+        await cancelTimedOutSession(session, error);
+      } else if (inTransaction) {
+        await abortReadonlyTransaction(session, ctx.limits.timeoutMs);
+      }
       const durationMs = this.now() - startedAt;
       this.completeQuery(
         active.queryId,
@@ -144,6 +183,26 @@ export class SqlExecutorImpl implements SqlExecutor {
     ctx: SessionContext,
     opts: ReadonlyOptions = {},
   ): Promise<QueryResult> {
+    return this.runReadonly(sql, ctx, opts, true);
+  }
+
+  async executeFixedProcedure(
+    sql: string,
+    ctx: SessionContext,
+    opts: ReadonlyOptions = {},
+  ): Promise<QueryResult> {
+    if (!FIXED_READONLY_PROCEDURES.has(sql.trim().toLowerCase())) {
+      throw new Error("Only fixed internal readonly procedures may be called.");
+    }
+    return this.runReadonly(sql.trim(), ctx, opts, false);
+  }
+
+  private async runReadonly(
+    sql: string,
+    ctx: SessionContext,
+    opts: ReadonlyOptions,
+    readOnlyTransaction: boolean,
+  ): Promise<QueryResult> {
     const queryId = this.queryIdGenerator();
     const startedAt = this.now();
     const maxRows = opts.maxRows ?? ctx.limits.maxRows;
@@ -158,9 +217,18 @@ export class SqlExecutorImpl implements SqlExecutor {
     });
     const active = this.beginQuery(queryId, session, ctx, "ro", startedAt);
 
+    let inTransaction = false;
     try {
       const executionSql = buildServerBoundedReadonlySql(sql, maxRows);
+      if (readOnlyTransaction) {
+        await session.execute("START TRANSACTION READ ONLY", { timeoutMs });
+        inTransaction = true;
+      }
       const result = await session.execute(executionSql, { timeoutMs });
+      if (inTransaction) {
+        await session.execute("COMMIT", { timeoutMs });
+        inTransaction = false;
+      }
       const sourceRows = Array.isArray(result.rows) ? result.rows : [];
       const columns = inferColumns(result, sourceRows);
       const normalizedRows = normalizeRows(sourceRows, columns);
@@ -203,7 +271,11 @@ export class SqlExecutorImpl implements SqlExecutor {
         durationMs,
       };
     } catch (error) {
-      await cancelTimedOutSession(session, error);
+      if (isTimeoutError(error)) {
+        await cancelTimedOutSession(session, error);
+      } else if (inTransaction) {
+        await abortReadonlyTransaction(session, timeoutMs);
+      }
       const durationMs = this.now() - startedAt;
       this.completeQuery(
         active.queryId,
@@ -403,6 +475,8 @@ export function createSqlExecutor(options: SqlExecutorOptions): SqlExecutor {
     explain: (sql, ctx) => limiter.run(() => executor.explain(sql, ctx)),
     executeReadonly: (sql, ctx, opts) =>
       limiter.run(() => executor.executeReadonly(sql, ctx, opts)),
+    executeFixedProcedure: (sql, ctx, opts) =>
+      limiter.run(() => executor.executeFixedProcedure(sql, ctx, opts)),
     executeMutation: (sql, ctx, opts) =>
       limiter.run(() => executor.executeMutation(sql, ctx, opts)),
     getQueryStatus: (queryId) => executor.getQueryStatus(queryId),
