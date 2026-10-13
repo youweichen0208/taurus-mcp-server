@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createConfigFromEnv, FlashbackNoViewError, UnsupportedFeatureError } from "taurusdb-core";
+import { createConfigFromEnv, createGuardrail, FlashbackNoViewError, UnsupportedFeatureError } from "taurusdb-core";
 import { ErrorCode } from "../dist/utils/formatter.js";
 import {
   analyzeMutationSqlTool,
@@ -1933,6 +1933,92 @@ test("analyze_mutation_sql returns readonly evidence and never executes the muta
   assert.equal(result.data.impact_analysis.matched_row_count, 2);
   assert.match(readonlySql, /^SELECT COUNT\(\*\).*WHERE id IN \(1, 2\)$/);
   assert.equal(mutationCalls, 0);
+});
+
+function realGuardrailDeps(overrides = {}) {
+  const calls = { readonly: [], explain: [] };
+  const guardrail = createGuardrail();
+  const deps = createDeps({
+    inspectSql: (input) => guardrail.inspect(input),
+    describeTable: async () => ({
+      database: "app",
+      table: "orders",
+      columns: [{ name: "id", dataType: "int", nullable: false }, { name: "status", dataType: "varchar", nullable: true }],
+      indexes: [],
+    }),
+    executeReadonly: async (sql) => {
+      calls.readonly.push(sql);
+      return { queryId: "q", columns: [{ name: "matched_row_count" }], rows: [[1]], rowCount: 1, truncated: false, durationMs: 1 };
+    },
+    explain: async (sql) => {
+      calls.explain.push(sql);
+      return { queryId: "e", plan: [], riskSummary: { fullTableScanLikely: false, riskHints: [] }, recommendations: [], durationMs: 1 };
+    },
+    ...overrides,
+  });
+  return { deps, calls };
+}
+
+test("analyze_mutation_sql never runs a derived COUNT containing locking or sleeping functions", async () => {
+  for (const predicate of ["id = GET_LOCK('x', 10)", "SLEEP(3) = 0"]) {
+    const { deps, calls } = realGuardrailDeps();
+    const result = await analyzeMutationSqlTool.handler(
+      { database: "app", sql: `DELETE FROM orders WHERE ${predicate}` },
+      deps,
+      context,
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.data.execution_status, "not_executed");
+    assert.equal(result.data.impact_analysis.matched_row_count, null);
+    assert.deepEqual(calls.readonly, [], predicate);
+    assert.deepEqual(calls.explain, [], predicate);
+    assert.ok(result.data.impact_analysis.evidence_gaps.length > 0, predicate);
+    assert.equal(result.data.advised_sql, null);
+  }
+});
+
+test("analyze_mutation_sql withholds evidence for mutations that call stored or qualified functions", async () => {
+  for (const sql of [
+    "UPDATE orders SET status = 'x' WHERE id = next_order_id()",
+    "DELETE FROM orders WHERE id = app.next_order_id()",
+    "UPDATE orders SET status = audit_log(id) WHERE id = 1",
+  ]) {
+    const { deps, calls } = realGuardrailDeps();
+    const result = await analyzeMutationSqlTool.handler({ database: "app", sql }, deps, context);
+    assert.equal(result.ok, true, sql);
+    assert.deepEqual(calls.readonly, [], sql);
+    assert.deepEqual(calls.explain, [], sql);
+    assert.equal(result.data.advised_sql, null, sql);
+    assert.match(result.data.impact_analysis.evidence_gaps[0].reason, /allowlist/, sql);
+    assert.ok(result.data.impact_analysis.evidence_gaps[0].reason_codes.includes("R010"), sql);
+  }
+});
+
+test("analyze_mutation_sql still collects evidence for safe built-in predicates", async () => {
+  const { deps, calls } = realGuardrailDeps();
+  const result = await analyzeMutationSqlTool.handler(
+    { database: "app", sql: "UPDATE orders SET status = 'x' WHERE LOWER(status) = 'paid'" },
+    deps,
+    context,
+  );
+  assert.equal(result.ok, true);
+  assert.equal(calls.explain.length, 1);
+  assert.equal(calls.readonly.length, 1);
+  assert.match(calls.readonly[0], /^SELECT COUNT\(\*\) AS matched_row_count FROM orders WHERE LOWER\(status\) = 'paid'$/);
+  assert.equal(result.data.impact_analysis.matched_row_count, 1);
+  assert.deepEqual(result.data.impact_analysis.evidence_gaps, []);
+});
+
+test("execute_readonly_sql blocks stored functions before execution", async () => {
+  const { deps, calls } = realGuardrailDeps();
+  const result = await executeReadonlySqlTool.handler(
+    { database: "app", sql: "SELECT write_audit(id) FROM orders LIMIT 1" },
+    deps,
+    context,
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, ErrorCode.BLOCKED_SQL);
+  assert.deepEqual(calls.readonly, []);
 });
 
 test("analyze_mutation_sql refuses copy-ready advice for unbounded updates", async () => {

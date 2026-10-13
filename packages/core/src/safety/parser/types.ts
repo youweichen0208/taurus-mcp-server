@@ -54,8 +54,15 @@ export interface GroupByNode {
   raw: unknown;
 }
 
+/** A function invocation found anywhere in the statement, including subqueries. */
+export interface FunctionRef {
+  name: string;
+  schema?: string;
+}
+
 export interface SqlAst {
   kind: StatementType;
+  functions: FunctionRef[];
   tables: TableRef[];
   columns: ColumnRef[];
   where?: WhereNode;

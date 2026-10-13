@@ -44,6 +44,7 @@ export class NodeSqlParserAdapter implements SqlParser {
 
       const ast: SqlAst = {
         kind: statementKind,
+        functions: scan.functions,
         tables: normalizeTableList(tableList),
         columns: normalizeColumnList(columnList),
         hasAggregate: scan.hasAggregate,

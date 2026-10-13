@@ -20,6 +20,12 @@ function blockedReason(decision: GuardrailDecision): string {
   return decision.riskHints[0] ?? "The SQL statement is blocked by safety policy.";
 }
 
+function policyReason(decision: GuardrailDecision): string {
+  return decision.riskHints.length > 0
+    ? decision.riskHints.join(" ")
+    : "The SQL statement is blocked by safety policy.";
+}
+
 async function inspectSql(
   toolName: "execute_readonly_sql" | "explain_sql",
   sql: string,
@@ -332,6 +338,7 @@ export const analyzeMutationSqlTool: ToolDefinition = {
       let advisedSql: string | null = null;
       let matchedRowCount: number | string | null = null;
       let fullScanLikely: boolean | null = null;
+      const evidenceGaps: Array<{ evidence: string; reason: string; reason_codes: string[] }> = [];
 
       if (!parsed.ok || parsed.isMultiStatement) {
         riskFindings.push(parsed.ok ? "Multiple statements are not eligible for copy-ready advice." : `SQL could not be parsed safely: ${parsed.error.message}`);
@@ -391,7 +398,17 @@ export const analyzeMutationSqlTool: ToolDefinition = {
         }
         if (adviceEligible) advisedSql = normalized.normalizedSql;
 
-        if (["insert", "update", "delete"].includes(ast.kind) && !unsafeUnbounded && !scopeViolation) {
+        // EXPLAIN can evaluate functions during optimization, so the mutation
+        // must pass the same guardrail as a user-submitted EXPLAIN first.
+        const explainDecision = ["insert", "update", "delete"].includes(ast.kind) && !unsafeUnbounded && !scopeViolation
+          ? await inspectSql("explain_sql", normalized.normalizedSql, ctx, deps)
+          : undefined;
+        if (explainDecision?.action === "block") {
+          adviceEligible = false;
+          advisedSql = null;
+          riskFindings.push(`Readonly evidence was withheld by safety policy: ${policyReason(explainDecision)}`);
+          evidenceGaps.push({ evidence: "explain", reason: policyReason(explainDecision), reason_codes: explainDecision.reasonCodes });
+        } else if (explainDecision) {
           try {
             const plan = await deps.engine.explain(normalized.normalizedSql, ctx);
             fullScanLikely = plan.riskSummary.fullTableScanLikely;
@@ -402,14 +419,27 @@ export const analyzeMutationSqlTool: ToolDefinition = {
           }
         }
 
-        const countSql = scopeViolation ? undefined : buildImpactCountSql(normalized.normalizedSql, ast);
-        if (countSql) {
+        const countSql = scopeViolation || explainDecision?.action === "block"
+          ? undefined
+          : buildImpactCountSql(normalized.normalizedSql, ast);
+        const countDecision = countSql
+          ? await inspectSql("execute_readonly_sql", countSql, ctx, deps)
+          : undefined;
+        if (countSql && countDecision && countDecision.action !== "allow") {
+          const reason = countDecision.action === "block"
+            ? policyReason(countDecision)
+            : "The derived COUNT would require additional approval.";
+          assumptions.push(`Matched-row count was not run because the derived readonly COUNT did not pass safety checks: ${reason}`);
+          evidenceGaps.push({ evidence: "matched_row_count", reason, reason_codes: countDecision.reasonCodes });
+        } else if (countSql && countDecision) {
           try {
             const count = await deps.engine.executeReadonly(countSql, ctx, { timeoutMs: ctx.limits.timeoutMs, maxRows: 1, maxColumns: 1, maxResultBytes: 1024 });
             matchedRowCount = readMatchedRowCount(count.rows) ?? null;
           } catch (error) {
             assumptions.push(`Matched-row count could not be verified: ${error instanceof Error ? error.message : String(error)}`);
           }
+        } else if (explainDecision?.action === "block") {
+          assumptions.push("Matched-row count was not run because the mutation did not pass readonly evidence safety checks.");
         } else if (ast.kind === "update" || ast.kind === "delete") {
           assumptions.push("Matched-row count was not run because a safe single-table readonly COUNT could not be derived.");
         }
@@ -426,7 +456,12 @@ export const analyzeMutationSqlTool: ToolDefinition = {
         risk_findings: riskFindings,
         assumptions,
         unverified_business_rules: unverifiedBusinessRules,
-        impact_analysis: { matched_row_count: matchedRowCount, sample_rows_read: false, full_scan_likely: fullScanLikely },
+        impact_analysis: {
+          matched_row_count: matchedRowCount,
+          sample_rows_read: false,
+          full_scan_likely: fullScanLikely,
+          evidence_gaps: evidenceGaps,
+        },
         human_review_required: true,
       }, {
         summary: "SQL Advice generated from readonly evidence. The mutation was not executed.",

@@ -12,6 +12,7 @@ export interface SqlClassification {
   referencedTables: string[];
   referencedSchemas: string[];
   referencedColumns: string[];
+  referencedFunctions: Array<{ name: string; schema?: string }>;
   hasWhere: boolean;
   hasLimit: boolean;
   hasJoin: boolean;
@@ -70,6 +71,7 @@ export function classifySql(
       ast.tables.flatMap((table) => (table.schema ? [table.schema] : [])),
     ),
     referencedColumns: extractColumns(ast),
+    referencedFunctions: (ast.functions ?? []).map((fn) => ({ ...fn })),
     hasWhere: ast.where !== undefined,
     hasLimit: ast.limit !== undefined,
     hasJoin: (ast.joins?.length ?? 0) > 0,

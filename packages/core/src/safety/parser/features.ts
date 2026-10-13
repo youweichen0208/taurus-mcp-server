@@ -1,5 +1,5 @@
-import type { AstNode, GroupByNode, JoinNode, LimitNode, OrderByNode, WhereNode } from "./types.js";
-import { getFunctionName, isObject, toLimitNode, toWhereNode } from "./ast-utils.js";
+import type { AstNode, FunctionRef, GroupByNode, JoinNode, LimitNode, OrderByNode, WhereNode } from "./types.js";
+import { getFunctionName, getQualifiedFunctionName, isObject, toLimitNode, toWhereNode } from "./ast-utils.js";
 
 const AGGREGATE_FUNCTIONS = new Set([
   "COUNT",
@@ -13,9 +13,14 @@ const AGGREGATE_FUNCTIONS = new Set([
   "ARRAY_AGG",
 ]);
 
-export function scanAst(statements: AstNode[]): { hasAggregate: boolean; hasSubquery: boolean } {
+export function scanAst(statements: AstNode[]): {
+  hasAggregate: boolean;
+  hasSubquery: boolean;
+  functions: FunctionRef[];
+} {
   let hasAggregate = false;
   let hasSubquery = false;
+  const functions: FunctionRef[] = [];
 
   const visit = (
     node: unknown,
@@ -36,11 +41,15 @@ export function scanAst(statements: AstNode[]): { hasAggregate: boolean; hasSubq
     const nodeType = typeof node.type === "string" ? node.type.toLowerCase() : undefined;
     if (nodeType === "aggr_func") {
       hasAggregate = true;
+      const fn = getFunctionName(node.name);
+      // An unresolvable name is recorded so the safety check fails closed.
+      functions.push({ name: fn ?? "" });
     } else if (nodeType === "function") {
       const fn = getFunctionName(node.name);
       if (fn && AGGREGATE_FUNCTIONS.has(fn.toUpperCase())) {
         hasAggregate = true;
       }
+      functions.push(getQualifiedFunctionName(node.name) ?? { name: "" });
     }
 
     if (nodeType === "select" && !isTopLevelStatement) {
@@ -60,7 +69,7 @@ export function scanAst(statements: AstNode[]): { hasAggregate: boolean; hasSubq
     visit(statement, true);
   }
 
-  return { hasAggregate, hasSubquery };
+  return { hasAggregate, hasSubquery, functions };
 }
 
 export function collectStructuredFeatures(statements: AstNode[]): {
