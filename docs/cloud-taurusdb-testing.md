@@ -55,9 +55,22 @@ taurusdb-mcp acceptance \
 | MCP ping | 成功 |
 | 云实例选择与本机登录 | 超时前完成浏览器登录 |
 | 只读查询 | `SELECT 1` 成功 |
-| SQL Advice 不写库 | `not_executed` 且快照前后一致 |
+| SQL Advice 不写库 | `analyze_mutation_sql` 返回 `execution_status: not_executed` 和 `human_review_required: true`，且快照前后一致（记录未变化） |
 | 诊断 | `get_kernel_info`、`list_taurus_features`、`find_top_slow_sql`、`diagnose_db_hotspot` 均返回结构化结果 |
 | 回收站恢复 | 仅在显式指定可丢弃对象时执行，见下文 |
+
+## 手工补充：SQL Advice 边界
+
+验收命令之外，在 MCP 客户端中再确认：
+
+1. 对测试表的有界 UPDATE 调用 `analyze_mutation_sql`，记录 schema、EXPLAIN 和匹配
+   行数证据；确认 `execution_status: not_executed`、`human_review_required: true`，
+   再次只读查询并证明记录未变化。
+2. 对无 WHERE UPDATE、DROP、GRANT 和多语句输入验证 `advised_sql` 为空并返回风险。
+3. 对含 `GET_LOCK`、`SLEEP` 或自定义函数的 WHERE 条件，确认 `matched_row_count` 为
+   `null`，`impact_analysis.evidence_gaps` 说明原因，且没有执行派生 `COUNT`。
+4. 验证 stdout/stderr、审计日志和 Agent 可见结果均不含凭据。
+5. 按 [规模验证](./scale-validation.md) 执行并发、队列、大结果与审计轮转门禁。
 
 ## 可选：回收站恢复验收
 
