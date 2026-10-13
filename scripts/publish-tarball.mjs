@@ -10,12 +10,17 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 
-const [tarball, distTag] = process.argv.slice(2);
-if (!tarball || !distTag) {
+const [tarballArg, distTag] = process.argv.slice(2);
+if (!tarballArg || !distTag) {
   console.error("Usage: node scripts/publish-tarball.mjs <package.tgz> <dist-tag>");
   process.exit(2);
 }
+
+// npm treats a bare relative spec such as "release/pkg.tgz" as GitHub
+// shorthand (owner/repo) and tries to clone it, so always pass an absolute path.
+const tarball = path.resolve(tarballArg);
 
 const manifest = JSON.parse(
   execFileSync("tar", ["-xOzf", tarball, "package/package.json"], { encoding: "utf8" }),
