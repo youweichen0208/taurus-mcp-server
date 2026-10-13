@@ -33,6 +33,7 @@ import {
   clearSqlCredentialsTool,
   getSessionBindingTool,
   selectCloudTaurusInstanceTool,
+  setCloudRegionTool,
   setDefaultDatabaseTool,
 } from "../dist/tools/taurus/cloud-context.js";
 import { beginSqlLoginTool } from "../dist/tools/taurus/sql-login.js";
@@ -41,6 +42,32 @@ import {
   listRecycleBinTool,
   restoreRecycleBinTableTool,
 } from "../dist/tools/taurus/recycle-bin.js";
+
+const ACTIVE_LINK = { isActive: () => true };
+
+function activateRecoverySession(deps, overrides = {}) {
+  deps.profileLoader.setRuntimeTarget("taurus_mcp", {
+    host: "1.2.3.4",
+    port: 3306,
+    instanceId: "instance-1",
+    user: { username: "session_app", password: { type: "plain", value: "pwd" } },
+  });
+  const binding = {
+    datasource: "taurus_mcp",
+    host: "1.2.3.4",
+    port: 3306,
+    instanceId: "instance-1",
+    region: deps.config.cloud.region,
+    ...overrides,
+  };
+  deps.credentialSessions = {
+    getActiveBinding: (datasource) => (datasource === "taurus_mcp" ? { ...binding } : undefined),
+    activate() {},
+    clear() {},
+    clearAll() {},
+  };
+  return binding;
+}
 
 function createDeps(engineOverrides = {}) {
   const runtimeTargets = new Map();
@@ -108,11 +135,15 @@ function createDeps(engineOverrides = {}) {
     pingResponse: "pong",
     endpointPreflight: async () => {},
     credentialLogin: {
+      revoked: [],
       async issueSqlLogin() {
         return {
           loginUrl: "http://127.0.0.1:12345/sql-login/token",
           expiresAt: "2026-06-07T01:00:00.000Z",
         };
+      },
+      revoke(datasource) {
+        this.revoked.push(datasource ?? "*");
       },
       async close() {},
     },
@@ -1063,6 +1094,7 @@ test("restore_recycle_bin_table preflights, executes, and verifies the exact tar
     TAURUSDB_CLOUD_REGION: "cn-north-4",
     TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE: "true",
   });
+  activateRecoverySession(deps);
   let restoreCalls = 0;
   const auditEvents = [];
   deps.engine.listTables = async () => restoreCalls === 0
@@ -1088,12 +1120,16 @@ test("restore_recycle_bin_table preflights, executes, and verifies the exact tar
   assert.equal(restored.data.execution_status, "executed");
   assert.equal(restored.data.verified, true);
   assert.equal(restoreCalls, 1);
-  assert.deepEqual(auditEvents.map((event) => event.tool), ["restore_recycle_bin_table_requested"]);
+  assert.deepEqual(auditEvents.map((event) => event.tool), [
+    "restore_recycle_bin_table_requested",
+    "restore_recycle_bin_table_completed",
+  ]);
 });
 
 test("restore_recycle_bin_table fails closed on destination collision", async () => {
   const deps = createDeps();
   deps.config = createConfigFromEnv({ TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE: "true" });
+  activateRecoverySession(deps);
   deps.auditWriter = { async write() {}, async close() {} };
   deps.engine.listTables = async () => [{ name: "orders_restored" }];
   const result = await restoreRecycleBinTableTool.handler({
@@ -1110,11 +1146,12 @@ test("restore_recycle_bin_table fails closed on destination collision", async ()
 test("restore_recycle_bin_table fails closed when the exact recycle object is absent", async () => {
   const deps = createDeps();
   deps.config = createConfigFromEnv({ TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE: "true" });
+  activateRecoverySession(deps);
   deps.auditWriter = { async write() {}, async close() {} };
   deps.engine.listRecycleBin = async () => ({
     queryId: "q-empty",
     rows: [],
-    fields: [],
+    columns: [{ name: "TABLE_NAME" }],
     rowCount: 0,
     truncated: false,
     durationMs: 1,
@@ -1155,6 +1192,267 @@ test("restore_recycle_bin_table requires durable audit before mutation", async (
   assert.equal(result.error.code, ErrorCode.INVALID_INPUT);
   assert.match(result.error.message, /durable audit/);
   assert.equal(restoreCalls, 0);
+});
+
+function restoreInput() {
+  return {
+    datasource: "taurus_mcp",
+    recycle_table: "orders@123",
+    destination_database: "app",
+    destination_table: "orders_restored",
+  };
+}
+
+function recoveryDeps() {
+  const deps = createDeps();
+  deps.config = createConfigFromEnv({
+    TAURUSDB_CLOUD_REGION: "cn-north-4",
+    TAURUSDB_ENABLE_RECYCLE_BIN_RESTORE: "true",
+  });
+  const auditEvents = [];
+  deps.auditWriter = { async write(event) { auditEvents.push(event); }, async close() {} };
+  let restoreCalls = 0;
+  let restored = false;
+  deps.engine.listTables = async () => (restored ? [{ name: "orders_restored" }] : []);
+  deps.engine.restoreRecycleBinTable = async () => {
+    restoreCalls += 1;
+    restored = true;
+    return { queryId: "qry_restore_1", affectedRows: 1, durationMs: 4 };
+  };
+  return { deps, auditEvents, restoreCalls: () => restoreCalls };
+}
+
+test("restore_recycle_bin_table refuses static profile credentials without a login session", async () => {
+  const { deps, restoreCalls } = recoveryDeps();
+  deps.profileLoader.setRuntimeTarget("taurus_mcp", { host: "1.2.3.4", port: 3306, instanceId: "instance-1" });
+  deps.credentialSessions = { getActiveBinding: () => undefined };
+  const result = await restoreRecycleBinTableTool.handler(restoreInput(), deps, { taskId: "task_static" });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, ErrorCode.SQL_SESSION_REQUIRED);
+  assert.equal(restoreCalls(), 0);
+});
+
+test("restore_recycle_bin_table refuses an expired login session even if runtime credentials remain", async () => {
+  const { deps, restoreCalls } = recoveryDeps();
+  activateRecoverySession(deps);
+  deps.credentialSessions.getActiveBinding = () => undefined;
+  const result = await restoreRecycleBinTableTool.handler(restoreInput(), deps, { taskId: "task_expired" });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, ErrorCode.SQL_SESSION_REQUIRED);
+  assert.equal(restoreCalls(), 0);
+});
+
+test("restore_recycle_bin_table refuses a login session bound to a different target", async () => {
+  const { deps, restoreCalls } = recoveryDeps();
+  activateRecoverySession(deps, { instanceId: "instance-old", host: "9.9.9.9" });
+  const result = await restoreRecycleBinTableTool.handler(restoreInput(), deps, { taskId: "task_wrong_target" });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, ErrorCode.SQL_SESSION_REQUIRED);
+  assert.equal(restoreCalls(), 0);
+});
+
+test("restore_recycle_bin_table audits one immutable target even if the session target changes mid-restore", async () => {
+  const { deps, auditEvents } = recoveryDeps();
+  activateRecoverySession(deps);
+  const originalRestore = deps.engine.restoreRecycleBinTable;
+  deps.engine.restoreRecycleBinTable = async (...args) => {
+    deps.profileLoader.setRuntimeTarget("taurus_mcp", { host: "5.6.7.8", instanceId: "instance-2" });
+    deps.config.cloud.instanceId = "instance-2";
+    return originalRestore(...args);
+  };
+  const result = await restoreRecycleBinTableTool.handler(restoreInput(), deps, { taskId: "task_audit_target" });
+  assert.equal(result.ok, true);
+  assert.equal(auditEvents.length, 2);
+  for (const event of auditEvents) {
+    assert.equal(event.instance_id, "instance-1");
+    assert.equal(event.host, "1.2.3.4");
+    assert.equal(event.database, "app");
+    assert.equal(event.task_id, "task_audit_target");
+    assert.deepEqual(event.recovery, {
+      recycle_table: "orders@123",
+      destination_database: "app",
+      destination_table: "orders_restored",
+    });
+  }
+  assert.equal(auditEvents[0].sql_hash, auditEvents[1].sql_hash);
+  assert.equal(result.metadata.sql_hash, auditEvents[0].sql_hash);
+});
+
+test("restore_recycle_bin_table does not start when the request audit cannot be written", async () => {
+  const { deps, restoreCalls } = recoveryDeps();
+  activateRecoverySession(deps);
+  deps.auditWriter = { async write() { throw new Error("disk full"); }, async close() {} };
+  const result = await restoreRecycleBinTableTool.handler(restoreInput(), deps, { taskId: "task_audit_down" });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, ErrorCode.AUDIT_FAILED);
+  assert.match(result.error.message, /not started/);
+  assert.equal(restoreCalls(), 0);
+});
+
+test("restore_recycle_bin_table records a failure audit with the same target when the restore fails", async () => {
+  const { deps, auditEvents } = recoveryDeps();
+  activateRecoverySession(deps);
+  deps.engine.restoreRecycleBinTable = async () => { throw new Error("restore rejected"); };
+  const result = await restoreRecycleBinTableTool.handler(restoreInput(), deps, { taskId: "task_restore_fail" });
+  assert.equal(result.ok, false);
+  assert.deepEqual(auditEvents.map((event) => [event.tool, event.outcome, event.instance_id]), [
+    ["restore_recycle_bin_table_requested", "success", "instance-1"],
+    ["restore_recycle_bin_table_failed", "error", "instance-1"],
+  ]);
+});
+
+test("restore_recycle_bin_table reports uncertain state when post-restore verification fails", async () => {
+  const { deps, auditEvents } = recoveryDeps();
+  activateRecoverySession(deps);
+  let listCalls = 0;
+  deps.engine.listTables = async () => {
+    listCalls += 1;
+    if (listCalls > 1) throw new Error("connection reset");
+    return [];
+  };
+  const result = await restoreRecycleBinTableTool.handler(restoreInput(), deps, { taskId: "task_unverified" });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, ErrorCode.RECOVERY_STATE_UNCERTAIN);
+  assert.match(result.error.message, /do not retry blindly/);
+  assert.equal(auditEvents.at(-1).tool, "restore_recycle_bin_table_unverified");
+});
+
+test("restore_recycle_bin_table reports uncertain state when completion audit fails", async () => {
+  const { deps } = recoveryDeps();
+  activateRecoverySession(deps);
+  let writes = 0;
+  deps.auditWriter = {
+    async write() {
+      writes += 1;
+      if (writes > 1) throw new Error("disk full");
+    },
+    async close() {},
+  };
+  const result = await restoreRecycleBinTableTool.handler(restoreInput(), deps, { taskId: "task_late_audit" });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, ErrorCode.AUDIT_FAILED);
+  assert.match(result.error.message, /confirm database state/);
+});
+
+test("restore_recycle_bin_table matches only recycle object identifier columns", async () => {
+  const { deps, restoreCalls } = recoveryDeps();
+  activateRecoverySession(deps);
+  deps.engine.listRecycleBin = async () => ({
+    queryId: "q",
+    columns: [{ name: "SCHEMA" }, { name: "TABLE" }, { name: "ORIGIN_SCHEMA" }, { name: "ORIGIN_TABLE" }],
+    rows: [["__recyclebin__", "__innodb_1063", "app", "orders@123"]],
+    rowCount: 1,
+    truncated: false,
+    durationMs: 1,
+  });
+  const result = await restoreRecycleBinTableTool.handler(restoreInput(), deps, { taskId: "task_origin_only" });
+  assert.equal(result.ok, false);
+  assert.match(result.error.message, /was not found/);
+  assert.equal(restoreCalls(), 0);
+});
+
+test("restore_recycle_bin_table fails closed on an unrecognized recycle-bin result structure", async () => {
+  const { deps, restoreCalls } = recoveryDeps();
+  activateRecoverySession(deps);
+  deps.engine.listRecycleBin = async () => ({
+    queryId: "q",
+    columns: [{ name: "col_1" }],
+    rows: [["orders@123"]],
+    rowCount: 1,
+    truncated: false,
+    durationMs: 1,
+  });
+  const result = await restoreRecycleBinTableTool.handler(restoreInput(), deps, { taskId: "task_unknown_shape" });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, ErrorCode.UNSUPPORTED_FEATURE);
+  assert.match(result.error.message, /no recognized object identifier column/);
+  assert.equal(restoreCalls(), 0);
+});
+
+test("begin_sql_login refuses to bind a stale link after the target changes", async () => {
+  let pendingLogin;
+  let validated = false;
+  const deps = createDeps({ getDefaultDataSource: async () => "taurus_mcp" });
+  deps.credentialLogin.issueSqlLogin = async (request) => {
+    pendingLogin = request;
+    return { loginUrl: "http://127.0.0.1:1/sql-login/t", expiresAt: "2026-06-07T01:00:00.000Z" };
+  };
+  deps.sqlCredentialValidator = async () => { validated = true; };
+  deps.profileLoader.setRuntimeTarget("taurus_mcp", { host: "1.2.3.4", port: 3306, instanceId: "instance-1" });
+  assert.equal((await beginSqlLoginTool.handler({}, deps, { taskId: "t1" })).ok, true);
+
+  deps.profileLoader.setRuntimeTarget("taurus_mcp", { host: "5.6.7.8", port: 3306, instanceId: "instance-2" });
+  await assert.rejects(
+    pendingLogin.bind({ datasource: "taurus_mcp", username: "u", password: "p" }, ACTIVE_LINK),
+    (error) => error?.kind === "stale",
+  );
+  assert.equal(validated, false);
+  assert.equal(deps.profileLoader.getRuntimeTarget("taurus_mcp").user, undefined);
+
+  deps.profileLoader.setRuntimeTarget("taurus_mcp", { host: "1.2.3.4", port: 3306, instanceId: "instance-1" });
+  deps.config.cloud.region = "ap-southeast-1";
+  await assert.rejects(
+    pendingLogin.bind({ datasource: "taurus_mcp", username: "u", password: "p" }, ACTIVE_LINK),
+    (error) => error?.kind === "stale",
+  );
+  assert.equal(validated, false);
+});
+
+test("begin_sql_login refuses to bind a revoked link", async () => {
+  let pendingLogin;
+  let validated = false;
+  const deps = createDeps({ getDefaultDataSource: async () => "taurus_mcp" });
+  deps.credentialLogin.issueSqlLogin = async (request) => {
+    pendingLogin = request;
+    return { loginUrl: "http://127.0.0.1:1/sql-login/t", expiresAt: "2026-06-07T01:00:00.000Z" };
+  };
+  deps.sqlCredentialValidator = async () => { validated = true; };
+  deps.profileLoader.setRuntimeTarget("taurus_mcp", { host: "1.2.3.4", port: 3306, instanceId: "instance-1" });
+  await beginSqlLoginTool.handler({}, deps, { taskId: "t1" });
+  await assert.rejects(
+    pendingLogin.bind({ datasource: "taurus_mcp", username: "u", password: "p" }, { isActive: () => false }),
+    (error) => error?.kind === "stale",
+  );
+  assert.equal(validated, false);
+});
+
+test("begin_sql_login binds the session to the issued target", async () => {
+  let pendingLogin;
+  let activation;
+  const deps = createDeps({ getDefaultDataSource: async () => "taurus_mcp" });
+  deps.credentialLogin.issueSqlLogin = async (request) => {
+    pendingLogin = request;
+    return { loginUrl: "http://127.0.0.1:1/sql-login/t", expiresAt: "2026-06-07T01:00:00.000Z" };
+  };
+  deps.credentialSessions = { activate: (...args) => { activation = args; } };
+  deps.profileLoader.setRuntimeTarget("taurus_mcp", { host: "1.2.3.4", port: 3306, instanceId: "instance-1" });
+  await beginSqlLoginTool.handler({}, deps, { taskId: "t1" });
+  assert.deepEqual(deps.credentialLogin.revoked, ["taurus_mcp"]);
+  await pendingLogin.bind({ datasource: "taurus_mcp", username: "u", password: "p" }, ACTIVE_LINK);
+  assert.equal(activation[0], "taurus_mcp");
+  assert.deepEqual(activation[2], {
+    datasource: "taurus_mcp",
+    host: "1.2.3.4",
+    port: 3306,
+    instanceId: "instance-1",
+    region: "cn-north-4",
+  });
+});
+
+test("clearing credentials revokes outstanding login links", async () => {
+  const deps = createDeps();
+  deps.credentialSessions = { clear() {}, clearAll() {} };
+  const result = await clearSqlCredentialsTool.handler({ datasource: "taurus_mcp" }, deps, { taskId: "t" });
+  assert.equal(result.ok, true);
+  assert.deepEqual(deps.credentialLogin.revoked, ["taurus_mcp"]);
+});
+
+test("switching cloud region revokes every outstanding login link", async () => {
+  const deps = createDeps();
+  deps.credentialSessions = { clear() {}, clearAll() {} };
+  const result = await setCloudRegionTool.handler({ region: "ap-southeast-1" }, deps, { taskId: "t" });
+  assert.equal(result.ok, true);
+  assert.deepEqual(deps.credentialLogin.revoked, ["*"]);
 });
 
 test("set_default_database binds a session-scoped default database after instance selection", async () => {
@@ -1242,6 +1540,7 @@ test("begin_sql_login binds submitted credentials and rebuilds the engine", asyn
         expiresAt: "2026-06-07T01:00:00.000Z",
       };
     },
+    revoke() {},
     async close() {},
   };
   deps.sqlCredentialValidator = async () => {
@@ -1271,7 +1570,7 @@ test("begin_sql_login binds submitted credentials and rebuilds the engine", asyn
     datasource: "taurus_mcp",
     username: "session_app",
     password: "session_pwd",
-  });
+  }, ACTIVE_LINK);
 
   assert.equal(closed, true);
   assert.equal(validated, true);
@@ -1313,6 +1612,7 @@ test("begin_sql_login rejects invalid credentials and restores the previous targ
         expiresAt: "2026-06-07T01:00:00.000Z",
       };
     },
+    revoke() {},
     async close() {},
   };
   deps.sqlCredentialValidator = async () => {
@@ -1328,7 +1628,7 @@ test("begin_sql_login rejects invalid credentials and restores the previous targ
       datasource: "taurus_mcp",
       username: "bad_user",
       password: "bad_password",
-    }),
+    }, ACTIVE_LINK),
     (error) => error?.name === "SqlCredentialValidationError" && error?.kind === "credentials",
   );
   assert.deepEqual(deps.profileLoader.getRuntimeTarget("taurus_mcp"), {

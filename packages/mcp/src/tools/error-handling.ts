@@ -22,6 +22,14 @@ export class ToolInputError extends Error {
   }
 }
 
+/** A database response did not have the structure a safety check depends on. */
+export class UnrecognizedResultFormatError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnrecognizedResultFormatError";
+  }
+}
+
 type ToolErrorContext = {
   action: string;
   metadata: ResponseMetadata;
@@ -84,6 +92,16 @@ export function formatToolError(error: unknown, context: ToolErrorContext): Tool
       message: error.message,
       summary: `${context.action} failed due to invalid input.`,
       metadata: context.metadata,
+    });
+  }
+
+  if (error instanceof UnrecognizedResultFormatError) {
+    return formatError({
+      code: ErrorCode.UNSUPPORTED_FEATURE,
+      message: error.message,
+      summary: `${context.action} stopped because the database returned an unrecognized result structure.`,
+      metadata: context.metadata,
+      retryable: false,
     });
   }
 

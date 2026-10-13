@@ -1,3 +1,5 @@
+import type { SessionTarget } from "./session-target.js";
+
 const MINUTE_MS = 60_000;
 
 type TimerHandle = ReturnType<typeof setTimeout>;
@@ -6,6 +8,7 @@ type CredentialSession = {
   createdAtMs: number;
   lastActivityAtMs: number;
   onExpire: () => Promise<void>;
+  binding?: SessionTarget;
   timer?: TimerHandle;
 };
 
@@ -36,13 +39,18 @@ export class SessionCredentialManager {
     this.onExpirationError = options.onExpirationError ?? (() => undefined);
   }
 
-  activate(datasource: string, onExpire: () => Promise<void>): void {
+  activate(
+    datasource: string,
+    onExpire: () => Promise<void>,
+    binding?: SessionTarget,
+  ): void {
     this.clear(datasource);
     const now = this.now();
     const session: CredentialSession = {
       createdAtMs: now,
       lastActivityAtMs: now,
       onExpire,
+      binding: binding ? { ...binding } : undefined,
     };
     this.sessions.set(datasource, session);
     this.schedule(datasource, session);
@@ -54,6 +62,18 @@ export class SessionCredentialManager {
     if (session && now >= this.deadline(session)) {
       await this.expireIfDue(datasource, session);
     }
+  }
+
+  /**
+   * Returns the target an unexpired in-memory login session is bound to.
+   * Static profile credentials never create a session, so they never match.
+   */
+  getActiveBinding(datasource: string): SessionTarget | undefined {
+    const session = this.sessions.get(datasource);
+    if (!session?.binding || this.now() >= this.deadline(session)) {
+      return undefined;
+    }
+    return { ...session.binding };
   }
 
   touch(datasource: string): void {

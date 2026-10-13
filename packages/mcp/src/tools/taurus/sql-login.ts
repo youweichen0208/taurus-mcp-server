@@ -8,6 +8,7 @@ import {
   SqlCredentialValidationError,
   type CredentialValidationFailure,
 } from "../../security/local-credential-login.js";
+import { resolveSessionTarget, sameSessionTarget } from "../../security/session-target.js";
 
 const AUTH_ERROR_CODES = new Set([
   "ER_ACCESS_DENIED_ERROR",
@@ -89,22 +90,30 @@ export async function issueSqlLoginForDatasource(
       `Datasource "${datasource}" does not define a database host. Select a TaurusDB instance before beginning SQL login.`,
     );
   }
-  const runtimeTarget = deps.profileLoader.getRuntimeTarget(datasource);
+  const issuedTarget = await resolveSessionTarget(deps, datasource);
+  if (!issuedTarget) {
+    throw new ToolInputError(`Datasource "${datasource}" was not found.`);
+  }
+  // A new link supersedes any earlier link for the same datasource.
+  deps.credentialLogin.revoke(datasource);
 
   return deps.credentialLogin.issueSqlLogin({
     datasource,
     target: {
       datasource,
-      instanceId:
-        runtimeTarget?.instanceId ??
-        profile.instanceId ??
-        deps.config.cloud.instanceId,
-      region: deps.config.cloud.region,
+      instanceId: issuedTarget.instanceId,
+      region: issuedTarget.region,
       credentialIdleTtlMinutes: deps.config.security.credentialIdleTtlMinutes,
       credentialMaxTtlMinutes: deps.config.security.credentialMaxTtlMinutes,
     },
-    bind: async ({ username, password }) => {
+    bind: async ({ username, password }, link) => {
       const bindCredentials = async () => {
+        // Re-validate under the session lock: the target may have changed, or the
+        // link may have been revoked, while the browser form was open.
+        const liveTarget = await resolveSessionTarget(deps, datasource);
+        if (!link.isActive() || !liveTarget || !sameSessionTarget(issuedTarget, liveTarget)) {
+          throw new SqlCredentialValidationError("stale");
+        }
         const currentTarget = deps.profileLoader.getRuntimeTarget(datasource);
         const restoreTarget = () => {
           deps.profileLoader.clearRuntimeTarget(datasource);
@@ -169,8 +178,10 @@ export async function issueSqlLoginForDatasource(
           throw new SqlCredentialValidationError(classifyValidationFailure(error));
         }
         deps.engine = nextEngine;
-        deps.credentialSessions?.activate(datasource, () =>
-          expireCredentials(deps, datasource),
+        deps.credentialSessions?.activate(
+          datasource,
+          () => expireCredentials(deps, datasource),
+          issuedTarget,
         );
       };
       if (deps.sessionCoordinator) {
