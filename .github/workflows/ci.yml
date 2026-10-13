@@ -4,6 +4,7 @@ on:
   push:
     branches: ["main", "feat/**", "fix/**", "docs/**"]
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -11,8 +12,11 @@ permissions:
 jobs:
   verify:
     strategy:
+      # Report every Node version's result instead of cancelling on the first failure.
+      fail-fast: false
       matrix:
-        node: [20, 22]
+        # 20 and 22 are supported runtimes; 24 is the release runtime.
+        node: [20, 22, 24]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -21,10 +25,13 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      - run: npm run check:versions
       - run: npm run check
       - run: npm test
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run pack:check
+      - name: Install packed tarballs outside the workspace
+        run: npm run verify:packed
 
   local-mysql:
     runs-on: ubuntu-latest
@@ -45,7 +52,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npm run build
@@ -58,7 +65,7 @@ jobs:
           GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER ON taurus_mcp_test.* TO 'taurus_rw'@'%';
           FLUSH PRIVILEGES;
           SQL
-      - name: Run local MySQL MCP integration harness
+      - name: Run local MySQL MCP integration harness with zero skipped tests
         env:
           TAURUSDB_RUN_LOCAL_MYSQL_TESTS: "1"
           TAURUSDB_TEST_MYSQL_BOOTSTRAP_DSN: mysql://root:root_test_password@127.0.0.1:3306/taurus_mcp_test
@@ -69,4 +76,11 @@ jobs:
           TAURUSDB_TEST_MYSQL_PASSWORD: readonly_test_password
           TAURUSDB_TEST_MYSQL_MUTATION_USER: taurus_rw
           TAURUSDB_TEST_MYSQL_MUTATION_PASSWORD: mutation_test_password
-        run: node --test packages/mcp/tests/local-mysql.test.mjs
+        run: |
+          node --test --test-reporter=tap packages/mcp/tests/local-mysql.test.mjs | tee mysql-tap.txt
+          if ! grep -Eq '^# tests [1-9][0-9]*$' mysql-tap.txt \
+            || ! grep -Eq '^# skipped 0$' mysql-tap.txt \
+            || ! grep -Eq '^# fail 0$' mysql-tap.txt; then
+            echo "Local MySQL integration must run every test with zero skips and zero failures." >&2
+            exit 1
+          fi

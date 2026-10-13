@@ -17,7 +17,10 @@
     "credentials:configure": "npm run build && node packages/mcp/dist/index.js credentials configure",
     "credentials:check": "npm run build && node packages/mcp/dist/index.js credentials check",
     "pack:check": "npm pack --workspace taurusdb-core --dry-run && npm pack --workspace taurusdb-mcp --dry-run",
-    "release:check": "npm run check && npm test && npm audit --omit=dev --audit-level=high && npm run pack:check"
+    "release:check": "npm run check:versions && npm run check && npm test && npm audit --omit=dev --audit-level=high && npm run pack:check && npm run verify:packed",
+    "check:versions": "node scripts/check-versions.mjs",
+    "verify:packed": "node scripts/verify-packed-install.mjs",
+    "test:mysql": "npm run build && node --test packages/mcp/tests/local-mysql.test.mjs"
   },
   "engines": {
     "node": ">=20.0.0"

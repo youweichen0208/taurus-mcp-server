@@ -6,6 +6,20 @@ import { runApprove } from "./commands/approve.js";
 import { startMcpServer } from "./server.js";
 import { VERSION } from "./version.js";
 
+function usage(): string {
+  return `taurusdb-mcp ${VERSION}
+
+Usage:
+  taurusdb-mcp                 Start the MCP server on stdio (default)
+  taurusdb-mcp init            Write MCP client configuration
+  taurusdb-mcp credentials     Configure or check stored cloud credentials
+  taurusdb-mcp approve         Sign an approval token for a high-risk readonly query
+  taurusdb-mcp --version, -v   Print the version
+  taurusdb-mcp --help, -h      Print this help
+
+Run "taurusdb-mcp <command> --help" for command options.`;
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const firstArg = args[0];
@@ -22,6 +36,11 @@ async function main(): Promise<void> {
 
   if (firstArg === "approve") {
     process.exitCode = await runApprove(args.slice(1));
+    return;
+  }
+
+  if (firstArg === "--help" || firstArg === "-h") {
+    process.stdout.write(`${usage()}\n`);
     return;
   }
 
