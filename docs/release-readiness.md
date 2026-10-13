@@ -6,57 +6,88 @@ green for the exact commit being tagged.
 
 ## Automated gates
 
-- `npm ci`
-- `npm run check`
-- `npm test`
-- local MySQL MCP integration harness proving mutation advice leaves rows unchanged
-- `npm audit --omit=dev --audit-level=high`
+All of these run in GitHub Actions for every pull request and again, through
+the reusable CI workflow, for the tagged commit in the release workflow:
+
+- `npm ci` with a lockfile that matches every package version
+- `npm run check:versions` (root, both workspaces, the exact MCP -> Core
+  dependency, the lockfile, and the release tag agree)
+- `npm run check` and `npm test` on Node.js 20, 22, and 24 without fail-fast
+- `npm audit --omit=dev --audit-level=high` with no ignored advisories
 - `npm run pack:check`
-- installation and CLI smoke test from the generated `taurusdb-core` and
-  `taurusdb-mcp` tarballs
+- `npm run verify:packed`: both tarballs installed into a clean directory
+  outside the repository, then CLI `--version`/`--help`, the packaged Windows
+  credential script, and MCP `initialize`/`tools/list`/`ping`
+- the local MySQL 8.0 integration harness, which must report zero skipped and
+  zero failed tests; it covers mutation advice leaving rows unchanged, the
+  function guardrail, the READ ONLY transaction backstop, real `CALL` result
+  parsing, login-link revocation, and the `acceptance` command
 - concurrency, queue saturation, large-result byte limits, audit rotation, and
   MySQL pressure fixtures described in `docs/scale-validation.md`
 
-GitHub Actions runs the unit/contract matrix on Node.js 20 and 22 and runs the
-local MySQL harness in a separate job. The release workflow repeats the release
-checks and publishes both packages with npm provenance.
-
-## Required TaurusDB release-candidate gate
-
-Run the following against a disposable TaurusDB instance using the exact
-release candidate:
+Run the MySQL harness locally with Docker:
 
 ```bash
-npm ci
-npm run build
-npm run cloud:validate
+docker run -d --name taurus-mcp-mysql-test -e MYSQL_ROOT_PASSWORD=root_test_password \
+  -e MYSQL_DATABASE=taurus_mcp_test -p 13306:3306 mysql:8.0
 ```
 
-Required environment:
+Then create the `taurus_ro`/`taurus_rw` users exactly as in
+`.github/workflows/ci.yml`, export the `TAURUSDB_TEST_MYSQL_*` variables with
+port `13306`, and run `npm run test:mysql`.
 
-- a static datasource profile with a verified TLS endpoint and read-only user
-- Huawei Cloud project, region, instance, and node context
-- credentials with only the documented read/diagnostic permissions
-- `TAURUSDB_CLOUD_VALIDATE_DATABASE`
-- optional disposable table and explain SQL inputs
+## Release procedure
 
-The validator must prove:
+1. Merge the release branch to `main` only after CI is green.
+2. Confirm the npm trusted publisher for both `taurusdb-core` and
+   `taurusdb-mcp`: repository `youweichen0208/taurus-mcp-server`, workflow
+   `release.yml`, environment `npm`.
+3. Tag the verified `main` commit as `v<version>` and push the tag. The release
+   workflow refuses tags that are not on `main` or do not match every version.
+4. The workflow packs once, records SHA-256 sums and a CycloneDX SBOM, verifies
+   the exact tarballs, publishes `taurusdb-core` and waits for the registry,
+   then publishes `taurusdb-mcp`, both with provenance (`latest` for stable
+   versions, `next` for prereleases).
+5. Re-runs skip only versions already published with byte-identical integrity
+   and fail on any difference. Published versions and tags are never replaced.
+6. After a clean install from npm passes the MCP handshake and the dist-tag
+   check, the workflow creates the GitHub Release with both tarballs, the SBOM,
+   `SHA256SUMS`, and the redacted verification records.
 
-- the endpoint is identified as TaurusDB
-- SQL TLS negotiated a non-empty cipher
+## TaurusDB acceptance gate
+
+For `1.0.0`, local and CI acceptance gate the release, and acceptance against a
+real TaurusDB instance runs **after** publication from the installed package.
+Its result is recorded separately; problems are fixed in a patch release.
+
+Run it against a disposable TaurusDB instance with the pinned version:
+
+```bash
+npx -y taurusdb-mcp@1.0.0 acceptance --instance-id <instance-id> \
+  --database <database> \
+  --advice-sql "UPDATE <table> SET <column> = <value> WHERE <key> = <id>" \
+  --advice-snapshot-sql "SELECT <column> FROM <table> WHERE <key> = <id>" \
+  --report acceptance.json
+```
+
+See `docs/cloud-taurusdb-testing.md` for environment variables, the optional
+disposable recovery check, and how to read the report. The run is accepted only
+when every check is `pass`; `pending` means not yet verified.
+
+The acceptance must prove:
+
+- the endpoint is identified as TaurusDB and capability probing works
 - datasource/database discovery and a readonly query work
-- explain and capability probing work
-- slow SQL, service-latency, and replication diagnostics return a valid
-  evidence-backed or explicitly `not_applicable` result
-- no secret, raw SQL, credential, or customer identifier appears in stdout
-  or stderr
-- `analyze_mutation_sql` returns `execution_status: not_executed`, schema/plan
-  evidence where available, no sampled business rows, and leaves the target table
-  unchanged
-- the default published tool list contains no general mutation tool; its only database-state
-  mutation is `restore_recycle_bin_table`, including when legacy mutation variables are present
-- the disposable TaurusDB gate proves exact-object matching, target collision blocking,
-  active session credentials, audit evidence, and readonly post-verification
+- slow SQL and hotspot diagnostics return a valid evidence-backed or explicitly
+  `not_applicable` result
+- `analyze_mutation_sql` returns `execution_status: not_executed` and leaves the
+  snapshot unchanged
+- the published tool list contains no general mutation tool; its only
+  database-state mutation is `restore_recycle_bin_table`
+- with an explicitly named disposable object, the restore uses the active
+  session, matches the exact recycle object, blocks destination collisions,
+  writes audit evidence, and passes readonly post-verification
+- no secret, credential, endpoint, or customer identifier appears in the report
 
 ## Operational acceptance
 
@@ -73,10 +104,13 @@ The validator must prove:
   `docs/customer-deployment.md`.
 - Document read-only grants, optional recovery privilege on the session account, the external human
   execution boundary, and the controlled recycle-bin recovery exception.
-- Retain the package integrity/provenance output and the RC validation log with
-  the release record.
+- Retain the package integrity/provenance output, the GitHub Release
+  verification records, and the TaurusDB acceptance report with the release
+  record.
 
 ## Rollback
 
 Rollback means pinning the previous known-good npm version in the MCP client or
-harness configuration and restarting the MCP process.
+harness configuration and restarting the MCP process. A defective published
+version is deprecated with `npm deprecate` and superseded by a patch release;
+it is never unpublished or overwritten.

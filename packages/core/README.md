@@ -19,5 +19,7 @@ npm install taurusdb-core
 - Requires Node.js `>= 20`
 - This is the shared engine package
 - Most end users should install `taurusdb-mcp` instead
-- TLS verification, least-privilege credentials, bounded results, and JSONL
-  auditing are enabled as production safety controls
+- Least-privilege credentials, bounded results, a side-effect-free function
+  allowlist, READ ONLY transactions for readonly SQL, and JSONL auditing are
+  enabled by default; database TLS is off by default and should be enabled
+  with `TAURUSDB_REQUIRE_TLS=true` in production

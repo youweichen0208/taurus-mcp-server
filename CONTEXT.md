@@ -9,16 +9,12 @@ A customer-facing MCP environment whose Agent-facing operating plane cannot exec
 _Avoid_: Read/write MCP, general mutation executor
 
 **Controlled Recovery Exception**:
-A capability visible by default that restores one explicitly identified recycle-bin table to one non-existing destination only after confirmation from the browser session established by Local Credential Handoff, using the active Session Binding and complete audit evidence.
-_Avoid_: Mutation mode, Agent restore, write access
+A capability visible by default that restores one explicitly identified recycle-bin table to one non-existing destination when the user asks for it, using an unexpired Session Binding for the currently selected target and complete audit evidence (ADR-0005). There is no separate browser approval step; deployments that need independent approval disable the capability.
+_Avoid_: Mutation mode, write access, browser approval
 
-**Recovery Request**:
-A short-lived, single-use proposal binding a datasource, recycle-bin object, destination database, and destination table to a local operator approval page.
-_Avoid_: Confirmation token, reusable approval
-
-**Recovery Operator**:
-The human who reviews and confirms a Recovery Request outside the Agent-facing tool call; their asserted identity is recorded in the audit trail.
-_Avoid_: Agent approver, self-confirmation
+**Recovery Audit Target**:
+The immutable record of datasource, instance, endpoint, recycle-bin object, destination database and table, and SQL hash captured before a restore starts; every audit record for that restore (requested, completed, failed, unverified) uses it, even if the session target changes meanwhile.
+_Avoid_: Current target at write time
 
 **Mutation SQL**:
 SQL that can change persistent database state, including DML, DDL, DCL, and administrative statements.
@@ -53,5 +49,9 @@ A read-only check that supplied database credentials can establish a usable conn
 _Avoid_: SQL login, `SELECT 1` login
 
 **Session Binding**:
-The temporary association of validated database credentials and a selected database target with the current MCP process, bounded by both idle and absolute expiry; it is also the execution identity for an approved Controlled Recovery Exception.
+The temporary association of validated database credentials and a selected database target (host, port, instance, region) with the current MCP process, bounded by both idle and absolute expiry; it is the only identity that can run a Controlled Recovery Exception. Configured static credentials never form a Session Binding.
 _Avoid_: Saved account, persistent login
+
+**Login Link**:
+The single-use local URL issued for Local Credential Handoff. It is bound to the target it was issued for and is revoked when the instance or region changes, credentials are cleared, or a newer link is issued for the same datasource.
+_Avoid_: Reusable login page, session token
