@@ -36,21 +36,37 @@ Then create the `taurus_ro`/`taurus_rw` users exactly as in
 `.github/workflows/ci.yml`, export the `TAURUSDB_TEST_MYSQL_*` variables with
 port `13306`, and run `npm run test:mysql`.
 
+## Branching
+
+- `develop` is the default branch. Feature and fix branches merge into it
+  through pull requests with green CI.
+- Each minor release line has a release branch named `release/<major>.<minor>`
+  (for example `release/1.0`), cut from `develop` when the line is stabilized.
+  All `v<major>.<minor>.*` tags, including prereleases, are created on it.
+- Fixes for a released line land on `develop` first and are then
+  cherry-picked onto the release branch, so the two never diverge silently.
+  New features are never merged into an existing release branch.
+- The next minor version gets a new release branch cut from `develop`.
+
 ## Release procedure
 
-1. Merge the release branch to `main` only after CI is green.
-2. Confirm the npm trusted publisher for both `taurusdb-core` and
+1. For a new minor version, cut `release/<major>.<minor>` from a `develop`
+   commit with green CI. For a patch, cherry-pick the fixes from `develop` onto
+   the existing release branch and bump the patch version there.
+2. Wait for CI on the release branch to pass.
+3. Confirm the npm trusted publisher for both `taurusdb-core` and
    `taurusdb-mcp`: repository `youweichen0208/taurus-mcp-server`, workflow
    `release.yml`, environment `npm`.
-3. Tag the verified `main` commit as `v<version>` and push the tag. The release
-   workflow refuses tags that are not on `main` or do not match every version.
-4. The workflow packs once, records SHA-256 sums and a CycloneDX SBOM, verifies
+4. Tag the verified release-branch commit as `v<version>` and push the tag. The
+   release workflow refuses tags that are not on the matching
+   `release/<major>.<minor>` branch or do not match every package version.
+5. The workflow packs once, records SHA-256 sums and a CycloneDX SBOM, verifies
    the exact tarballs, publishes `taurusdb-core` and waits for the registry,
    then publishes `taurusdb-mcp`, both with provenance (`latest` for stable
    versions, `next` for prereleases).
-5. Re-runs skip only versions already published with byte-identical integrity
+6. Re-runs skip only versions already published with byte-identical integrity
    and fail on any difference. Published versions and tags are never replaced.
-6. After a clean install from npm passes the MCP handshake and the dist-tag
+7. After a clean install from npm passes the MCP handshake and the dist-tag
    check, the workflow creates the GitHub Release with both tarballs, the SBOM,
    `SHA256SUMS`, and the redacted verification records.
 

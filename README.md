@@ -336,8 +336,10 @@ npx taurusdb-mcp --version
 npm run release:check
 ```
 
-真实 TaurusDB RC 门禁通过后，从已验收的 `main` SHA 创建受保护的
-`v<version>` tag。GitHub release workflow 会重新执行门禁、生成 SBOM，并按
+日常开发合入默认分支 `develop`。发布时从 `develop` 拉出 `release/<主版本>.<次版本>`
+分支（如 `release/1.0`），CI 通过后在该分支上创建 `v<version>` tag；同一版本线的
+补丁先合入 `develop`，再 cherry-pick 到发布分支。release workflow 会拒绝不在对应
+发布分支上的 tag。GitHub release workflow 会重新执行门禁、生成 SBOM，并按
 `taurusdb-core` → `taurusdb-mcp` 的顺序使用 npm provenance 发布。不要从开发机
 手工执行 `npm publish`。
 
