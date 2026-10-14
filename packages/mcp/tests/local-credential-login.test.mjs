@@ -74,10 +74,14 @@ test("local credential login renders a localized neutral target-aware page", asy
     assert.match(body, /instance-123456789/);
     assert.match(body, /cn-north-4/);
     assert.match(body, /db-1/);
-    assert.match(body, /\.target-row \{ grid-column:2; min-width:0;/);
-    assert.match(body, /font-family:&quot;SFMono-Regular&quot;|font-family:"SFMono-Regular"/);
-    assert.match(body, /凭据对 Agent 不可见/);
-    assert.match(body, /空闲 30 分钟后清除 · 最长保留 8 小时/);
+    assert.match(body, /目标实例 <code>instance-123456789<\/code>/);
+    assert.match(body, /<ol class="path-nodes" aria-label="凭据的传递路径">/);
+    assert.match(body, /本机 MCP<code>127\.0\.0\.1<\/code>/);
+    assert.match(body, /AI 助手看不到它，MCP 也不会把它保存到磁盘/);
+    assert.match(body, /空闲 30 分钟后自动清除登录，最长保留 8 小时。/);
+    // The page must stay neutral: no Huawei brand red or branding.
+    assert.doesNotMatch(body, /#c7000b/i);
+    assert.doesNotMatch(body, /华为|Huawei/i);
     assert.doesNotMatch(body, /安全会话|Secure session/);
     assert.doesNotMatch(body, /Huawei Cloud account login/);
   } finally {

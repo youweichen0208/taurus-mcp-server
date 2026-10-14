@@ -9,6 +9,11 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 - The local SQL login page now defaults to Chinese regardless of the browser
   language and offers a 中文 / English switch; the chosen language is kept
   through form submission and validation errors (`?lang=en`).
+- Redesigned the local SQL login page as a single neutral card: the target
+  instance, region, and datasource are stated up front, a small path diagram
+  shows that credentials go from the browser only to the MCP process on this
+  computer, and the Huawei-red accent is replaced with a neutral palette so
+  the page cannot be mistaken for an official Huawei Cloud login.
 
 ## [1.0.0] - 2026-10-13
 

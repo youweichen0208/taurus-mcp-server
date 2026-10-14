@@ -97,22 +97,23 @@ const COPY = {
     language: "语言",
     title: "连接数据库",
     intro: "输入数据库账号和密码以验证连接。",
-    target: "连接目标",
-    instance: "实例",
-    region: "区域",
-    datasource: "数据源",
-    configured: "已配置的数据源",
-    unknown: "未指定",
     username: "数据库账号",
     password: "数据库密码",
     usernamePlaceholder: "请输入数据库账号",
     passwordPlaceholder: "请输入数据库密码",
     submit: "连接数据库",
     submitting: "正在验证连接…",
-    privacy: "凭据对 Agent 不可见，仅用于连接您选择的数据库，不会由 MCP 持久化保存。",
-    retention: (idle: number, maximum: number) => `空闲 ${idle} 分钟后清除 · 最长保留 ${maximum >= 60 ? `${maximum / 60} 小时` : `${maximum} 分钟`}`,
+    targetInstance: "目标实例",
+    targetDetail: (region: string | undefined, datasource: string) =>
+      region ? `区域 ${region}，数据源 ${datasource}` : `数据源 ${datasource}`,
+    targetDatasource: "已配置的数据源",
+    pathLabel: "凭据的传递路径",
+    pathBrowser: "此浏览器",
+    pathMcp: "本机 MCP",
+    pathDatabase: "数据库",
+    privacy: "密码从这个页面直接交给本机的 MCP 进程。AI 助手看不到它，MCP 也不会把它保存到磁盘。",
+    retention: (idle: number, maximum: number) => `空闲 ${idle} 分钟后自动清除登录，最长保留 ${maximum >= 60 ? `${maximum / 60} 小时` : `${maximum} 分钟`}。`,
     attempts: (remaining: number) => `本链接还可尝试 ${remaining} 次`,
-    diagnostic: "连接检查",
     required: "请输入数据库账号和密码。",
     credentials: "无法验证账号信息，请检查账号和密码。",
     unreachable: "无法访问数据库公网地址。请检查实例安全组入方向规则是否已向当前公网出口 IP 放通数据库端口，并检查网络 ACL、VPN 和本机出口防火墙。",
@@ -138,22 +139,23 @@ const COPY = {
     language: "Language",
     title: "Connect to database",
     intro: "Enter your database credentials to validate the connection.",
-    target: "Connection target",
-    instance: "Instance",
-    region: "Region",
-    datasource: "Datasource",
-    configured: "Configured datasource",
-    unknown: "Not specified",
     username: "Database username",
     password: "Database password",
     usernamePlaceholder: "Enter database username",
     passwordPlaceholder: "Enter database password",
     submit: "Connect to database",
     submitting: "Validating connection…",
-    privacy: "Credentials are not visible to the Agent. They are used only to connect to your selected database and are not persisted by MCP.",
-    retention: (idle: number, maximum: number) => `Cleared after ${idle} idle minutes · ${maximum >= 60 ? `${maximum / 60} ${maximum === 60 ? "hour" : "hours"}` : `${maximum} ${maximum === 1 ? "minute" : "minutes"}`} maximum`,
+    targetInstance: "Target instance",
+    targetDetail: (region: string | undefined, datasource: string) =>
+      region ? `Region ${region}, datasource ${datasource}` : `Datasource ${datasource}`,
+    targetDatasource: "Configured datasource",
+    pathLabel: "Where your credentials go",
+    pathBrowser: "This browser",
+    pathMcp: "Local MCP",
+    pathDatabase: "Database",
+    privacy: "Your password goes straight from this page to the MCP process on this computer. The AI assistant never sees it, and MCP does not save it to disk.",
+    retention: (idle: number, maximum: number) => `The login is cleared after ${idle} idle minutes and kept for at most ${maximum >= 60 ? `${maximum / 60} ${maximum === 60 ? "hour" : "hours"}` : `${maximum} ${maximum === 1 ? "minute" : "minutes"}`}.`,
     attempts: (remaining: number) => `${remaining} attempts remaining for this link`,
-    diagnostic: "Connection check",
     required: "Enter both the database username and password.",
     credentials: "The account could not be validated. Check the username and password.",
     unreachable: "The public database endpoint is unreachable. Allow the database port from this client's public egress IP in the instance security group's inbound rules, then check network ACL, VPN, and outbound firewall rules.",
@@ -236,27 +238,49 @@ function page(input: {
             : copy.invalidMessage);
   const nonce = randomBytes(18).toString("base64url");
   const target = input.target;
-  const formHtml = isForm
-    ? `<form method="post" action="?lang=${input.locale}" autocomplete="on" data-login-form>
-        ${input.message ? `<div class="alert" role="alert">
-          <div class="alert-head"><strong>${copy.diagnostic}</strong>${input.errorCode ? `<code>${escapeHtml(input.errorCode)}</code>` : ""}</div>
-          <p>${escapeHtml(input.message)}</p>
-        </div>` : ""}
-        <div class="field">
-          <label for="username">${copy.username}</label>
-          <input id="username" name="username" autocomplete="username" maxlength="256" value="${escapeHtml(input.username ?? "")}" placeholder="${copy.usernamePlaceholder}" required autofocus>
-        </div>
-        <div class="field">
-          <label for="password">${copy.password}</label>
-          <input id="password" name="password" type="password" autocomplete="current-password" maxlength="4096" placeholder="${copy.passwordPlaceholder}" required>
-        </div>
-        <button type="submit" data-submit data-pending="${copy.submitting}">${copy.submit}</button>
-        ${input.remainingAttempts !== undefined ? `<p class="attempts">${copy.attempts(input.remainingAttempts)}</p>` : ""}
-      </form>`
-    : `<section class="result ${input.state}" aria-live="polite">
+  // The instance ID gets its own line: real IDs are 30+ characters and would
+  // otherwise break the surrounding sentence.
+  const id = (value: string) => `<code>${escapeHtml(value)}</code>`;
+  const targetSentence = target?.instanceId
+    ? `<span class="target-name">${copy.targetInstance} ${id(target.instanceId)}</span><span>${copy.targetDetail(target.region ? escapeHtml(target.region) : undefined, id(target.datasource))}</span>`
+    : target?.datasource
+      ? `<span class="target-name">${copy.targetDatasource} ${id(target.datasource)}</span>`
+      : "";
+  const retention = target?.credentialIdleTtlMinutes && target.credentialMaxTtlMinutes
+    ? `<p class="retention">${copy.retention(target.credentialIdleTtlMinutes, target.credentialMaxTtlMinutes)}</p>`
+    : "";
+  const formHtml = `<h1>${copy.title}</h1>
+        ${targetSentence ? `<p class="target">${targetSentence}</p>` : ""}
+        <figure class="path" aria-labelledby="path-caption">
+          <ol class="path-nodes" aria-label="${copy.pathLabel}">
+            <li>${copy.pathBrowser}</li>
+            <li class="path-local">${copy.pathMcp}<code>127.0.0.1</code></li>
+            <li>${copy.pathDatabase}</li>
+          </ol>
+          <figcaption id="path-caption">${copy.privacy}</figcaption>
+        </figure>
+        <form method="post" action="?lang=${input.locale}" autocomplete="on" data-login-form>
+          ${input.message ? `<div class="alert" role="alert">
+            ${input.errorCode ? `<code class="alert-code">${escapeHtml(input.errorCode)}</code>` : ""}
+            <p>${escapeHtml(input.message)}</p>
+          </div>` : ""}
+          <div class="field">
+            <label for="username">${copy.username}</label>
+            <input id="username" name="username" autocomplete="username" maxlength="256" value="${escapeHtml(input.username ?? "")}" placeholder="${copy.usernamePlaceholder}" required autofocus>
+          </div>
+          <div class="field">
+            <label for="password">${copy.password}</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" maxlength="4096" placeholder="${copy.passwordPlaceholder}" required>
+          </div>
+          <button type="submit" data-submit data-pending="${copy.submitting}">${copy.submit}</button>
+          ${input.remainingAttempts !== undefined ? `<p class="attempts">${copy.attempts(input.remainingAttempts)}</p>` : ""}
+        </form>
+        ${retention}`;
+  const resultHtml = `<section class="result ${input.state}" aria-live="polite">
         <span class="result-mark" aria-hidden="true">${input.state === "success" ? "✓" : "!"}</span>
         <h1>${escapeHtml(title)}</h1>
         <p>${escapeHtml(message)}</p>
+        ${input.state === "success" && targetSentence ? `<p class="target">${targetSentence}</p>` : ""}
       </section>`;
   return `<!doctype html>
 <html lang="${input.locale}">
@@ -266,77 +290,59 @@ function page(input: {
   <meta name="color-scheme" content="light">
   <title>${escapeHtml(title)} · ${copy.product}</title>
   <style>
-    :root { color-scheme:light; --ink:#20242c; --ink-soft:#303640; --muted:#687181; --cloud:#f5f6f8; --surface:#fff; --line:#dfe3e8; --brand:#c7000b; --brand-dark:#9f0712; --brand-soft:#fdebec; --danger:#a61b29; --danger-soft:#fff1f2; --success:#16794e; --shadow:0 24px 68px rgba(32,36,44,.14); }
+    :root { color-scheme:light; --canvas:#e9edf1; --surface:#fff; --ink:#1b2430; --muted:#5b6673; --line:#d5dbe2; --field:#f7f9fb; --pine:#0e6b5a; --pine-dark:#0a5546; --pine-soft:#e3f1ec; --danger:#b42318; --danger-soft:#fdedeb; --sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif; --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace; }
     * { box-sizing:border-box; }
-    body { margin:0; min-height:100vh; color:var(--ink); background:var(--cloud); font-family:"Avenir Next","Segoe UI Variable","PingFang SC","Microsoft YaHei",ui-sans-serif,sans-serif; }
-    .shell { width:min(1000px,calc(100% - 32px)); margin:clamp(24px,7vh,72px) auto; }
-    .masthead { display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; font-size:13px; letter-spacing:.035em; }
-    .brand { font-size:15px; font-weight:750; letter-spacing:-.015em; }
-    .lang-switch { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; letter-spacing:0; }
-    .lang-option { color:var(--muted); text-decoration:none; }
-    a.lang-option:hover, a.lang-option:focus-visible { color:var(--brand); text-decoration:underline; }
-    .lang-option[aria-current="true"] { color:var(--ink); font-weight:700; }
-    .panel { display:grid; grid-template-columns:minmax(300px,.9fr) minmax(390px,1.25fr); overflow:hidden; border:1px solid rgba(21,34,56,.08); border-radius:20px; background:var(--surface); box-shadow:var(--shadow); }
-    .context { padding:46px 42px 40px; color:#f8f9fb; background:linear-gradient(155deg,var(--ink-soft),var(--ink)); }
-    .eyebrow { margin:0 0 34px; color:#f3aeb3; font-size:11px; font-weight:760; letter-spacing:.14em; text-transform:uppercase; }
-    .rail { margin:0; }
-    .rail-item { position:relative; display:grid; grid-template-columns:12px minmax(0,1fr); column-gap:17px; min-height:86px; }
-    .rail-item:last-child { min-height:auto; }
-    .target-row { grid-column:2; min-width:0; padding:0 0 25px; border-bottom:1px solid rgba(255,255,255,.1); }
-    .rail-item:last-child .target-row { padding-bottom:0; border-bottom:0; }
-    .rail dt { margin:0 0 7px; color:#aebbd0; font-size:11px; font-weight:650; letter-spacing:.04em; line-height:1.2; }
-    .rail dd { margin:0; color:#fff; font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace; font-size:14px; font-weight:620; line-height:1.45; letter-spacing:-.01em; overflow-wrap:anywhere; }
-    .node { position:relative; width:10px; height:10px; margin-top:2px; border:2px solid #f05b64; border-radius:50%; background:var(--ink-soft); box-shadow:0 0 0 4px rgba(199,0,11,.11); }
-    .node:not(.last):after { content:""; position:absolute; left:2px; top:11px; width:2px; height:73px; background:linear-gradient(#d53a44,rgba(213,58,68,.16)); }
-    .retention { margin:30px 0 0 29px; padding-top:18px; border-top:1px solid rgba(255,255,255,.1); color:#aebbd0; font-size:11px; line-height:1.65; }
-    .content { padding:48px 52px 38px; }
-    .content h1 { margin:0 0 11px; font-size:clamp(30px,4vw,40px); font-weight:760; line-height:1.08; letter-spacing:-.04em; }
-    .intro { margin:0 0 31px; color:var(--muted); font-size:14px; line-height:1.65; }
-    form { display:grid; gap:18px; }
-    .field { display:grid; gap:8px; }
-    label { font-size:12px; font-weight:730; letter-spacing:.01em; }
-    input { width:100%; min-height:50px; border:1px solid #c8d2de; border-radius:9px; padding:12px 14px; color:var(--ink); background:#fbfcfe; font:inherit; outline:none; transition:border-color .16s,box-shadow .16s,background .16s; }
-    input:focus { border-color:var(--brand); background:#fff; box-shadow:0 0 0 4px rgba(199,0,11,.11); }
-    button { min-height:50px; margin-top:3px; border:0; border-radius:9px; color:#fff; background:var(--brand); font:inherit; font-size:14px; font-weight:730; cursor:pointer; transition:background .16s,transform .16s; }
-    button:hover { background:var(--brand-dark); }
-    button:active { transform:translateY(1px); }
-    button:focus-visible { outline:3px solid rgba(199,0,11,.24); outline-offset:3px; }
-    button:disabled { cursor:wait; opacity:.72; }
-    .alert { margin-bottom:1px; border:1px solid #f3cbd0; border-left:4px solid var(--danger); border-radius:8px; padding:13px 14px; color:#771721; background:var(--danger-soft); font-size:12px; line-height:1.55; }
-    .alert-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:7px; }
-    .alert-head strong { color:#64121b; font-size:12px; font-weight:760; }
-    .alert-head code { border:1px solid #eab9bf; border-radius:5px; padding:2px 6px; color:#8b1824; background:#fff8f8; font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace; font-size:10px; font-weight:650; overflow-wrap:anywhere; }
+    body { margin:0; min-height:100vh; color:var(--ink); background:var(--canvas); font:15px/1.6 var(--sans); }
+    .shell { width:min(440px,calc(100% - 32px)); margin:clamp(24px,9vh,96px) auto 40px; }
+    .masthead { display:flex; justify-content:space-between; align-items:baseline; margin:0 4px 14px; }
+    .brand { font-size:14px; font-weight:650; }
+    .lang-switch { display:flex; gap:8px; color:var(--muted); font-size:13px; }
+    .lang-option { color:var(--muted); text-decoration:none; border-radius:4px; }
+    a.lang-option:hover { color:var(--pine); text-decoration:underline; }
+    .lang-option[aria-current="true"] { color:var(--ink); font-weight:600; }
+    .card { padding:32px; border:1px solid var(--line); border-radius:14px; background:var(--surface); box-shadow:0 1px 2px rgba(27,36,48,.06),0 12px 32px rgba(27,36,48,.08); }
+    h1 { margin:0; font-size:26px; font-weight:650; line-height:1.25; letter-spacing:-.01em; }
+    code { font-family:var(--mono); font-size:.9em; overflow-wrap:anywhere; }
+    .target { display:grid; gap:2px; margin:10px 0 0; color:var(--muted); font-size:14px; }
+    .target code { color:var(--ink); }
+    .target-name code { font-size:14px; font-weight:600; }
+    .path { margin:24px 0 28px; padding:18px 16px 16px; border-radius:10px; background:var(--pine-soft); }
+    .path-nodes { position:relative; display:grid; grid-template-columns:repeat(3,1fr); margin:0; padding:0; list-style:none; text-align:center; font-size:13px; font-weight:600; color:var(--pine-dark); }
+    .path-nodes:before { content:""; position:absolute; top:6px; left:16.7%; right:16.7%; height:2px; background:var(--pine); }
+    .path-nodes li { position:relative; display:grid; justify-items:center; gap:2px; padding-top:20px; }
+    .path-nodes li:before { content:""; position:absolute; top:0; left:50%; width:14px; height:14px; margin-left:-7px; border:2px solid var(--pine); border-radius:50%; background:var(--pine-soft); }
+    .path-nodes .path-local:before { background:var(--pine); }
+    .path-nodes code { font-size:11.5px; font-weight:500; color:var(--pine); }
+    .path figcaption { margin-top:14px; color:var(--pine-dark); font-size:13px; line-height:1.6; }
+    form { display:grid; gap:16px; }
+    .field { display:grid; gap:6px; }
+    label { font-size:13px; font-weight:600; }
+    input { width:100%; min-height:46px; padding:10px 12px; border:1px solid #c3ccd6; border-radius:8px; color:var(--ink); background:var(--field); font:inherit; }
+    input::placeholder { color:#8a94a0; }
+    input:focus { outline:none; border-color:var(--pine); background:#fff; box-shadow:0 0 0 3px rgba(14,107,90,.18); }
+    button { min-height:46px; margin-top:4px; border:0; border-radius:8px; color:#fff; background:var(--pine); font:inherit; font-weight:600; cursor:pointer; }
+    button:hover { background:var(--pine-dark); }
+    button:disabled { cursor:progress; opacity:.75; }
+    a:focus-visible, button:focus-visible { outline:3px solid rgba(14,107,90,.35); outline-offset:2px; }
+    .attempts { margin:-6px 0 0; color:var(--muted); font-size:13px; text-align:center; }
+    .alert { padding:12px 14px; border-left:3px solid var(--danger); border-radius:6px; color:#7a1a12; background:var(--danger-soft); font-size:14px; line-height:1.55; }
     .alert p { margin:0; }
-    .attempts { margin:-8px 0 0; color:var(--muted); text-align:center; font-size:11px; }
-    .privacy { display:flex; gap:11px; align-items:flex-start; margin:27px 0 0; padding-top:20px; border-top:1px solid var(--line); color:var(--muted); font-size:11px; line-height:1.65; }
-    .shield { flex:0 0 auto; width:8px; height:8px; margin-top:5px; border-radius:50%; color:transparent; background:var(--brand); box-shadow:0 0 0 4px var(--brand-soft); }
-    .result { min-height:280px; display:flex; flex-direction:column; align-items:flex-start; justify-content:center; }
-    .result-mark { display:grid; place-items:center; width:46px; height:46px; margin-bottom:22px; border-radius:50%; color:#fff; background:var(--danger); font-size:22px; font-weight:800; }
-    .result.success .result-mark { background:var(--success); }
-    .result p { max-width:35rem; color:var(--muted); line-height:1.7; }
-    @media (max-width:760px) { .shell{width:min(100% - 20px,560px);margin:18px auto}.panel{grid-template-columns:1fr;border-radius:17px}.context{padding:30px 27px}.content{padding:34px 27px 29px}.eyebrow{margin-bottom:25px}.rail-item{min-height:76px}.node:not(.last):after{height:63px}.retention{margin-top:24px}.content h1{font-size:31px} }
-    @media (prefers-reduced-motion:reduce) { *,*:before,*:after{scroll-behavior:auto!important;transition:none!important} }
+    .alert-code { display:inline-block; margin-bottom:4px; color:var(--danger); font-size:12px; font-weight:600; }
+    .retention { margin:22px 0 0; padding-top:16px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; }
+    .result { display:grid; justify-items:start; gap:10px; }
+    .result p { margin:0; color:var(--muted); }
+    .result-mark { display:grid; place-items:center; width:40px; height:40px; margin-bottom:6px; border-radius:50%; color:#fff; background:var(--danger); font-size:20px; font-weight:700; }
+    .result.success .result-mark { background:var(--pine); }
+    @media (max-width:480px) { .card { padding:24px 20px; } h1 { font-size:23px; } .target-name code { font-size:12.5px; } .path-nodes { font-size:12px; } }
+    @media (prefers-reduced-motion:reduce) { * { transition:none!important; animation:none!important; } }
   </style>
 </head>
 <body>
   <main class="shell">
     <header class="masthead"><span class="brand">${copy.product}</span>${isForm ? languageSwitch(input.locale) : ""}</header>
-    <section class="panel">
-      <aside class="context">
-        <p class="eyebrow">${copy.target}</p>
-        <dl class="rail">
-          <div class="rail-item"><span class="node"></span><div class="target-row"><dt>${copy.instance}</dt><dd>${escapeHtml(target?.instanceId ?? copy.configured)}</dd></div></div>
-          <div class="rail-item"><span class="node"></span><div class="target-row"><dt>${copy.region}</dt><dd>${escapeHtml(target?.region ?? copy.unknown)}</dd></div></div>
-          <div class="rail-item"><span class="node last"></span><div class="target-row"><dt>${copy.datasource}</dt><dd>${escapeHtml(target?.datasource ?? copy.unknown)}</dd></div></div>
-        </dl>
-        ${target?.credentialIdleTtlMinutes && target.credentialMaxTtlMinutes ? `<p class="retention">${copy.retention(target.credentialIdleTtlMinutes, target.credentialMaxTtlMinutes)}</p>` : ""}
-      </aside>
-      <div class="content">
-        ${isForm ? `<h1>${copy.title}</h1><p class="intro">${copy.intro}</p>` : ""}
-        ${formHtml}
-        ${isForm ? `<p class="privacy"><span class="shield" aria-hidden="true">◆</span><span>${copy.privacy}</span></p>` : ""}
-      </div>
-    </section>
+    <div class="card">
+      ${isForm ? formHtml : resultHtml}
+    </div>
   </main>
   ${isForm ? `<script nonce="${nonce}">document.querySelector('[data-login-form]').addEventListener('submit',()=>{const b=document.querySelector('[data-submit]');b.disabled=true;b.textContent=b.dataset.pending;});</script>` : ""}
 </body>
