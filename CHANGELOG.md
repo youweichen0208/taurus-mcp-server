@@ -4,6 +4,12 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- The local SQL login page now defaults to Chinese regardless of the browser
+  language and offers a 中文 / English switch; the chosen language is kept
+  through form submission and validation errors (`?lang=en`).
+
 ## [1.0.0] - 2026-10-13
 
 First stable release of `taurusdb-core` and `taurusdb-mcp`.

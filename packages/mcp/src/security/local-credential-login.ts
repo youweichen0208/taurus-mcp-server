@@ -94,6 +94,7 @@ type PageState = "form" | "success" | "expired" | "locked" | "method" | "invalid
 const COPY = {
   "zh-CN": {
     product: "TaurusDB MCP",
+    language: "语言",
     title: "连接数据库",
     intro: "输入数据库账号和密码以验证连接。",
     target: "连接目标",
@@ -134,6 +135,7 @@ const COPY = {
   },
   en: {
     product: "TaurusDB MCP",
+    language: "Language",
     title: "Connect to database",
     intro: "Enter your database credentials to validate the connection.",
     target: "Connection target",
@@ -174,10 +176,20 @@ const COPY = {
   },
 } as const;
 
-function localeFromRequest(req: IncomingMessage): Locale {
-  return /(?:^|,)\s*zh(?:-|_|;|,|$)/i.test(req.headers["accept-language"] ?? "")
-    ? "zh-CN"
-    : "en";
+/**
+ * The page is Chinese unless the user picks English with `?lang=en`. The
+ * browser's Accept-Language is deliberately ignored so the default is stable.
+ */
+function localeFromUrl(url: URL | undefined): Locale {
+  return url?.searchParams.get("lang")?.toLowerCase().startsWith("en") ? "en" : "zh-CN";
+}
+
+function languageSwitch(locale: Locale): string {
+  const option = (target: Locale, label: string) =>
+    target === locale
+      ? `<span class="lang-option" aria-current="true">${label}</span>`
+      : `<a class="lang-option" href="?lang=${target}" hreflang="${target}">${label}</a>`;
+  return `<nav class="lang-switch" aria-label="${COPY[locale].language}">${option("zh-CN", "中文")}<span aria-hidden="true">/</span>${option("en", "English")}</nav>`;
 }
 
 function escapeHtml(value: string): string {
@@ -225,7 +237,7 @@ function page(input: {
   const nonce = randomBytes(18).toString("base64url");
   const target = input.target;
   const formHtml = isForm
-    ? `<form method="post" autocomplete="on" data-login-form>
+    ? `<form method="post" action="?lang=${input.locale}" autocomplete="on" data-login-form>
         ${input.message ? `<div class="alert" role="alert">
           <div class="alert-head"><strong>${copy.diagnostic}</strong>${input.errorCode ? `<code>${escapeHtml(input.errorCode)}</code>` : ""}</div>
           <p>${escapeHtml(input.message)}</p>
@@ -260,6 +272,10 @@ function page(input: {
     .shell { width:min(1000px,calc(100% - 32px)); margin:clamp(24px,7vh,72px) auto; }
     .masthead { display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; font-size:13px; letter-spacing:.035em; }
     .brand { font-size:15px; font-weight:750; letter-spacing:-.015em; }
+    .lang-switch { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; letter-spacing:0; }
+    .lang-option { color:var(--muted); text-decoration:none; }
+    a.lang-option:hover, a.lang-option:focus-visible { color:var(--brand); text-decoration:underline; }
+    .lang-option[aria-current="true"] { color:var(--ink); font-weight:700; }
     .panel { display:grid; grid-template-columns:minmax(300px,.9fr) minmax(390px,1.25fr); overflow:hidden; border:1px solid rgba(21,34,56,.08); border-radius:20px; background:var(--surface); box-shadow:var(--shadow); }
     .context { padding:46px 42px 40px; color:#f8f9fb; background:linear-gradient(155deg,var(--ink-soft),var(--ink)); }
     .eyebrow { margin:0 0 34px; color:#f3aeb3; font-size:11px; font-weight:760; letter-spacing:.14em; text-transform:uppercase; }
@@ -304,7 +320,7 @@ function page(input: {
 </head>
 <body>
   <main class="shell">
-    <header class="masthead"><span class="brand">${copy.product}</span></header>
+    <header class="masthead"><span class="brand">${copy.product}</span>${isForm ? languageSwitch(input.locale) : ""}</header>
     <section class="panel">
       <aside class="context">
         <p class="eyebrow">${copy.target}</p>
@@ -493,9 +509,17 @@ export class LocalCredentialLoginService implements CredentialLoginService {
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const locale = localeFromRequest(req);
+    let url: URL | undefined;
     try {
-      const url = new URL(req.url ?? "/", "http://127.0.0.1");
+      url = new URL(req.url ?? "/", "http://127.0.0.1");
+    } catch {
+      url = undefined;
+    }
+    const locale = localeFromUrl(url);
+    try {
+      if (!url) {
+        throw new Error("Invalid request URL.");
+      }
       const match = url.pathname.match(/^\/sql-login\/([^/]+)$/);
       const token = match?.[1];
       const pending = token ? this.pending.get(token) : undefined;
