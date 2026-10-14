@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Fails when the root package, both workspaces, the MCP -> Core dependency, and
-// package-lock.json disagree on the release version. Optionally checks a tag.
+// Fails when the root package, both workspaces, the MCP -> Core dependency,
+// package-lock.json, or the version pinned in user docs disagree on the release
+// version. Optionally checks a tag.
 import { readFileSync } from "node:fs";
 
 const read = (file) => JSON.parse(readFileSync(new URL(`../${file}`, import.meta.url), "utf8"));
@@ -27,6 +28,28 @@ const checks = [
 const tag = process.argv[2];
 if (tag) {
   checks.push(["release tag", tag.replace(/^v/, "")]);
+}
+
+// User docs pin `taurusdb-mcp@<version>` in copy-paste commands and client
+// configs; a release must not ship docs that install an older version.
+const pinnedDocs = [
+  "README.md",
+  "README.en.md",
+  "packages/mcp/README.md",
+  "docs/cloud-taurusdb-testing.md",
+  "docs/leadership-demo-guide.md",
+  "docs/release-readiness.md",
+];
+for (const file of pinnedDocs) {
+  let text;
+  try {
+    text = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+  } catch {
+    continue;
+  }
+  for (const match of text.matchAll(/taurusdb-mcp@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)/g)) {
+    checks.push([`${file} pins taurusdb-mcp@${match[1]}`, match[1]]);
+  }
 }
 
 const mismatches = checks.filter(([, value]) => value !== expected);
