@@ -4,6 +4,8 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-14
+
 ### Changed
 
 - The local SQL login page now defaults to Chinese regardless of the browser
