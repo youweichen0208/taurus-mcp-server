@@ -1,6 +1,6 @@
 # TaurusDB 云端验收
 
-本指南适用于 `1.0.0` 只读操作面及默认开启的受控回收站恢复例外。`1.0.0` 的本地与 CI
+本指南适用于 `1.0.x` 只读操作面及默认开启的受控回收站恢复例外。`1.0.0` 起的本地与 CI
 验收已作为发布门禁完成；真实 TaurusDB 验收在发布后，用 npm 上的固定版本执行，
 结果单独记录，发现的问题以补丁版本修复。旧版通用 mutation 验证流程已归档到
 [`archive/pre-readonly-cloud-taurusdb-testing.md`](./archive/pre-readonly-cloud-taurusdb-testing.md)。
@@ -8,7 +8,7 @@
 ## 前提
 
 - disposable 或经过授权的 TaurusDB 验证实例；
-- 仅向验证机出口 IP 放行的公网地址（`1.0.0` 默认不启用数据库 TLS；如需验证 TLS，
+- 仅向验证机出口 IP 放行的公网地址（`1.0.x` 默认不启用数据库 TLS；如需验证 TLS，
   另设 `TAURUSDB_REQUIRE_TLS=true` 并配置可信 CA）；
 - 本机页面登录的数据库会话账号；如验证恢复，该账号需具有原生恢复权限；
 - 最小权限华为云身份与明确的 region（保存在凭据库或以环境变量注入）；
@@ -17,11 +17,11 @@
 ## 安装固定版本
 
 ```bash
-npm install -g taurusdb-mcp@1.0.0
+npm install -g taurusdb-mcp@1.0.1
 taurusdb-mcp --version
 ```
 
-或在 MCP 客户端配置中固定 `npx -y taurusdb-mcp@1.0.0`。不要使用未固定的 `latest`。
+或在 MCP 客户端配置中固定 `npx -y taurusdb-mcp@1.0.1`。不要使用未固定的 `latest`。
 
 ## 运行验收
 
@@ -104,7 +104,7 @@ taurusdb-mcp acceptance --instance-id <instance-id> \
 SQL Advice 前后快照结论、恢复验收（如执行）的审计记录摘要和已知限制。
 
 任一通用写工具出现、任一 Advice 导致数据库变化、或报告/stdout/审计中出现凭据，都视为
-阻断性问题，需发布补丁版本并对 `1.0.0` 执行 `npm deprecate`。
+阻断性问题，需发布补丁版本并对出问题的版本执行 `npm deprecate`。
 
 ## 故障回退
 
