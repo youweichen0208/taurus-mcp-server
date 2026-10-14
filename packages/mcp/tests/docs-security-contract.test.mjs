@@ -13,6 +13,7 @@ const canonicalDocs = [
   new URL("../../../docs/testing.md", import.meta.url),
   new URL("../../../docs/manual-smoke-test.md", import.meta.url),
   new URL("../README.md", import.meta.url),
+  new URL("../../../README.en.md", import.meta.url),
 ];
 
 test("canonical documentation does not advertise obsolete mutation security", async () => {

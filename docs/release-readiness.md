@@ -72,14 +72,14 @@ port `13306`, and run `npm run test:mysql`.
 
 ## TaurusDB acceptance gate
 
-For `1.0.0`, local and CI acceptance gate the release, and acceptance against a
+Since `1.0.0`, local and CI acceptance gate the release, and acceptance against a
 real TaurusDB instance runs **after** publication from the installed package.
 Its result is recorded separately; problems are fixed in a patch release.
 
 Run it against a disposable TaurusDB instance with the pinned version:
 
 ```bash
-npx -y taurusdb-mcp@1.0.0 acceptance --instance-id <instance-id> \
+npx -y taurusdb-mcp@1.0.1 acceptance --instance-id <instance-id> \
   --database <database> \
   --advice-sql "UPDATE <table> SET <column> = <value> WHERE <key> = <id>" \
   --advice-snapshot-sql "SELECT <column> FROM <table> WHERE <key> = <id>" \
