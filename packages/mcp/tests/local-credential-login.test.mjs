@@ -34,7 +34,19 @@ async function submitWithHost(url, fields, host) {
   });
 }
 
+// Most tests assert English copy, so they use links that select English.
+// The default (Chinese) page is covered by createDefaultLocaleService below.
 function createService(options = {}) {
+  const service = new LocalCredentialLoginService({ failureDelayMs: 0, ...options });
+  const issue = service.issueSqlLogin.bind(service);
+  service.issueSqlLogin = async (request) => {
+    const issued = await issue(request);
+    return { ...issued, loginUrl: `${issued.loginUrl}?lang=en` };
+  };
+  return service;
+}
+
+function createDefaultLocaleService(options = {}) {
   return new LocalCredentialLoginService({ failureDelayMs: 0, ...options });
 }
 
@@ -52,9 +64,7 @@ test("local credential login renders a localized neutral target-aware page", asy
       },
       bind: async () => {},
     });
-    const response = await fetch(issued.loginUrl, {
-      headers: { "accept-language": "zh-CN,zh;q=0.9" },
-    });
+    const response = await fetch(issued.loginUrl.replace("?lang=en", ""));
     const body = await response.text();
 
     assert.equal(response.status, 200);
@@ -124,7 +134,7 @@ test("local credential login rejects expired and unknown tokens", async () => {
     const expired = await fetch(issued.loginUrl);
     assert.equal(expired.status, 200);
     assert.match(await expired.text(), /Login link expired/i);
-    const unknown = await fetch(issued.loginUrl.replace(/[^/]+$/, "unknown-token"));
+    const unknown = await fetch(new URL("unknown-token?lang=en", issued.loginUrl));
     assert.equal(unknown.status, 200);
     assert.match(await unknown.text(), /Login link expired/i);
   } finally {
@@ -490,6 +500,77 @@ test("connection failures are rate limited while the link stays claimed", async 
     assert.match(await (await first).text(), /DB_ENDPOINT_UNREACHABLE/);
     assert.ok(Date.now() - startedAt >= 140);
     assert.equal(calls, 1);
+  } finally {
+    await service.close();
+  }
+});
+
+
+test("login page defaults to Chinese, even for an English browser", async () => {
+  const service = createDefaultLocaleService();
+  try {
+    const issued = await service.issueSqlLogin({ datasource: "taurus_mcp", bind: async () => {} });
+    const body = await (await fetch(issued.loginUrl, {
+      headers: { "accept-language": "en-US,en;q=0.9" },
+    })).text();
+    assert.match(body, /<html lang="zh-CN">/);
+    assert.match(body, /连接数据库/);
+    assert.doesNotMatch(body, /Connect to database/);
+  } finally {
+    await service.close();
+  }
+});
+
+test("login page offers a Chinese / English switch that keeps the link usable", async () => {
+  const bindings = [];
+  const service = createDefaultLocaleService();
+  try {
+    const issued = await service.issueSqlLogin({
+      datasource: "taurus_mcp",
+      bind: async (credentials) => bindings.push(credentials),
+    });
+    const chinese = await (await fetch(issued.loginUrl)).text();
+    assert.match(chinese, /href="\?lang=en"[^>]*>English</);
+    assert.match(chinese, /aria-current="true"[^>]*>中文</);
+
+    const english = await (await fetch(`${issued.loginUrl}?lang=en`)).text();
+    assert.match(english, /<html lang="en">/);
+    assert.match(english, /Connect to database/);
+    assert.match(english, /href="\?lang=zh-CN"[^>]*>中文</);
+    assert.match(english, /<form method="post" action="\?lang=en"/);
+
+    // Switching language is a GET and must not consume the link.
+    const result = await submit(`${issued.loginUrl}?lang=en`, { username: "db_user", password: "pwd" });
+    assert.match(await result.text(), /Account validated/);
+    assert.equal(bindings.length, 1);
+  } finally {
+    await service.close();
+  }
+});
+
+test("validation errors stay in the selected language", async () => {
+  const service = createDefaultLocaleService();
+  try {
+    const issued = await service.issueSqlLogin({
+      datasource: "taurus_mcp",
+      bind: async () => { throw new SqlCredentialValidationError("credentials"); },
+    });
+    const zh = await submit(issued.loginUrl, { username: "db_user", password: "bad" });
+    assert.match(await zh.text(), /无法验证账号信息/);
+    const en = await submit(`${issued.loginUrl}?lang=en`, { username: "db_user", password: "bad" });
+    assert.match(await en.text(), /could not be validated/);
+  } finally {
+    await service.close();
+  }
+});
+
+test("an unknown lang value falls back to Chinese", async () => {
+  const service = createDefaultLocaleService();
+  try {
+    const issued = await service.issueSqlLogin({ datasource: "taurus_mcp", bind: async () => {} });
+    const body = await (await fetch(`${issued.loginUrl}?lang=%22%3E%3Cscript%3E`)).text();
+    assert.match(body, /<html lang="zh-CN">/);
+    assert.doesNotMatch(body, /<script>/);
   } finally {
     await service.close();
   }

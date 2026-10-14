@@ -355,7 +355,6 @@ localMysqlTest("local SQL login validates credentials before binding them", asyn
     const valid = await fetch(loginUrl, {
       method: "POST",
       headers: {
-        "accept-language": "zh-CN",
         "content-type": "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams({
@@ -969,7 +968,7 @@ localMysqlTest("local SQL login link is revoked when credentials are cleared", a
         password: requiredEnv("TAURUSDB_TEST_MYSQL_PASSWORD"),
       }),
     });
-    assert.match(await response.text(), /Login link expired/i);
+    assert.match(await response.text(), /登录链接已失效/);
   }, {
     env: { TAURUSDB_ENABLE_DYNAMIC_TARGETS: "true" },
   });
