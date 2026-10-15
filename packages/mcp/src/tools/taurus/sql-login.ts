@@ -193,10 +193,17 @@ export async function issueSqlLoginForDatasource(
   });
 }
 
+export function sqlLoginHandoffSummary(loginUrl: string, expiresAt: string): string {
+  return `Display this link to the user now: [Open local SQL login](${loginUrl}). ` +
+    `Expires at ${expiresAt}; single use. Ask the user to open it in a browser on the machine running this MCP server and enter database credentials there. ` +
+    "Never ask for credentials in chat or tool arguments. Wait for the user to complete login before running SQL tools. " +
+    "Do not call begin_sql_login again unless the link expired or the user requests a replacement; a new link revokes the previous one.";
+}
+
 export const beginSqlLoginTool: ToolDefinition = {
   name: "begin_sql_login",
   description:
-    "Create a short-lived local login URL where the user can enter SQL credentials without sending the password through the Agent or MCP tool arguments.",
+    "Create a short-lived local login URL where the user can enter SQL credentials without sending the password through the Agent or MCP tool arguments. Always display the returned login_url as a clickable link to the user. A new link revokes the previous one; use the link returned by select_cloud_taurus_instance when available.",
   inputSchema: {
     datasource: z
       .string()
@@ -224,7 +231,7 @@ export const beginSqlLoginTool: ToolDefinition = {
           expires_at: issued.expiresAt,
         },
         {
-          summary: `Created a secure local SQL login link for ${datasource}.`,
+          summary: `Created a secure local SQL login link for ${datasource}. ${sqlLoginHandoffSummary(issued.loginUrl, issued.expiresAt)}`,
           metadata: metadata(context.taskId),
         },
       );
