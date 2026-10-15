@@ -79,7 +79,7 @@ Its result is recorded separately; problems are fixed in a patch release.
 Run it against a disposable TaurusDB instance with the pinned version:
 
 ```bash
-npx -y taurusdb-mcp@1.0.1 acceptance --instance-id <instance-id> \
+npx -y taurusdb-mcp@1.0.2 acceptance --instance-id <instance-id> \
   --database <database> \
   --advice-sql "UPDATE <table> SET <column> = <value> WHERE <key> = <id>" \
   --advice-snapshot-sql "SELECT <column> FROM <table> WHERE <key> = <id>" \
