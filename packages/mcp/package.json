@@ -1,6 +1,6 @@
 {
   "name": "taurusdb-mcp",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "TaurusDB MCP server for Claude, Cursor, VS Code, and other MCP clients.",
   "license": "MIT",
   "repository": {
@@ -44,7 +44,7 @@
     "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
-    "taurusdb-core": "1.0.1",
+    "taurusdb-core": "1.0.2",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "mysql2": "^3.24.5",
     "zod": "^3.24.1"

@@ -1,6 +1,6 @@
 # TaurusDB MCP 领导演示指南
 
-本指南用于在 disposable TaurusDB 实例上演示 `taurusdb-mcp@1.0.1`。
+本指南用于在 disposable TaurusDB 实例上演示 `taurusdb-mcp@1.0.2`。
 主线不是逐个展示 Tool，而是展示一个受治理的数据库诊断闭环：
 
 > 客户遇到数据库问题 → MCP 绑定指定 TaurusDB → 用户在本机页面登录 → 自动收集证据并定位问题 → 给出 SQL/索引 Advice → 不越权执行普通写操作 → 全过程留审计记录。
@@ -34,7 +34,7 @@ Harness 是包在 Agent 与数据库之间的工程化运行边界。Agent 擅�
 ## 1. 演示前准备
 
 - 只使用 disposable TaurusDB 实例，不要在生产实例构造故障数据。
-- MCP 配置固定使用 `taurusdb-mcp@1.0.1`，避免 `latest` 缓存造成版本不一致。
+- MCP 配置固定使用 `taurusdb-mcp@1.0.2`，避免 `latest` 缓存造成版本不一致。
 - 实例必须具有公网 IP，安全组入方向只放行演示电脑的公网出口 IP 和数据库端口。
 - 当前 1.0.x 默认不启用数据库 TLS；演示环境不需要配置 TLS。生产环境若启用 TLS，需另行配置 `TAURUSDB_REQUIRE_TLS=true`、可信 CA 和证书域名。
 - 建库、建表、灌数和索引执行必须通过客户自己的数据库控制台或 `mysql` 客户端完成，不能通过 MCP 执行。

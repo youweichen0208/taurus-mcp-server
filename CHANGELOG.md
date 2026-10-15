@@ -4,6 +4,21 @@ All notable changes follow Keep a Changelog and Semantic Versioning.
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-16
+
+### Fixed
+
+- Instance selection and SQL login summaries now include a clickable local
+  login link and its expiry. MCP initialization and tool descriptions direct
+  clients to display the link immediately and wait for browser login (#16).
+- Login guidance avoids replacing a valid link unnecessarily, which would
+  revoke the link already shown to the user.
+
+### Changed
+
+- Include the updated beginner guide and English README, with installation
+  examples pinned to 1.0.2.
+
 ## [1.0.1] - 2026-10-14
 
 ### Changed

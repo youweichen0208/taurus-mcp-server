@@ -121,12 +121,12 @@ node -v
 ### 步骤 2：确认能运行 taurusdb-mcp
 
 ```bash
-npx -y taurusdb-mcp@1.0.1 --version
+npx -y taurusdb-mcp@1.0.2 --version
 ```
 
-第一次运行会自动下载，稍等片刻，看到 `1.0.1` 说明一切正常。
+第一次运行会自动下载，稍等片刻，看到 `1.0.2` 说明一切正常。
 
-> 💡 所有命令都写成了 `taurusdb-mcp@1.0.1`，固定版本可以避免不同时间拿到不同版本。
+> 💡 所有命令都写成了 `taurusdb-mcp@1.0.2`，固定版本可以避免不同时间拿到不同版本。
 > 新版本发布后，把命令和配置里的版本号改成最新版即可（见 [更新日志](CHANGELOG.md)）。
 
 ### 步骤 3：获取华为云 AK/SK 和区域
@@ -146,7 +146,7 @@ AK/SK **不要**写进配置文件。运行下面的命令，按提示依次输�
 Secret Access Key：
 
 ```bash
-npx -y taurusdb-mcp@1.0.1 credentials configure
+npx -y taurusdb-mcp@1.0.2 credentials configure
 ```
 
 它会保存到操作系统自带的安全存储中：
@@ -164,7 +164,7 @@ npx -y taurusdb-mcp@1.0.1 credentials configure
 ```bash
 TAURUSDB_CLOUD_REGION=cn-north-4 \
 TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
-  npx -y taurusdb-mcp@1.0.1 credentials check
+  npx -y taurusdb-mcp@1.0.2 credentials check
 ```
 
 **Windows PowerShell：**
@@ -172,7 +172,7 @@ TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
 ```powershell
 $env:TAURUSDB_CLOUD_REGION="cn-north-4"
 $env:TAURUSDB_CLOUD_KEYCHAIN_SERVICE="taurusdb-mcp/huaweicloud"
-npx -y taurusdb-mcp@1.0.1 credentials check
+npx -y taurusdb-mcp@1.0.2 credentials check
 ```
 
 检查不会打印任何密钥内容，也不会连接数据库。
@@ -216,7 +216,7 @@ claude mcp add huaweicloud-taurusdb \
   -s user \
   -e TAURUSDB_CLOUD_REGION=cn-north-4 \
   -e TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
-  -- npx -y taurusdb-mcp@1.0.1
+  -- npx -y taurusdb-mcp@1.0.2
 ```
 
 验证：
@@ -244,7 +244,7 @@ claude mcp get huaweicloud-taurusdb
   "mcpServers": {
     "huaweicloud-taurusdb": {
       "command": "npx",
-      "args": ["-y", "taurusdb-mcp@1.0.1"],
+      "args": ["-y", "taurusdb-mcp@1.0.2"],
       "env": {
         "TAURUSDB_CLOUD_REGION": "cn-north-4",
         "TAURUSDB_CLOUD_KEYCHAIN_SERVICE": "taurusdb-mcp/huaweicloud"
@@ -270,7 +270,7 @@ claude mcp get huaweicloud-taurusdb
   "mcpServers": {
     "huaweicloud-taurusdb": {
       "command": "npx",
-      "args": ["-y", "taurusdb-mcp@1.0.1"],
+      "args": ["-y", "taurusdb-mcp@1.0.2"],
       "env": {
         "TAURUSDB_CLOUD_REGION": "cn-north-4",
         "TAURUSDB_CLOUD_KEYCHAIN_SERVICE": "taurusdb-mcp/huaweicloud"
@@ -297,7 +297,7 @@ claude mcp get huaweicloud-taurusdb
     "huaweicloud-taurusdb": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "taurusdb-mcp@1.0.1"],
+      "args": ["-y", "taurusdb-mcp@1.0.2"],
       "env": {
         "TAURUSDB_CLOUD_REGION": "cn-north-4",
         "TAURUSDB_CLOUD_KEYCHAIN_SERVICE": "taurusdb-mcp/huaweicloud"
@@ -318,7 +318,7 @@ claude mcp get huaweicloud-taurusdb
 codex mcp add huaweicloud-taurusdb \
   --env TAURUSDB_CLOUD_REGION=cn-north-4 \
   --env TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
-  -- npx -y taurusdb-mcp@1.0.1
+  -- npx -y taurusdb-mcp@1.0.2
 ```
 
 或直接编辑 `~/.codex/config.toml`（CLI 和 IDE 插件共用）：
@@ -326,7 +326,7 @@ codex mcp add huaweicloud-taurusdb \
 ```toml
 [mcp_servers.huaweicloud-taurusdb]
 command = "npx"
-args = ["-y", "taurusdb-mcp@1.0.1"]
+args = ["-y", "taurusdb-mcp@1.0.2"]
 enabled = true
 
 [mcp_servers.huaweicloud-taurusdb.env]
@@ -338,7 +338,7 @@ TAURUSDB_CLOUD_KEYCHAIN_SERVICE = "taurusdb-mcp/huaweicloud"
 
 </details>
 
-> 💡 快捷方式：`npx -y taurusdb-mcp@1.0.1 init --client claude`（或 `cursor`、`vscode`）
+> 💡 快捷方式：`npx -y taurusdb-mcp@1.0.2 init --client claude`（或 `cursor`、`vscode`）
 > 可以自动写入基础配置，但**不包含**上面的 `env`，写入后仍需手动补上两行环境变量。
 
 ### 步骤 7：（可选）运行自检
@@ -348,7 +348,7 @@ TAURUSDB_CLOUD_KEYCHAIN_SERVICE = "taurusdb-mcp/huaweicloud"
 ```bash
 TAURUSDB_CLOUD_REGION=cn-north-4 \
 TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
-  npx -y taurusdb-mcp@1.0.1 acceptance --instance-id <你的实例ID> --report acceptance.json
+  npx -y taurusdb-mcp@1.0.2 acceptance --instance-id <你的实例ID> --report acceptance.json
 ```
 
 命令会在终端打印一个本机登录链接，在浏览器打开并登录数据库后自动继续。结果中
@@ -537,12 +537,12 @@ TAURUSDB_SQL_CREDENTIAL_MAX_TTL_MINUTES=480
 <summary><b>AI 说找不到 TaurusDB 工具 / MCP 没有启动</b></summary>
 
 - 修改配置后需要**完全重启** AI 客户端（Claude Desktop 需要从菜单栏/托盘退出）。
-- 确认 `node -v` ≥ 20，并且 `npx -y taurusdb-mcp@1.0.1 --version` 能输出版本号。
+- 确认 `node -v` ≥ 20，并且 `npx -y taurusdb-mcp@1.0.2 --version` 能输出版本号。
 - **Windows** 上如果客户端无法启动 `npx`，把配置改为：
 
   ```json
   "command": "cmd",
-  "args": ["/c", "npx", "-y", "taurusdb-mcp@1.0.1"]
+  "args": ["/c", "npx", "-y", "taurusdb-mcp@1.0.2"]
   ```
 
 - Claude Code 可执行 `claude mcp get huaweicloud-taurusdb` 检查配置。

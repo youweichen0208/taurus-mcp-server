@@ -17,11 +17,11 @@
 ## 安装固定版本
 
 ```bash
-npm install -g taurusdb-mcp@1.0.1
+npm install -g taurusdb-mcp@1.0.2
 taurusdb-mcp --version
 ```
 
-或在 MCP 客户端配置中固定 `npx -y taurusdb-mcp@1.0.1`。不要使用未固定的 `latest`。
+或在 MCP 客户端配置中固定 `npx -y taurusdb-mcp@1.0.2`。不要使用未固定的 `latest`。
 
 ## 运行验收
 
