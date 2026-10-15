@@ -9,7 +9,7 @@ import { formatSuccess, type ToolResponse } from "../../utils/formatter.js";
 import { formatToolError, ToolInputError } from "../error-handling.js";
 import type { ToolDefinition, ToolDeps } from "../registry.js";
 import { metadata } from "../common.js";
-import { issueSqlLoginForDatasource } from "./sql-login.js";
+import { issueSqlLoginForDatasource, sqlLoginHandoffSummary } from "./sql-login.js";
 
 function buildHuaweiCloudEndpoint(service: string, region: string, domainSuffix: string): string {
   return `https://${service}.${region}.${domainSuffix}`;
@@ -383,7 +383,7 @@ export const getSessionBindingTool: ToolDefinition = {
 export const selectCloudTaurusInstanceTool: ToolDefinition = {
   name: "select_cloud_taurus_instance",
   description:
-    "Select the default TaurusDB cloud instance for the current session so diagnostics can reuse its instance id and default node id.",
+    "Select the TaurusDB cloud instance for the current session and create a single-use local SQL login URL. Call this tool when the user chooses an instance from list_cloud_taurus_instances. Always display the returned login_url as a clickable link immediately, then wait for the user to complete browser login before running SQL tools. Selection alone does not authenticate SQL access.",
   inputSchema: {
     instance_id: z.string().trim().min(1).describe("Exact TaurusDB instance id to bind into the current session."),
     datasource: z
@@ -474,7 +474,7 @@ export const selectCloudTaurusInstanceTool: ToolDefinition = {
           login_expires_at: login.expiresAt,
         },
         {
-          summary: `Selected cloud instance ${matched.name} (${matched.id}) and created a local SQL login link.`,
+          summary: `Selected cloud instance ${matched.name} (${matched.id}) and created a local SQL login link. ${sqlLoginHandoffSummary(login.loginUrl, login.expiresAt)}`,
           metadata: metadata(context.taskId),
         },
       );

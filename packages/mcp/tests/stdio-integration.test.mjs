@@ -47,6 +47,9 @@ test("stdio transport exposes expected tools and keeps logs on stderr", async ()
   try {
     await client.connect(transport);
 
+    assert.match(client.getInstructions(), /select_cloud_taurus_instance/);
+    assert.match(client.getInstructions(), /display the returned login_url verbatim as a clickable Markdown link/);
+
     const tools = await client.listTools();
     const toolNames = tools.tools.map((tool) => tool.name);
     assert.deepEqual(toolNames, [

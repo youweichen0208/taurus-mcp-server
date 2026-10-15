@@ -77,6 +77,14 @@ export function createServer(deps: ServerDeps): McpServer {
   const server = new McpServer({
     name: "huaweicloud-taurusdb",
     version: VERSION,
+  }, {
+    instructions:
+      "When the user chooses a TaurusDB instance, call select_cloud_taurus_instance with its exact instance_id. " +
+      "After successful select_cloud_taurus_instance or begin_sql_login, always display the returned login_url verbatim as a clickable Markdown link in your next response, including its expiry. " +
+      "Ask the user to open it on the machine running this MCP server and complete database login there; never request database credentials in chat or tool arguments. " +
+      "Wait for the user to complete login before running SQL tools. Do not claim that selecting an instance means SQL authentication succeeded. " +
+      "Reuse the returned link; only call begin_sql_login for an expired link or a user-requested replacement, because issuing a new link revokes the old one. " +
+      "If selection fails, report the returned error and remediation instead of inventing a login URL.",
   });
   deps.clientIdentityProvider = () => server.server.getClientVersion();
 

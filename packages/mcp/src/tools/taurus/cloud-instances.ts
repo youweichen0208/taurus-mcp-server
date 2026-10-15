@@ -32,7 +32,7 @@ function toPublicInstance(item: CloudTaurusInstanceSummary) {
 export const listCloudTaurusInstancesTool: ToolDefinition = {
   name: "list_cloud_taurus_instances",
   description:
-    "List TaurusDB/GaussDB(for MySQL) instances visible to the configured Huawei Cloud project so the user can choose an instance id.",
+    "List TaurusDB/GaussDB(for MySQL) instances visible to the configured Huawei Cloud project so the user can choose an instance id. Listing does not select or connect to an instance. Once the user chooses, call select_cloud_taurus_instance with its exact id and display the returned login_url as a clickable link.",
   inputSchema: {
     name: z.string().trim().min(1).optional().describe("Optional fuzzy instance name filter."),
     id: z.string().trim().min(1).optional().describe("Optional exact instance id filter."),

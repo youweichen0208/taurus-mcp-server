@@ -1516,6 +1516,8 @@ test("begin_sql_login returns a secure local URL without credential fields", asy
     login_url: "http://127.0.0.1:12345/sql-login/token",
     expires_at: "2026-06-07T01:00:00.000Z",
   });
+  assert.ok(result.summary.includes(`[Open local SQL login](${result.data.login_url})`));
+  assert.match(result.summary, /Display this link/);
   assert.equal(Object.hasOwn(result.data, "username"), false);
   assert.equal(Object.hasOwn(result.data, "password"), false);
 });
@@ -1805,6 +1807,8 @@ test("select_cloud_taurus_instance binds the public host for local MCP login", a
     assert.equal(result.data.bound_datasource, "taurus_mcp");
     assert.equal(result.data.bound_host, "1.2.3.4");
     assert.equal(result.data.login_url, "http://127.0.0.1:12345/sql-login/token");
+    assert.ok(result.summary.includes(`[Open local SQL login](${result.data.login_url})`));
+    assert.match(result.summary, /Display this link/);
     assert.equal(result.data.login_expires_at, "2026-06-07T01:00:00.000Z");
     assert.equal(loginRequest.datasource, "taurus_mcp");
     assert.equal(loginRequest.target.instanceId, "instance-1");

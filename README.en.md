@@ -370,6 +370,7 @@ Once configured, just talk to your AI client **in plain language**; it picks the
 2. **"Select instance `<instance-id>`"**
    The AI calls `select_cloud_taurus_instance` and returns a local login link
    (like `http://127.0.0.1:xxxxx/sql-login/...`).
+   If the AI confirms selection without showing the link, ask it to display the tool’s returned `login_url`. Use `begin_sql_login` when the link expires; a new link invalidates the previous one.
 3. **Open the link in your browser and enter your database username and password.** When you see
    "Account validated", go back to the conversation.
    - The page is in Chinese by default; use **English** in the top-right corner to switch;
