@@ -368,6 +368,7 @@ TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
 2. **“选择实例 `<实例ID>`”**
    AI 会调用 `select_cloud_taurus_instance`，并返回一个本机登录链接
    （形如 `http://127.0.0.1:xxxxx/sql-login/...`）。
+   若 AI 只确认已选择却未显示链接，可要求它展示该工具返回的 `login_url`；链接过期后再调用 `begin_sql_login`，新链接会使旧链接失效。
 3. **在浏览器打开这个链接，输入数据库账号和密码**，看到“账号验证成功”即可回到对话。
    - 页面默认中文，可点右上角 **English** 切换；
    - 链接 **5 分钟内有效**、只能使用一次，最多尝试 3 次；
