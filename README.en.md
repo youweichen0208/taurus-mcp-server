@@ -122,12 +122,12 @@ You should see `v20.x.x` or later.
 ### Step 2: Check that taurusdb-mcp runs
 
 ```bash
-npx -y taurusdb-mcp@1.0.1 --version
+npx -y taurusdb-mcp@1.0.2 --version
 ```
 
-The first run downloads the package, which takes a moment. Seeing `1.0.1` means everything works.
+The first run downloads the package, which takes a moment. Seeing `1.0.2` means everything works.
 
-> 💡 Every command pins `taurusdb-mcp@1.0.1` so you always get the same version.
+> 💡 Every command pins `taurusdb-mcp@1.0.2` so you always get the same version.
 > When a new version is released, update the version in your commands and configuration (see the [changelog](CHANGELOG.md)).
 
 ### Step 3: Get your Huawei Cloud AK/SK and region
@@ -147,7 +147,7 @@ The first run downloads the package, which takes a moment. Seeing `1.0.1` means 
 Secret Access Key when prompted:
 
 ```bash
-npx -y taurusdb-mcp@1.0.1 credentials configure
+npx -y taurusdb-mcp@1.0.2 credentials configure
 ```
 
 They are saved in your operating system's secure storage:
@@ -165,7 +165,7 @@ Then check it (replace `cn-north-4` with your region):
 ```bash
 TAURUSDB_CLOUD_REGION=cn-north-4 \
 TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
-  npx -y taurusdb-mcp@1.0.1 credentials check
+  npx -y taurusdb-mcp@1.0.2 credentials check
 ```
 
 **Windows PowerShell:**
@@ -173,7 +173,7 @@ TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
 ```powershell
 $env:TAURUSDB_CLOUD_REGION="cn-north-4"
 $env:TAURUSDB_CLOUD_KEYCHAIN_SERVICE="taurusdb-mcp/huaweicloud"
-npx -y taurusdb-mcp@1.0.1 credentials check
+npx -y taurusdb-mcp@1.0.2 credentials check
 ```
 
 The check never prints secrets and does not connect to the database.
@@ -218,7 +218,7 @@ claude mcp add huaweicloud-taurusdb \
   -s user \
   -e TAURUSDB_CLOUD_REGION=cn-north-4 \
   -e TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
-  -- npx -y taurusdb-mcp@1.0.1
+  -- npx -y taurusdb-mcp@1.0.2
 ```
 
 Check it:
@@ -245,7 +245,7 @@ use `-s local` to limit it to the current directory.
   "mcpServers": {
     "huaweicloud-taurusdb": {
       "command": "npx",
-      "args": ["-y", "taurusdb-mcp@1.0.1"],
+      "args": ["-y", "taurusdb-mcp@1.0.2"],
       "env": {
         "TAURUSDB_CLOUD_REGION": "cn-north-4",
         "TAURUSDB_CLOUD_KEYCHAIN_SERVICE": "taurusdb-mcp/huaweicloud"
@@ -272,7 +272,7 @@ use `-s local` to limit it to the current directory.
   "mcpServers": {
     "huaweicloud-taurusdb": {
       "command": "npx",
-      "args": ["-y", "taurusdb-mcp@1.0.1"],
+      "args": ["-y", "taurusdb-mcp@1.0.2"],
       "env": {
         "TAURUSDB_CLOUD_REGION": "cn-north-4",
         "TAURUSDB_CLOUD_KEYCHAIN_SERVICE": "taurusdb-mcp/huaweicloud"
@@ -298,7 +298,7 @@ use `-s local` to limit it to the current directory.
     "huaweicloud-taurusdb": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "taurusdb-mcp@1.0.1"],
+      "args": ["-y", "taurusdb-mcp@1.0.2"],
       "env": {
         "TAURUSDB_CLOUD_REGION": "cn-north-4",
         "TAURUSDB_CLOUD_KEYCHAIN_SERVICE": "taurusdb-mcp/huaweicloud"
@@ -319,7 +319,7 @@ use `-s local` to limit it to the current directory.
 codex mcp add huaweicloud-taurusdb \
   --env TAURUSDB_CLOUD_REGION=cn-north-4 \
   --env TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
-  -- npx -y taurusdb-mcp@1.0.1
+  -- npx -y taurusdb-mcp@1.0.2
 ```
 
 Or edit `~/.codex/config.toml` directly (shared by the CLI and IDE extension):
@@ -327,7 +327,7 @@ Or edit `~/.codex/config.toml` directly (shared by the CLI and IDE extension):
 ```toml
 [mcp_servers.huaweicloud-taurusdb]
 command = "npx"
-args = ["-y", "taurusdb-mcp@1.0.1"]
+args = ["-y", "taurusdb-mcp@1.0.2"]
 enabled = true
 
 [mcp_servers.huaweicloud-taurusdb.env]
@@ -339,7 +339,7 @@ Check it: `codex mcp list`.
 
 </details>
 
-> 💡 Shortcut: `npx -y taurusdb-mcp@1.0.1 init --client claude` (or `cursor`, `vscode`) writes a basic
+> 💡 Shortcut: `npx -y taurusdb-mcp@1.0.2 init --client claude` (or `cursor`, `vscode`) writes a basic
 > configuration for you, but **without** the `env` above. Add the two environment variables afterwards.
 
 ### Step 7 (optional): Run a self-check
@@ -349,7 +349,7 @@ Run the acceptance command in a terminal to confirm installation and configurati
 ```bash
 TAURUSDB_CLOUD_REGION=cn-north-4 \
 TAURUSDB_CLOUD_KEYCHAIN_SERVICE=taurusdb-mcp/huaweicloud \
-  npx -y taurusdb-mcp@1.0.1 acceptance --instance-id <your-instance-id> --report acceptance.json
+  npx -y taurusdb-mcp@1.0.2 acceptance --instance-id <your-instance-id> --report acceptance.json
 ```
 
 It prints a local login link in the terminal; open it in your browser and sign in to the database, and the
@@ -548,12 +548,12 @@ Deployment boundaries, central audit collection, and capacity budgets are descri
 <summary><b>The AI can't find the TaurusDB tools / MCP didn't start</b></summary>
 
 - After changing the configuration, **fully restart** the AI client (quit Claude Desktop from the menu bar or tray).
-- Make sure `node -v` is 20 or later and `npx -y taurusdb-mcp@1.0.1 --version` prints a version.
+- Make sure `node -v` is 20 or later and `npx -y taurusdb-mcp@1.0.2 --version` prints a version.
 - On **Windows**, if the client can't start `npx`, change the configuration to:
 
   ```json
   "command": "cmd",
-  "args": ["/c", "npx", "-y", "taurusdb-mcp@1.0.1"]
+  "args": ["/c", "npx", "-y", "taurusdb-mcp@1.0.2"]
   ```
 
 - In Claude Code, run `claude mcp get huaweicloud-taurusdb` to inspect the configuration.

@@ -10,7 +10,7 @@ TaurusDB MCP server for MCP clients such as:
 ## Install
 
 ```bash
-npm install taurusdb-mcp@1.0.1
+npm install taurusdb-mcp@1.0.2
 ```
 
 Run directly with:
@@ -24,14 +24,14 @@ Pin the version in MCP client configs so cached `latest` lookups cannot drift:
 ```json
 {
   "command": "npx",
-  "args": ["-y", "taurusdb-mcp@1.0.1"]
+  "args": ["-y", "taurusdb-mcp@1.0.2"]
 }
 ```
 
 After installing, verify the package against your environment:
 
 ```bash
-npx -y taurusdb-mcp@1.0.1 acceptance --report acceptance.json
+npx -y taurusdb-mcp@1.0.2 acceptance --report acceptance.json
 ```
 
 Configure Huawei Cloud identity through the operating-system credential store
